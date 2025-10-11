@@ -6,13 +6,16 @@ import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
+import android.os.Looper
 import androidx.core.content.getSystemService
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.lifecycle.application
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.C
+import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -44,6 +47,8 @@ import org.jellyfin.mobile.player.interaction.PlayerMediaSessionCallback
 import org.jellyfin.mobile.player.interaction.PlayerNotificationHelper
 import org.jellyfin.mobile.player.mediasegments.MediaSegmentAction
 import org.jellyfin.mobile.player.mediasegments.MediaSegmentRepository
+import org.jellyfin.mobile.player.mpv.MpvPlayer
+import org.jellyfin.mobile.player.mpv.MpvUtil
 import org.jellyfin.mobile.player.queue.QueueManager
 import org.jellyfin.mobile.player.source.JellyfinMediaSource
 import org.jellyfin.mobile.player.source.RemoteJellyfinMediaSource
@@ -51,6 +56,7 @@ import org.jellyfin.mobile.player.ui.DecoderType
 import org.jellyfin.mobile.player.ui.DisplayPreferences
 import org.jellyfin.mobile.player.ui.PlayState
 import org.jellyfin.mobile.player.ui.playermenuhelper.PlayerMenuHelper
+import org.jellyfin.mobile.settings.VideoPlayerType
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.Constants.SUPPORTED_VIDEO_PLAYER_PLAYBACK_ACTIONS
 import org.jellyfin.mobile.utils.applyDefaultAudioAttributes
@@ -109,17 +115,17 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
 
     // Media source handling
     private val trackSelector = DefaultTrackSelector(getApplication())
-    val trackSelectionHelper = TrackSelectionHelper(this, trackSelector)
+    val trackSelectionHelper = TrackSelectionHelper(this, trackSelector,appPreferences)
     val queueManager = QueueManager(this)
     val mediaSourceOrNull: JellyfinMediaSource?
         get() = queueManager.getCurrentMediaSourceOrNull()
     private val mediaSegmentRepository: MediaSegmentRepository by inject()
 
     // ExoPlayer
-    private val _player = MutableLiveData<ExoPlayer?>()
+    private val _player = MutableLiveData<Player?>()
     private val _playerState = MutableLiveData<Int>()
     private val _decoderType = MutableLiveData<DecoderType>()
-    val player: LiveData<ExoPlayer?> get() = _player
+    val player: LiveData<Player?> get() = _player
     val playerState: LiveData<Int> get() = _playerState
     val decoderType: LiveData<DecoderType> get() = _decoderType
 
@@ -146,7 +152,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     /**
      * Returns the current ExoPlayer instance or null
      */
-    val playerOrNull: ExoPlayer? get() = _player.value
+    val playerOrNull: Player? get() = _player.value
 
     private val playerEventChannel: Channel<PlayerEvent> by inject(named(PLAYER_EVENT_CHANNEL))
 
@@ -273,14 +279,32 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
                 filteredDecoderList
             }
         }
-        _player.value = ExoPlayer.Builder(getApplication(), renderersFactory, get()).apply {
-            setUsePlatformDiagnostics(false)
-            setTrackSelector(trackSelector)
-            setAnalyticsCollector(analyticsCollector)
-            setLoadControl(loadControl)
-        }.build().apply {
-            addListener(this@PlayerViewModel)
-            applyDefaultAudioAttributes(C.AUDIO_CONTENT_TYPE_MOVIE)
+        when (appPreferences.videoPlayerType) {
+            VideoPlayerType.EXO_PLAYER -> {
+                _player.value = ExoPlayer.Builder(getApplication(), renderersFactory, get()).apply {
+                    setUsePlatformDiagnostics(false)
+                    setTrackSelector(trackSelector)
+                    setAnalyticsCollector(analyticsCollector)
+                    setLoadControl(loadControl)
+                }.build().apply {
+                    addListener(this@PlayerViewModel)
+                    applyDefaultAudioAttributes(C.AUDIO_CONTENT_TYPE_MOVIE)
+                }
+            }
+            VideoPlayerType.MPV_PLAYER -> {
+                _player.value =MpvPlayer(application,Looper.getMainLooper(),appPreferences).apply {
+                    setDecoderProcessor (
+                        {decoderType.value?:DecoderType.HARDWARE },
+                        { _decoderType.postValue(it) }
+                    )
+                    setAnalyticsCollector(analyticsCollector)
+                    addListener(this@PlayerViewModel)
+                    applyDefaultAudioAttributes(C.AUDIO_CONTENT_TYPE_MOVIE)
+                }
+            }
+            else -> {
+                throw IllegalArgumentException("Invalid video player type")
+            }
         }
     }
 
@@ -299,14 +323,17 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     }
 
     fun load(jellyfinMediaSource: JellyfinMediaSource, exoMediaSource: MediaSource, playWhenReady: Boolean) {
+        val startTime = jellyfinMediaSource.startTime
         val player = playerOrNull ?: return
+        if (player is ExoPlayer){
+            player.setMediaSource(exoMediaSource)
+        }else if (player is MpvPlayer){
+            player.setMediaItem(MpvUtil.convertJellyfinMediaSource(jellyfinMediaSource),startTime.inWholeMilliseconds)
+        }
 
-        player.setMediaSource(exoMediaSource)
         player.prepare()
 
         initialTracksSelected.set(false)
-
-        val startTime = jellyfinMediaSource.startTime
         if (startTime > Duration.ZERO) player.seekTo(startTime.inWholeMilliseconds)
 
         applyMediaSegments(jellyfinMediaSource)
@@ -320,6 +347,20 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
                 player.reportPlaybackStart(jellyfinMediaSource)
             }
         }
+    }
+
+    fun loadDirect( playWhenReady: Boolean) {
+        val player = playerOrNull ?: return
+        player.setMediaItem(MediaItem.fromUri("http://baidu.com"))
+        player.prepare()
+
+        initialTracksSelected.set(false)
+
+        val startTime = Duration.ZERO
+        if (startTime > Duration.ZERO) player.seekTo(startTime.inWholeMilliseconds)
+
+
+        player.playWhenReady = playWhenReady
     }
 
     private fun startProgressUpdates() {
@@ -367,7 +408,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
      * recreate the player with the selected decoder type
      */
     fun updateDecoderType(type: DecoderType) {
-        _decoderType.postValue(type)
+        _decoderType.value=type
         analyticsCollector.release()
         val playedTime = (playerOrNull?.currentPosition ?: 0L).milliseconds
         // Stop and release the player without ending playback
@@ -543,17 +584,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
 
     private fun addSkipAction(mediaSegment: MediaSegmentDto) {
         val player = playerOrNull ?: return
-
-        player
-            .createMessage { _, _ ->
-                viewModelScope.launch(Dispatchers.Main) {
-                    player.seekTo(mediaSegment.end.inWholeMilliseconds)
+        if (player is ExoPlayer){
+            player
+                .createMessage { _, _ ->
+                    viewModelScope.launch(Dispatchers.Main) {
+                        player.seekTo(mediaSegment.end.inWholeMilliseconds)
+                    }
                 }
-            }
-            // Segments at position 0 will never be hit by ExoPlayer so we need to add a minimum value
-            .setPosition(mediaSegment.start.inWholeMilliseconds.coerceAtLeast(1))
-            .setDeleteAfterDelivery(false)
-            .send()
+                // Segments at position 0 will never be hit by ExoPlayer so we need to add a minimum value
+                .setPosition(mediaSegment.start.inWholeMilliseconds.coerceAtLeast(1))
+                .setDeleteAfterDelivery(false)
+                .send()
+        }
     }
 
     // Player controls

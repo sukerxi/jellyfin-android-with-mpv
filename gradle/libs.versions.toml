@@ -1,7 +1,7 @@
 [versions]
 # Android
 android-compileSdk = "36"
-android-minSdk = "21"
+android-minSdk = "26"
 android-targetSdk = "36"
 
 # Plugins
@@ -52,6 +52,9 @@ androidx-mediarouter = "1.8.1"
 androidx-media3 = "1.8.0"
 jellyfin-androidx-media = "1.8.0+1"
 playservices = "22.1.0"
+
+#libmpv-android
+libmpv-android="0.5.1"
 
 # Room
 androidx-room = "2.7.2"
@@ -137,6 +140,10 @@ androidx-media3-cast = { module = "androidx.media3:media3-cast", version.ref = "
 playservices-cast = { group = "com.google.android.gms", name = "play-services-cast", version.ref = "playservices" }
 playservices-castframework = { group = "com.google.android.gms", name = "play-services-cast-framework", version.ref = "playservices" }
 jellyfin-androidx-media3-ffmpeg-decoder = { module = "org.jellyfin.media3:media3-ffmpeg-decoder", version.ref = "jellyfin-androidx-media" }
+
+#libmpv-android
+libmpv-android= { group = "dev.jdtech.mpv", name = "libmpv", version.ref = "libmpv-android" }
+
 
 # Room
 androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "androidx-room" }

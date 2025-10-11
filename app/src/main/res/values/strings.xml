@@ -97,6 +97,8 @@
     <string name="pref_video_player_type_title">Video player type</string>
     <string name="video_player_web">Web player</string>
     <string name="video_player_integrated">Integrated player</string>
+    <string name="video_player_mpv">mpv</string>
+    <string name="video_player_mpv_description">Based on Mpv, supports more video formats and codecs, and is more integrated into the OS</string>
     <string name="video_player_external">External player</string>
     <string name="video_player_web_description">The default HTML video player from the Web UI</string>
     <string name="video_player_native_description">Based on ExoPlayer, supports more video formats and codecs, and is more integrated into the OS</string>
@@ -112,6 +114,8 @@
     <string name="pref_exoplayer_allow_horizontal_gesture_summary">Allow horizontal gesture control for video seeking</string>
     <string name="pref_exoplayer_direct_play_ass">Allow SSA/ASS subtitles in direct play</string>
     <string name="pref_exoplayer_direct_play_ass_summary">Prevent transcoding and show subtitles with basic styling only. Advanced subtitle styling will not be available if enabled.</string>
+    <string name="pref_mpv_use_embed_font">Mpv use embed font</string>
+    <string name="pref_mpv_use_embed_font_summary">Use fonts embedded in mkv files and ASS scripts. These fonts can be used for SSA/ASS subtitle rendering.</string>
     <string name="pref_exoplayer_network_buffer">Playback buffer size</string>
     <string name="network_buffer_auto">Auto</string>
     <string name="network_buffer_auto_description">Default buffer, suitable for most playback scenarios</string>

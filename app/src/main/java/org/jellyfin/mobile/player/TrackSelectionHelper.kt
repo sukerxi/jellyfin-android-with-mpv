@@ -2,8 +2,11 @@ package org.jellyfin.mobile.player
 
 import androidx.media3.common.C
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import org.jellyfin.mobile.app.AppPreferences
+import org.jellyfin.mobile.player.mpv.MpvPlayer
 import org.jellyfin.mobile.player.source.ExternalSubtitleStream
 import org.jellyfin.mobile.player.source.JellyfinMediaSource
+import org.jellyfin.mobile.settings.VideoPlayerType
 import org.jellyfin.mobile.player.source.LocalJellyfinMediaSource
 import org.jellyfin.mobile.utils.clearSelectionAndDisableRendererByType
 import org.jellyfin.mobile.utils.selectTrackByTypeAndGroup
@@ -15,6 +18,7 @@ import org.jellyfin.sdk.model.api.SubtitleDeliveryMethod
 class TrackSelectionHelper(
     private val viewModel: PlayerViewModel,
     private val trackSelector: DefaultTrackSelector,
+    private val appPreferences: AppPreferences,
 ) {
     private val mediaSourceOrNull: JellyfinMediaSource?
         get() = viewModel.mediaSourceOrNull
@@ -74,7 +78,15 @@ class TrackSelectionHelper(
         }
 
         val player = viewModel.playerOrNull ?: return false
+
+
         val embeddedStreamIndex = mediaSource.getEmbeddedStreamIndex(audioStream)
+        if (appPreferences.videoPlayerType == VideoPlayerType.MPV_PLAYER) {
+            player as MpvPlayer
+            player.setAudioTrack(embeddedStreamIndex)
+            return true
+        }
+
         val sortedTrackGroups = player.currentTracks.groups.sortedBy { group ->
             val formatId = group.mediaTrackGroup.getFormat(0).id
 
@@ -129,6 +141,32 @@ class TrackSelectionHelper(
             // Apply selection in media source, abort on failure
             !mediaSource.selectSubtitleStream(subtitleStream) -> return false
         }
+        val player = viewModel.playerOrNull ?: return false
+
+        if (appPreferences.videoPlayerType == VideoPlayerType.MPV_PLAYER) {
+            player as MpvPlayer
+            if (subtitleStream==null){
+                player.disableSubTrack()
+                return true
+            }
+            when (subtitleStream.deliveryMethod) {
+                SubtitleDeliveryMethod.ENCODE -> {
+                    player.setSubtitleEncodeTrack()
+                    return true
+                }
+                SubtitleDeliveryMethod.EMBED -> {
+                    val embeddedStreamIndex = mediaSource.getEmbeddedStreamIndex(subtitleStream)
+                    player.setSubtitleEmbedTrack(embeddedStreamIndex)
+                    return true
+                }
+                SubtitleDeliveryMethod.EXTERNAL -> {
+                    player.setSubtitleExternalTrack(subtitleStream.deliveryUrl)
+                    return true
+                }
+                else -> return false
+            }
+        }
+
 
         // Apply selection in player
         if (subtitleStream == null) {
@@ -137,7 +175,7 @@ class TrackSelectionHelper(
             return true
         }
 
-        val player = viewModel.playerOrNull ?: return false
+
         val deliveryMethod = when (mediaSource) {
             is LocalJellyfinMediaSource -> when {
                 subtitleStream.isExternal -> SubtitleDeliveryMethod.EXTERNAL

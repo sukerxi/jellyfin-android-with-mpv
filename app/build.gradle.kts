@@ -67,11 +67,19 @@ android {
 
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.findByName("release")
+
+            ndk {
+                abiFilters += listOf("arm64-v8a") //
+            }
         }
 
         getByName("debug") {
             applicationIdSuffix = ".debug"
             isDebuggable = true
+
+            ndk {
+                abiFilters += listOf("x86_64", "arm64-v8a")
+            }
         }
     }
 
@@ -172,6 +180,9 @@ dependencies {
     implementation(libs.bundles.androidx.media3)
     proprietaryImplementation(libs.androidx.media3.cast)
     proprietaryImplementation(libs.bundles.playservices)
+
+    //#libmpv-android
+    implementation(libs.libmpv.android)
 
     // Room
     implementation(libs.bundles.androidx.room)
