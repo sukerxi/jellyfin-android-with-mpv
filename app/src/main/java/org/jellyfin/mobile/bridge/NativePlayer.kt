@@ -21,7 +21,8 @@ class NativePlayer(
 ) {
 
     @JavascriptInterface
-    fun isEnabled() = appPreferences.videoPlayerType == VideoPlayerType.EXO_PLAYER
+    fun isEnabled() = appPreferences.videoPlayerType == VideoPlayerType.EXO_PLAYER || appPreferences.videoPlayerType ==
+        VideoPlayerType.MPV_PLAYER
 
     @JavascriptInterface
     fun loadPlayer(playOptionsRaw: String, preferencesRaw: String) {

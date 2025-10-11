@@ -8,6 +8,7 @@ import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.player.deviceprofile.DeviceProfileBuilder.Companion.AVAILABLE_AUDIO_CODECS
 import org.jellyfin.mobile.player.deviceprofile.DeviceProfileBuilder.Companion.AVAILABLE_VIDEO_CODECS
 import org.jellyfin.mobile.player.deviceprofile.DeviceProfileBuilder.Companion.SUPPORTED_CONTAINER_FORMATS
+import org.jellyfin.mobile.settings.VideoPlayerType
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.sdk.model.api.CodecProfile
 import org.jellyfin.sdk.model.api.CodecType
@@ -156,6 +157,9 @@ class DeviceProfileBuilder(
         }
 
         val subtitleProfiles = when {
+            appPreferences.videoPlayerType== VideoPlayerType.MPV_PLAYER->{
+                getSubtitleProfiles(MPV_EMBEDDED_SUBTITLES, MPV_EXTERNAL_SUBTITLES)
+            }
             appPreferences.exoPlayerDirectPlayAss -> {
                 getSubtitleProfiles(EXO_EMBEDDED_SUBTITLES + SUBTITLES_SSA, EXO_EXTERNAL_SUBTITLES + SUBTITLES_SSA)
             }
@@ -336,6 +340,9 @@ class DeviceProfileBuilder(
         private val EXTERNAL_PLAYER_SUBTITLES = arrayOf(
             "ass", "dvbsub", "pgssub", "srt", "srt", "ssa", "subrip", "subrip", "ttml", "ttml", "vtt", "webvtt",
         )
+
+        private val MPV_EMBEDDED_SUBTITLES = arrayOf("dvbsub", "pgssub", "srt", "subrip", "ttml","ssa", "ass", "dvdsub")
+        private val MPV_EXTERNAL_SUBTITLES = arrayOf("srt", "subrip", "ttml", "vtt", "webvtt", "ssa", "ass")
 
         /**
          * Taken from Jellyfin Web:

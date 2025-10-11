@@ -1,0 +1,67 @@
+name: jellyfin-android release
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+  
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          repository: sukerxi/jellyfin-android
+          ref: master
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set JELLYFIN_VERSION
+        # run: echo "JELLYFIN_VERSION=$(echo ${GITHUB_REF#refs/tags/v} | tr / -)" >> $GITHUB_ENV
+        run: |
+            echo "JELLYFIN_VERSION=3.0.0" >> $GITHUB_ENV 
+
+      - name: Assemble release files
+        # run: ./gradlew assemble bundleProprietaryRelease versionTxt
+        run: ./gradlew assembleLibreRelease versionTxt
+
+      - name: Sign libre APK
+        id: libreSign
+        uses: r0adkll/sign-android-release@v1 # tag=v1
+        env:
+          BUILD_TOOLS_VERSION: "34.0.0"
+        with:
+          releaseDirectory: app/build/outputs/apk/libre/release
+          signingKeyBase64: ${{ secrets.KEYSTORE }}
+          keyStorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
+          alias: ${{ secrets.KEY_ALIAS }}
+          keyPassword: ${{ secrets.KEY_PASSWORD }}
+
+      - name: Prepare release archive
+        run: |
+          mkdir -p build/jellyfin-publish
+          # mv app/build/outputs/apk/*/*/jellyfin-android-*-libre-debug.apk build/jellyfin-publish/
+          mv ${{ steps.libreSign.outputs.signedReleaseFile }} build/jellyfin-publish/jellyfin-android-v${{ env.JELLYFIN_VERSION }}-libre-release.apk
+          mv app/build/version.txt build/jellyfin-publish/
+   
+      - name: Create a release
+        uses: "ncipollo/release-action@v1"
+        with:
+          makeLatest: true
+          allowUpdates: true
+          tag: "jellyfin-android"
+          artifacts: build/jellyfin-publish/*
+
+
+
+          
