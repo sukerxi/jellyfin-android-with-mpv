@@ -81,8 +81,9 @@ class TrackSelectionHelper(
 
         if (appPreferences.videoPlayerType == VideoPlayerType.MPV_PLAYER) {
             player as MpvPlayer
-            // Match tracks by their container stream index (mpv ff-index), not a positional index
-            player.setAudioTrack(audioStream.index)
+            // Match by the ordinal within the embedded audio tracks. Jellyfin's MediaStream.index
+            // is shifted when external subtitle streams are present and cannot be used directly.
+            player.setAudioTrack(mediaSource.getEmbeddedStreamIndexByType(audioStream))
             return true
         }
 
@@ -155,8 +156,9 @@ class TrackSelectionHelper(
                     return true
                 }
                 SubtitleDeliveryMethod.EMBED -> {
-                    // Match tracks by their container stream index (mpv ff-index), not a positional index
-                    player.setSubtitleEmbedTrack(subtitleStream.index)
+                    // Match by the ordinal within the embedded subtitle tracks. Jellyfin's
+                    // MediaStream.index is shifted when external subtitle streams are present.
+                    player.setSubtitleEmbedTrack(mediaSource.getEmbeddedStreamIndexByType(subtitleStream))
                     return true
                 }
                 SubtitleDeliveryMethod.EXTERNAL -> {

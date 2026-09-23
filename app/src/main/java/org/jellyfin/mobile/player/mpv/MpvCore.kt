@@ -317,7 +317,7 @@ class MpvCore private constructor(context: Application) {
             // Property("duration/full", MPV_FORMAT_INT64),
             // Property("pause", MPV_FORMAT_FLAG),
             // Property("speed", MPV_FORMAT_STRING),
-            // Property("track-list"),
+            Property("track-list"),
             // Property("video-params/aspect", MPV_FORMAT_DOUBLE),
             // Property("video-params/rotate", MPV_FORMAT_DOUBLE),
             // Property("playlist-pos", MPV_FORMAT_INT64),
