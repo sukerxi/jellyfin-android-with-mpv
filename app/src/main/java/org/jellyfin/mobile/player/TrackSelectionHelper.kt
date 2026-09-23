@@ -79,14 +79,14 @@ class TrackSelectionHelper(
 
         val player = viewModel.playerOrNull ?: return false
 
-
-        val embeddedStreamIndex = mediaSource.getEmbeddedStreamIndex(audioStream)
         if (appPreferences.videoPlayerType == VideoPlayerType.MPV_PLAYER) {
             player as MpvPlayer
-            player.setAudioTrack(embeddedStreamIndex)
+            // Match tracks by their container stream index (mpv ff-index), not a positional index
+            player.setAudioTrack(audioStream.index)
             return true
         }
 
+        val embeddedStreamIndex = mediaSource.getEmbeddedStreamIndex(audioStream)
         val sortedTrackGroups = player.currentTracks.groups.sortedBy { group ->
             val formatId = group.mediaTrackGroup.getFormat(0).id
 
@@ -155,8 +155,8 @@ class TrackSelectionHelper(
                     return true
                 }
                 SubtitleDeliveryMethod.EMBED -> {
-                    val embeddedStreamIndex = mediaSource.getEmbeddedStreamIndex(subtitleStream)
-                    player.setSubtitleEmbedTrack(embeddedStreamIndex)
+                    // Match tracks by their container stream index (mpv ff-index), not a positional index
+                    player.setSubtitleEmbedTrack(subtitleStream.index)
                     return true
                 }
                 SubtitleDeliveryMethod.EXTERNAL -> {

@@ -5,8 +5,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.Surface
-import androidx.media3.common.util.Log
-
 import dev.jdtech.mpv.MPVLib
 import dev.jdtech.mpv.MPVLib.MPV_FORMAT_FLAG
 import dev.jdtech.mpv.MPVLib.MPV_FORMAT_NONE
@@ -14,85 +12,81 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.function.BiConsumer
 
 /**
+ * Events emitted by [MpvCore]. Observers always run on the main thread.
+ */
+sealed interface MpvEvent {
+    data object StartFile : MpvEvent
+    data object FileLoaded : MpvEvent
+    data object EndFile : MpvEvent
+    data object PlaybackRestart : MpvEvent
+    data object Seek : MpvEvent
+
+    /** Playback was paused (true) or resumed (false) while waiting for the cache to fill. */
+    data class Caching(val isCaching: Boolean) : MpvEvent
+
+    data object DecoderChanged : MpvEvent
+    data object TrackListChanged : MpvEvent
+}
+
+/**
+ * Thin wrapper around the native mpv player. Exposes a type-safe event stream via [MpvEvent].
+ *
  * @author dr
  */
 class MpvCore private constructor(context: Application) {
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val mpvLibEventObserver = object : MPVLib.EventObserver {
-        override fun eventProperty(property: String) {
-            if(property=="track-list"){
-                mainHandler.post {
-                    currentEvent = MPV_EVENT_TRACK_LIST_CHANGE
-                    for (consumer in eventListeners) {
-                        consumer.accept(currentEvent, "")
-                    }
-                    currentEvent= MPV_EVENT_NONE
-                }
-            }else if (property=="hwdec-current"){
-                mainHandler.post {
-                    currentEvent = MPV_EVENT_DECODER_CHANGE
-                    for (consumer in eventListeners) {
-                        consumer.accept(currentEvent, "")
-                    }
-                    currentEvent= MPV_EVENT_NONE
-                }
-            }
-        }
-        override fun eventProperty(property: String, value: Long) {}
-        override fun eventProperty(property: String, value: Double) {}
-        override fun eventProperty(property: String, value: Boolean) {
-            if(property=="paused-for-cache"){
-                mainHandler.post {
-                    currentEvent =if (value) MPV_EVENT_PAUSED_FOR_CACHE_START
-                    else  MPV_EVENT_PAUSED_FOR_CACHE_END
-                    for (consumer in eventListeners) {
-                        consumer.accept(currentEvent, value)
-                    }
-                    currentEvent= MPV_EVENT_NONE
-                }
-            }
-        }
-        override fun eventProperty(property: String, value: String) {}
-        override fun event(eventId: Int) {
-            mainHandler.post {
-                currentEvent=eventId
-                for (consumer in eventListeners) {
-                    consumer.accept(eventId, "")
-                }
-                currentEvent= MPV_EVENT_NONE
-            }
+
+    private fun postEvent(event: MpvEvent) {
+        mainHandler.post {
+            for (listener in eventListeners) listener(event)
         }
     }
 
+    private val mpvLibEventObserver = object : MPVLib.EventObserver {
+        override fun eventProperty(property: String) {
+            when (property) {
+                "track-list" -> postEvent(MpvEvent.TrackListChanged)
+                "hwdec-current" -> postEvent(MpvEvent.DecoderChanged)
+            }
+        }
 
+        override fun eventProperty(property: String, value: Long) {}
+        override fun eventProperty(property: String, value: Double) {}
+
+        override fun eventProperty(property: String, value: Boolean) {
+            if (property == "paused-for-cache") postEvent(MpvEvent.Caching(value))
+        }
+
+        override fun eventProperty(property: String, value: String) {}
+
+        override fun event(eventId: Int) {
+            val event = when (eventId) {
+                MPVLib.MPV_EVENT_START_FILE -> MpvEvent.StartFile
+                MPVLib.MPV_EVENT_FILE_LOADED -> MpvEvent.FileLoaded
+                MPVLib.MPV_EVENT_END_FILE -> MpvEvent.EndFile
+                MPVLib.MPV_EVENT_PLAYBACK_RESTART -> MpvEvent.PlaybackRestart
+                MPVLib.MPV_EVENT_SEEK -> MpvEvent.Seek
+                else -> return
+            }
+            postEvent(event)
+        }
+    }
 
     companion object {
         private val json = Json { ignoreUnknownKeys = true }
-        private val eventListeners: CopyOnWriteArrayList<BiConsumer<Int, Any>> = CopyOnWriteArrayList()
-        var currentEvent: Int = MPV_EVENT_NONE
-            private set
-        const val MPV_EVENT_PAUSED_FOR_CACHE_START =1000
-        const val MPV_EVENT_PAUSED_FOR_CACHE_END =1001
-        const val MPV_EVENT_TRACK_LIST_CHANGE =1002
-        const val MPV_EVENT_DECODER_CHANGE =1003
-        const val MPV_EVENT_START_FILE =MPVLib.MPV_EVENT_START_FILE
-        const val MPV_EVENT_FILE_LOADED =MPVLib.MPV_EVENT_FILE_LOADED
-        const val MPV_EVENT_END_FILE = MPVLib.MPV_EVENT_END_FILE
-        const val MPV_EVENT_PLAYBACK_RESTART = MPVLib.MPV_EVENT_PLAYBACK_RESTART
-        const val MPV_EVENT_SEEK =MPVLib.MPV_EVENT_SEEK
-        const val MPV_EVENT_NONE =MPVLib.MPV_EVENT_NONE
-
+        private val eventListeners: CopyOnWriteArrayList<(MpvEvent) -> Unit> = CopyOnWriteArrayList()
 
         @Volatile
         private var INSTANCE: MpvCore? = null
+
         fun initialize(application: Application): MpvCore {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: MpvCore(application).also { INSTANCE = it }
             }
         }
+
         inline fun <reified T> getProperty(name: String): T? {
             return when (T::class) {
                 String::class -> MPVLib.getPropertyString(name) as T?
@@ -104,12 +98,15 @@ class MpvCore private constructor(context: Application) {
                 else -> throw IllegalArgumentException("Unsupported property type: ${T::class}")
             }
         }
+
         fun command(cmd: Array<String>) {
             MPVLib.command(cmd)
         }
-        fun setOptions(name: String,value: String) {
+
+        fun setOptions(name: String, value: String) {
             MPVLib.setOptionString(name, value)
         }
+
         fun setProperty(name: String, value: Any) {
             when (value) {
                 is String -> MPVLib.setPropertyString(name, value)
@@ -121,54 +118,56 @@ class MpvCore private constructor(context: Application) {
                 else -> throw IllegalArgumentException("Unsupported property type: ${value::class}")
             }
         }
-        fun subscribe(eventListener:BiConsumer<Int, Any>) {
+
+        fun subscribe(eventListener: (MpvEvent) -> Unit) {
             eventListeners.add(eventListener)
         }
-        fun unsubscribe(eventListener:BiConsumer<Int, Any>) {
+
+        fun unsubscribe(eventListener: (MpvEvent) -> Unit) {
             eventListeners.remove(eventListener)
         }
+
         fun attachSurface(surface: Surface) {
             MPVLib.attachSurface(surface)
         }
+
         fun detachSurface() {
             MPVLib.detachSurface()
         }
 
         fun getTracks(): List<MediaTrack> {
-            val trackList = getProperty<String>("track-list")
-            trackList?.let { Log.d("MpvCore",it) }
-            return trackList?.let { tracks ->
-                json.decodeFromString(tracks)
-            }?: emptyList()
+            val trackList = getProperty<String>("track-list") ?: return emptyList()
+            return json.decodeFromString(trackList)
         }
-
     }
 
-
-
     init {
-        val configDir = context.filesDir.path
         MPVLib.create(context)
-        MPVLib.setOptionString("config", "yes")
-        MPVLib.setOptionString("config-dir", configDir)
-        MPVLib.setOptionString("profile", "fast")
-        MPVLib.setOptionString("hwdec", "auto")
-        MPVLib.setOptionString("hwdec-codecs", "h264,hevc,mpeg4,mpeg2video,vp8,vp9,av1")
-        MPVLib.setOptionString("gpu-context", "android")  //auto
-        MPVLib.setOptionString("opengl-es", "yes")
-        MPVLib.setOptionString("ao", "audiotrack,opensles")
-        MPVLib.setOptionString("input-default-bindings", "yes")
         // Limit demuxer cache since the defaults are too high for mobile devices
         val cacheMegs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) 64 else 32
-        MPVLib.setOptionString("demuxer-max-bytes", "${cacheMegs * 1024 * 1024}")
-        MPVLib.setOptionString("demuxer-max-back-bytes", "${cacheMegs * 1024 * 1024}")
-        MPVLib.setOptionString("vd-lavc-film-grain", "cpu")
-        MPVLib.setOptionString("ytdl", "no")
-        MPVLib.setOptionString("cache-pause-initial", "yes")
-        MPVLib.setOptionString("vo", "gpu_next,gpu")
+        val cacheBytes = "${cacheMegs * 1024 * 1024}"
+        listOf(
+            "config" to "yes",
+            "config-dir" to context.filesDir.path,
+            "profile" to "fast",
+            "hwdec" to "auto",
+            "hwdec-codecs" to "h264,hevc,mpeg4,mpeg2video,vp8,vp9,av1",
+            "gpu-context" to "android", // auto
+            "opengl-es" to "yes",
+            "ao" to "audiotrack,opensles",
+            "input-default-bindings" to "yes",
+            "demuxer-max-bytes" to cacheBytes,
+            "demuxer-max-back-bytes" to cacheBytes,
+            "vd-lavc-film-grain" to "cpu",
+            "ytdl" to "no",
+            "cache-pause-initial" to "yes",
+            "vo" to "gpu_next,gpu",
+            "save-position-on-quit" to "no",
+        ).forEach { (name, value) ->
+            MPVLib.setOptionString(name, value)
+        }
         MPVLib.init()
 
-        MPVLib.setOptionString("save-position-on-quit", "no")
 //        MPVLib.setOptionString("idle", "once")
         // MPVLib.setOptionString("force-window", "yes")
         observeProperties()
@@ -176,9 +175,9 @@ class MpvCore private constructor(context: Application) {
     }
 
     private fun observeProperties() {
-        // This observes all properties needed by MPVView, MPVActivity or other classes
+        // This observes all properties needed by MpvPlayer or other classes
         data class Property(val name: String, val format: Int = MPV_FORMAT_NONE)
-        val p = arrayOf(
+        val properties = arrayOf(
             Property("paused-for-cache", MPV_FORMAT_FLAG),
             Property("hwdec-current"),
             // Property("time-pos/full", MPV_FORMAT_INT64),
@@ -199,9 +198,11 @@ class MpvCore private constructor(context: Application) {
             // Property("mute", MPV_FORMAT_FLAG),
             // Property("current-tracks/audio/selected"),
         )
-        for ((name, format) in p)
+        for ((name, format) in properties) {
             MPVLib.observeProperty(name, format)
+        }
     }
+
     @Serializable
     data class MediaTrack(
         @SerialName("id") val id: Long = -1L,
@@ -249,7 +250,7 @@ class MpvCore private constructor(context: Application) {
         @SerialName("replaygain-album-gain") val replaygainAlbumGain: Double = 0.0,
         @SerialName("dolby-vision-profile") val dolbyVisionProfile: Long = 0L,
         @SerialName("dolby-vision-level") val dolbyVisionLevel: Long = 0L,
-    ){
+    ) {
         fun getTrackType(): TrackType? = when (type.lowercase()) {
             "sub" -> TrackType.SUBTITLE
             "subtitle" -> TrackType.SUBTITLE
@@ -260,26 +261,6 @@ class MpvCore private constructor(context: Application) {
     }
 
     enum class TrackType {
-        SUBTITLE, AUDIO, VIDEO
-    }
-
-
-    class MediaTrackManager(private val tracks: List<MediaTrack>) {
-
-        // 获取当前选中的各类型轨道
-        fun getSelectedTracks(): Map<TrackType, MediaTrack> {
-            val selectedTracks = mutableMapOf<TrackType, MediaTrack>()
-            for (track in tracks) {
-                if (track.selected == true) { // 假设selected字段表示是否被选中
-                    track.getTrackType()?.let { selectedTracks[it] = track }
-                }
-            }
-            return selectedTracks
-        }
-
-        // 获取给定类型的所有轨道
-        fun getTracksByType(trackType: TrackType): List<MediaTrack> {
-            return tracks.filter { it.getTrackType() == trackType }
-        }
+        SUBTITLE, AUDIO, VIDEO,
     }
 }
