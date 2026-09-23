@@ -39,6 +39,7 @@ class PlayerGestureHelper(
     private val gestureIndicatorOverlayLayout: LinearLayout by playerBinding::gestureOverlayLayout
     private val gestureIndicatorOverlayImage: ImageView by playerBinding::gestureOverlayImage
     private val gestureIndicatorOverlayProgress: ProgressBar by playerBinding::gestureOverlayProgress
+    private val gestureIndicatorOverlayText: TextView by playerBinding::gestureOverlayText
     private val seekOverlayLayout: LinearLayout by playerBinding::seekOverlayLayout
     private val seekOverlayImage: ImageView by playerBinding::seekOverlayImage
     private val seekOverlayText: TextView by playerBinding::seekOverlayText
@@ -289,15 +290,11 @@ class PlayerGestureHelper(
                     seekOverlayLayout.isVisible = true
                     return true
                 } else if (currentGesture == GestureDirection.HORIZONTAL && !appPreferences.exoPlayerAllowHorizontalGesture) {
-                    // If horizontal gesture is disabled while a gesture was in progress, reset the state
-                    currentGesture = GestureDirection.NONE
-                    isHorizontalSeeking = false
-                    seekTimeAccumulator = 0L
-                    seekStartPosition = 0L
-                    mediaDuration = 0L
-                    seekOverlayLayout.isVisible = false
+                    // Horizontal seek gestures are disabled. Keep the direction locked for the rest of
+                    // this gesture (instead of resetting it) so it can't turn into a brightness/volume
+                    // gesture halfway through the swipe.
+                    return false
                 }
-
 
                 if (!appPreferences.exoPlayerAllowSwipeGestures) {
                     return false
@@ -333,6 +330,10 @@ class PlayerGestureHelper(
                     gestureIndicatorOverlayImage.setImageResource(R.drawable.ic_volume_white_24dp)
                     gestureIndicatorOverlayProgress.max = maxVolume
                     gestureIndicatorOverlayProgress.progress = toSet
+                    gestureIndicatorOverlayText.text = fragment.getString(
+                        R.string.gesture_overlay_volume,
+                        if (maxVolume > 0) toSet * Constants.PERCENT_MAX / maxVolume else 0,
+                    )
                 } else {
                     // Swiping on the left, change brightness
 
@@ -345,10 +346,14 @@ class PlayerGestureHelper(
                         swipeGestureValueTracker = when (brightness) {
                             in brightnessRange -> brightness
                             else -> {
-                                Settings.System.getFloat(
+                                // Fall back to the current system brightness when the window doesn't override it.
+                                // Use the default-value overload to avoid SettingNotFoundException on devices without the setting.
+                                val systemBrightness = Settings.System.getFloat(
                                     fragment.requireActivity().contentResolver,
                                     Settings.System.SCREEN_BRIGHTNESS,
+                                    Constants.SCREEN_BRIGHTNESS_DEFAULT,
                                 ) / Constants.SCREEN_BRIGHTNESS_MAX
+                                systemBrightness.coerceIn(brightnessRange)
                             }
                         }
                     }
@@ -362,6 +367,10 @@ class PlayerGestureHelper(
                     gestureIndicatorOverlayImage.setImageResource(R.drawable.ic_brightness_white_24dp)
                     gestureIndicatorOverlayProgress.max = Constants.PERCENT_MAX
                     gestureIndicatorOverlayProgress.progress = (swipeGestureValueTracker * Constants.PERCENT_MAX).toInt()
+                    gestureIndicatorOverlayText.text = fragment.getString(
+                        R.string.gesture_overlay_brightness,
+                        (swipeGestureValueTracker * Constants.PERCENT_MAX).toInt(),
+                    )
                 }
 
                 gestureIndicatorOverlayLayout.isVisible = true

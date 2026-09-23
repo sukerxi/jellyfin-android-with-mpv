@@ -90,6 +90,8 @@
     <string name="dialog_button_ignore">忽略</string>
     <string name="dialog_button_open_settings">打开设置</string>
     <string name="pref_exoplayer_remember_brightness">记住显示亮度</string>
+    <string name="gesture_overlay_brightness">亮度 %1$d%%</string>
+    <string name="gesture_overlay_volume">音量 %1$d%%</string>
     <string name="video_player_integrated">综合播放器</string>
     <string name="video_player_mpv">mpv播放器</string>
     <string name="video_player_mpv_description">基于 mpv 的支持更多视频格式和编码，并且更集成于系统的播放器</string>
