@@ -43,8 +43,13 @@ class MpvPlayer(
         /** User explicitly disabled subtitles. */
         data object Disabled : SubtitleSelection
 
-        /** Embedded subtitle, identified by its container stream index (mpv `ff-index`). */
-        data class Embedded(val ffIndex: Int) : SubtitleSelection
+        /**
+         * Embedded subtitle, identified by its ordinal among the non-external mpv subtitle tracks.
+         * Jellyfin re-indexes its streams once external subtitle files are present, so the Jellyfin
+         * stream index cannot be matched against mpv's ff-index; both sides do, however, keep the
+         * same container order for their internal tracks.
+         */
+        data class Embedded(val trackIndex: Int) : SubtitleSelection
 
         /** External subtitle, matched against mpv's external-filename. */
         data class External(val filename: String?) : SubtitleSelection
@@ -61,7 +66,7 @@ class MpvPlayer(
     private var currentMediaItem: MediaItem? = null
 
     private var tracks: List<MpvCore.MediaTrack> = emptyList()
-    private var selectedAudioFfIndex: Int? = null
+    private var selectedAudioTrackIndex: Int? = null
     private var subtitleSelection: SubtitleSelection = SubtitleSelection.Auto
 
     private var firstFrameRendered = false
@@ -109,7 +114,13 @@ class MpvPlayer(
             is MpvEvent.Caching ->
                 playbackState = if (event.isCaching) STATE_BUFFERING else STATE_READY
             MpvEvent.DecoderChanged -> reportDecoderState()
-            MpvEvent.TrackListChanged -> tracks = MpvCore.getTracks()
+            MpvEvent.TrackListChanged -> {
+                // External subtitle tracks, in particular network ones, may appear only after
+                // FILE_LOADED. Refresh and re-apply the pending selection once they are known.
+                tracks = MpvCore.getTracks()
+                applyAudioTrack()
+                applySubtitleTrack()
+            }
         }
         invalidateState()
     }
@@ -323,8 +334,8 @@ class MpvPlayer(
         MpvCore.setProperty("sid", "no")
     }
 
-    fun setSubtitleEmbedTrack(ffIndex: Int) {
-        subtitleSelection = SubtitleSelection.Embedded(ffIndex)
+    fun setSubtitleEmbedTrack(trackIndex: Int) {
+        subtitleSelection = SubtitleSelection.Embedded(trackIndex)
         applySubtitleTrack()
     }
 
@@ -333,8 +344,8 @@ class MpvPlayer(
         applySubtitleTrack()
     }
 
-    fun setAudioTrack(ffIndex: Int) {
-        selectedAudioFfIndex = ffIndex
+    fun setAudioTrack(trackIndex: Int) {
+        selectedAudioTrackIndex = trackIndex
         applyAudioTrack()
     }
 
@@ -363,10 +374,11 @@ class MpvPlayer(
     }
 
     private fun applyAudioTrack() {
-        val ffIndex = selectedAudioFfIndex ?: return
-        val trackId = tracks.firstOrNull { track ->
-            track.getTrackType() == MpvCore.TrackType.AUDIO && track.ffIndex == ffIndex.toLong()
-        }?.id ?: return
+        val trackIndex = selectedAudioTrackIndex ?: return
+        val trackId = tracks
+            .filter { track ->
+                track.getTrackType() == MpvCore.TrackType.AUDIO && !track.external
+            }.getOrNull(trackIndex)?.id ?: return
         MpvCore.setProperty("aid", trackId)
     }
 
@@ -375,11 +387,10 @@ class MpvPlayer(
             SubtitleSelection.Auto -> return // Let mpv choose its default track
             SubtitleSelection.Disabled, SubtitleSelection.Encoded -> "no"
             is SubtitleSelection.Embedded -> {
-                tracks.firstOrNull { track ->
-                    track.getTrackType() == MpvCore.TrackType.SUBTITLE &&
-                        !track.external &&
-                        track.ffIndex == selection.ffIndex.toLong()
-                }?.id ?: "no"
+                tracks
+                    .filter { track ->
+                        track.getTrackType() == MpvCore.TrackType.SUBTITLE && !track.external
+                    }.getOrNull(selection.trackIndex)?.id ?: "no"
             }
             is SubtitleSelection.External -> {
                 tracks.firstOrNull { track ->

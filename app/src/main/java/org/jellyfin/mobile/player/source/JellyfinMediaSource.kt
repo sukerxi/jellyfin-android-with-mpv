@@ -155,6 +155,25 @@ sealed class JellyfinMediaSource(
     }
 
     /**
+     * Returns the index of the media stream within the embedded (non-external) streams of the same type.
+     *
+     * Jellyfin inserts external subtitle streams at the beginning of [mediaStreams] and re-indexes all
+     * streams, so [MediaStream.index] is neither the container stream index nor contiguous per type.
+     * mpv exposes internal tracks per type (audio / subtitle) in container order, which matches the
+     * order of the non-external Jellyfin streams, making this ordinal safe to map to an mpv track.
+     */
+    fun getEmbeddedStreamIndexByType(mediaStream: MediaStream): Int {
+        var index = 0
+        for (stream in mediaStreams) {
+            when {
+                stream === mediaStream -> return index
+                !stream.isExternal && stream.type == mediaStream.type -> index++
+            }
+        }
+        throw IllegalArgumentException("Invalid media stream")
+    }
+
+    /**
      * Get the formatted name of the source.
      */
     @Suppress("CyclomaticComplexMethod")
