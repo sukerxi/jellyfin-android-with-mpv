@@ -55,11 +55,15 @@
                 android:layout_marginVertical="4dp"
                 tools:progress="50" />
 
-            <TextView
+            <androidx.appcompat.widget.AppCompatTextView
                 android:id="@+id/gesture_overlay_text"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="TextView" />
+                android:layout_marginTop="4dp"
+                android:gravity="center"
+                android:textColor="@android:color/white"
+                android:textSize="14sp"
+                tools:text="Brightness 50%" />
         </LinearLayout>
 
         <LinearLayout
