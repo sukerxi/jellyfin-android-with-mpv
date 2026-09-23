@@ -1,6 +1,8 @@
 package org.jellyfin.mobile.player.mpv
 
 import android.app.Application
+import android.content.Context
+import android.content.res.AssetManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -11,6 +13,9 @@ import dev.jdtech.mpv.MPVLib.MPV_FORMAT_NONE
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import timber.log.Timber
+import java.io.File
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -28,6 +33,132 @@ sealed interface MpvEvent {
 
     data object DecoderChanged : MpvEvent
     data object TrackListChanged : MpvEvent
+}
+
+/**
+ * Installs the bundled mpv assets (e.g. `subfont.ttf`) from `assets/mpv` into the
+ * directory passed to mpv as `config-dir`.
+ *
+ * The potentially multi-megabyte copy runs on a background thread started from
+ * `Application.onCreate`; [awaitInstalled] blocks the mpv initialization path until it
+ * has finished. Assets are re-copied (and stale files removed) whenever the app version
+ * code changes, so shipped updates are never shadowed by files copied by an older version.
+ */
+object MpvAssetInstaller {
+    private const val ASSET_DIR = "mpv"
+    private const val PREFS_NAME = "mpv_assets"
+    private const val KEY_VERSION = "version"
+    private const val KEY_FILES = "files"
+
+    private val latch = CountDownLatch(1)
+
+    @Volatile
+    private var started = false
+
+    /**
+     * Starts asset installation on a background thread. Safe to call once from
+     * `Application.onCreate`; subsequent calls are no-ops.
+     */
+    fun start(context: Context) {
+        synchronized(this) {
+            if (started) return
+            started = true
+            val appContext = context.applicationContext
+            Thread {
+                install(appContext)
+            }.apply {
+                name = "mpv-asset-installer"
+                isDaemon = true
+                start()
+            }
+        }
+    }
+
+    /**
+     * Blocks until installation has finished. If [start] was never called, the
+     * installation is started (on a background thread) and awaited as well.
+     */
+    fun awaitInstalled(context: Context) {
+        if (!started) start(context)
+        latch.await()
+    }
+
+    private fun install(context: Context) {
+        try {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val versionCode = currentVersionCode(context)
+            if (prefs.getLong(KEY_VERSION, -1L) != versionCode) {
+                val targetDir = context.filesDir
+                val copiedFiles = copyAssetDir(context.assets, ASSET_DIR, targetDir, targetDir, mutableSetOf())
+                removeStaleFiles(targetDir, prefs.getStringSet(KEY_FILES, null).orEmpty(), copiedFiles)
+                prefs.edit()
+                    .putLong(KEY_VERSION, versionCode)
+                    // SharedPreferences may mutate the set in place on some platforms, so hand it a copy.
+                    .putStringSet(KEY_FILES, copiedFiles.toHashSet())
+                    .apply()
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to install mpv assets")
+        } finally {
+            latch.countDown()
+        }
+    }
+
+    /**
+     * Recursively copies [assetDir] from the APK assets into [outDir].
+     * Asset directories are detected via a non-empty [AssetManager.list] result,
+     * since `AssetManager` offers no explicit way to distinguish files from folders.
+     *
+     * @return relative paths (against [rootDir]) of all copied files.
+     */
+    private fun copyAssetDir(
+        assets: AssetManager,
+        assetDir: String,
+        outDir: File,
+        rootDir: File,
+        copiedFiles: MutableSet<String>,
+    ): Set<String> {
+        outDir.mkdirs()
+        val entries = assets.list(assetDir).orEmpty()
+        for (entry in entries) {
+            val assetPath = "$assetDir/$entry"
+            val children = assets.list(assetPath)
+            if (!children.isNullOrEmpty()) {
+                copyAssetDir(assets, assetPath, File(outDir, entry), rootDir, copiedFiles)
+            } else {
+                val target = File(outDir, entry)
+                target.parentFile?.mkdirs()
+                val tempFile = File(outDir, ".$entry.tmp")
+                assets.open(assetPath).use { input ->
+                    tempFile.outputStream().use { output -> input.copyTo(output) }
+                }
+                // Move into place atomically so an interrupted copy never leaves a half-written font.
+                if (!tempFile.renameTo(target)) {
+                    target.delete()
+                    check(tempFile.renameTo(target)) { "Failed to install asset $assetPath" }
+                }
+                copiedFiles += target.relativeTo(rootDir).invariantSeparatorsPath
+            }
+        }
+        return copiedFiles
+    }
+
+    /** Deletes files copied by a previous app version that are no longer shipped. */
+    private fun removeStaleFiles(rootDir: File, previousFiles: Set<String>, currentFiles: Set<String>) {
+        for (relativePath in previousFiles - currentFiles) {
+            File(rootDir, relativePath).delete()
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun currentVersionCode(context: Context): Long {
+        val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            packageInfo.longVersionCode
+        } else {
+            packageInfo.versionCode.toLong()
+        }
+    }
 }
 
 /**
@@ -142,6 +273,8 @@ class MpvCore private constructor(context: Application) {
     }
 
     init {
+        // Wait for assets (e.g. subfont.ttf) to be copied before mpv reads its config directory.
+        MpvAssetInstaller.awaitInstalled(context)
         MPVLib.create(context)
         // Limit demuxer cache since the defaults are too high for mobile devices
         val cacheMegs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) 64 else 32
