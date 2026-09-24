@@ -71,6 +71,19 @@ class SettingsFragment : Fragment(), BackPressInterceptor {
         Preference.Config.titleMaxLines = 2
     }
 
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Refresh the summary when the config editor reports a saved change.
+        // A plain onResume() refresh is not reliable here: all fragments in the back stack
+        // stay RESUMED with add()-based transactions, so lifecycle callbacks don't fire on pop.
+        parentFragmentManager.setFragmentResultListener(MpvConfigEditorFragment.RESULT_CONFIG_SAVED, this) { _, _ ->
+            if (::mpvConfigPreference.isInitialized) {
+                mpvConfigPreference.summary = mpvConfigSummary()
+                mpvConfigPreference.requestRebind()
+            }
+        }
+    }
+
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         val localInflater = inflater.withThemedContext(requireContext(), R.style.AppTheme_Settings)
         val binding = FragmentSettingsBinding.inflate(localInflater, container, false)
@@ -86,15 +99,6 @@ class SettingsFragment : Fragment(), BackPressInterceptor {
 
     override fun onInterceptBackPressed(): Boolean {
         return settingsAdapter.goBack()
-    }
-
-    override fun onResume() {
-        super.onResume()
-        // Refresh the summary after returning from the config editor
-        if (::mpvConfigPreference.isInitialized) {
-            mpvConfigPreference.summary = mpvConfigSummary()
-            mpvConfigPreference.requestRebind()
-        }
     }
 
     private fun mpvConfigSummary(): String {

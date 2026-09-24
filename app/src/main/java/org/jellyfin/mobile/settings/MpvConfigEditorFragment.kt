@@ -64,6 +64,7 @@ class MpvConfigEditorFragment : Fragment() {
         appPreferences.mpvCustomConfig = config
         MpvConfigManager.syncConfigFile(requireContext().applicationContext, config)
         Toast.makeText(requireContext(), R.string.mpv_config_editor_saved, Toast.LENGTH_SHORT).show()
+        parentFragmentManager.setFragmentResult(RESULT_CONFIG_SAVED, Bundle.EMPTY)
         parentFragmentManager.popBackStack()
     }
 
@@ -71,5 +72,9 @@ class MpvConfigEditorFragment : Fragment() {
         super.onDestroyView()
         requireMainActivity().setSupportActionBar(null)
         _binding = null
+    }
+
+    companion object {
+        const val RESULT_CONFIG_SAVED = "mpv_config_saved"
     }
 }

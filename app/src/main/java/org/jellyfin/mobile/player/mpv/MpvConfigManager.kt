@@ -19,7 +19,7 @@ object MpvConfigManager {
     private val OPTION_LINE_REGEX = Regex("""^\s*[A-Za-z][A-Za-z0-9_-]*\s*=.*$""")
 
     /** A profile section header, e.g. `[my-profile]`. */
-    private val SECTION_LINE_REGEX = Regex("""^\s*\[[^[\]]+\]\s*$""")
+    private val SECTION_LINE_REGEX = Regex("""^\s*\[[^\[\]]+\]\s*$""")
 
     /**
      * Finds the first line that is not valid mpv.conf syntax.
