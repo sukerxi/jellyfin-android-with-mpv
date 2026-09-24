@@ -95,6 +95,16 @@
     <string name="video_player_integrated">综合播放器</string>
     <string name="video_player_mpv">mpv播放器</string>
     <string name="video_player_mpv_description">基于 mpv 的支持更多视频格式和编码，并且更集成于系统的播放器</string>
+    <string name="pref_mpv_custom_config">MPV 自定义配置</string>
+    <string name="pref_mpv_custom_config_summary_empty">未配置，使用 mpv 默认设置</string>
+    <string name="pref_mpv_custom_config_summary_count">已配置 %1$d 项自定义选项</string>
+    <string name="mpv_config_editor_title">MPV 配置</string>
+    <string name="mpv_config_editor_help">使用标准 mpv.conf 语法：每行一个“选项=值”。以 # 开头的行为注释，[name] 表示一个配置段（profile）。\n\n示例：\nembeddedfonts=no\ndeband=yes\nsub-scale=1.1\n\n修改后需重启应用生效。</string>
+    <string name="mpv_config_editor_hint">embeddedfonts=no\nsub-scale=1.1</string>
+    <string name="mpv_config_editor_reset">重置</string>
+    <string name="mpv_config_editor_save">保存</string>
+    <string name="mpv_config_editor_invalid_line">第 %1$d 行语法无效：每行应为“选项=值”，以 # 开头的行为注释。</string>
+    <string name="mpv_config_editor_saved">已保存，重启应用后生效。</string>
     <string name="playback_info_stream_unknown_title">未知标题</string>
     <string name="pref_exoplayer_direct_play_ass">允许直接播放 SSA/ASS字幕</string>
     <string name="menu_item_auto">自动</string>

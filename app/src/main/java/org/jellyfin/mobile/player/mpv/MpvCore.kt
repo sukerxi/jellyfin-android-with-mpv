@@ -13,6 +13,7 @@ import dev.jdtech.mpv.MPVLib.MPV_FORMAT_NONE
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import org.jellyfin.mobile.app.AppPreferences
 import timber.log.Timber
 import java.io.File
 import java.util.concurrent.CountDownLatch
@@ -275,6 +276,8 @@ class MpvCore private constructor(context: Application) {
     init {
         // Wait for assets (e.g. subfont.ttf) to be copied before mpv reads its config directory.
         MpvAssetInstaller.awaitInstalled(context)
+        // Publish the user-provided mpv.conf so that mpv picks it up during init().
+        MpvConfigManager.syncConfigFile(context, AppPreferences(context).mpvCustomConfig)
         MPVLib.create(context)
         // Limit demuxer cache since the defaults are too high for mobile devices
         val cacheMegs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) 64 else 32
