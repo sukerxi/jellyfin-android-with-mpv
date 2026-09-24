@@ -60,6 +60,13 @@ android {
         includeInApk = false
     }
 
+    packaging {
+        jniLibs {
+            // Bundled by both libmpv and the libass (ass-kt) native libraries
+            pickFirsts += "**/libc++_shared.so"
+        }
+    }
+
     buildTypes {
         getByName("release") {
             isMinifyEnabled = true
