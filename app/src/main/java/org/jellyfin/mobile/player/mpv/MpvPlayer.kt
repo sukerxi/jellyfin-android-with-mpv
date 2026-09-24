@@ -17,7 +17,6 @@ import androidx.media3.common.util.Util
 import androidx.media3.exoplayer.analytics.AnalyticsCollector
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
-import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.player.ui.DecoderType
 import java.util.Locale
 import java.util.UUID
@@ -30,7 +29,6 @@ import java.util.UUID
 class MpvPlayer(
     application: Application,
     looper: Looper,
-    private val appPreferences: AppPreferences,
 ) : SimpleBasePlayer(looper) {
 
     /**
@@ -256,14 +254,10 @@ class MpvPlayer(
         firstFrameRendered = false
         pendingFirstFrame = false
 
-        // hwdec and embeddedfonts are global runtime options, not per-file loadfile options.
+        // hwdec is a global runtime option, not a per-file loadfile option.
         MpvCore.setProperty(
             "hwdec",
             if (decoderProvider() == DecoderType.HARDWARE) "auto" else "no",
-        )
-        MpvCore.setProperty(
-            "embeddedfonts",
-            if (appPreferences.mpvUseEmbedFont) "yes" else "no",
         )
 
         val options = mutableListOf<String>()

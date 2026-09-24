@@ -292,7 +292,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
                 }
             }
             VideoPlayerType.MPV_PLAYER -> {
-                _player.value =MpvPlayer(application,Looper.getMainLooper(),appPreferences).apply {
+                _player.value =MpvPlayer(application,Looper.getMainLooper()).apply {
                     setDecoderProcessor (
                         {decoderType.value?:DecoderType.HARDWARE },
                         { _decoderType.postValue(it) }

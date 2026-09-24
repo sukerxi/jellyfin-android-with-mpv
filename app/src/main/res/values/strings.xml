@@ -116,8 +116,16 @@
     <string name="pref_exoplayer_allow_horizontal_gesture_summary">Allow horizontal gesture control for video seeking</string>
     <string name="pref_exoplayer_direct_play_ass">Allow SSA/ASS subtitles in direct play</string>
     <string name="pref_exoplayer_direct_play_ass_summary">Prevent transcoding and show subtitles with basic styling only. Advanced subtitle styling will not be available if enabled.</string>
-    <string name="pref_mpv_use_embed_font">Mpv use embed font</string>
-    <string name="pref_mpv_use_embed_font_summary">Use fonts embedded in mkv files and ASS scripts. These fonts can be used for SSA/ASS subtitle rendering.</string>
+    <string name="pref_mpv_custom_config">MPV custom configuration</string>
+    <string name="pref_mpv_custom_config_summary_empty">Not configured, mpv defaults are used</string>
+    <string name="pref_mpv_custom_config_summary_count">%1$d custom option(s) configured</string>
+    <string name="mpv_config_editor_title">MPV configuration</string>
+    <string name="mpv_config_editor_help">Uses the standard mpv.conf syntax: one option per line as option=value. Lines starting with # are comments and [name] starts a profile.\n\nExamples:\nembeddedfonts=no\ndeband=yes\nsub-scale=1.1\n\nChanges take effect after restarting the app.</string>
+    <string name="mpv_config_editor_hint">embeddedfonts=no\nsub-scale=1.1</string>
+    <string name="mpv_config_editor_reset">Reset</string>
+    <string name="mpv_config_editor_save">Save</string>
+    <string name="mpv_config_editor_invalid_line">Invalid syntax on line %1$d: expected option=value. Lines starting with # are comments.</string>
+    <string name="mpv_config_editor_saved">Saved. Restart the app to apply the changes.</string>
     <string name="pref_exoplayer_network_buffer">Playback buffer size</string>
     <string name="network_buffer_auto">Auto</string>
     <string name="network_buffer_auto_description">Default buffer, suitable for most playback scenarios</string>

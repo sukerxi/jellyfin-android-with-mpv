@@ -16,6 +16,26 @@ class AppPreferences(context: Context) {
     private val sharedPreferences: SharedPreferences =
         context.getSharedPreferences("${context.packageName}_preferences", Context.MODE_PRIVATE)
 
+    init {
+        migrateMpvUseEmbedFont()
+    }
+
+    /**
+     * Migrates the removed "use embedded fonts" switch into an `embeddedfonts=no` line in the
+     * custom mpv configuration. mpv itself defaults to `embeddedfonts=yes`, so only users who
+     * explicitly turned the switch off are affected.
+     */
+    private fun migrateMpvUseEmbedFont() {
+        if (!sharedPreferences.contains(Constants.PREF_MPV_USE_EMBED_FONT_LEGACY)) return
+        val useEmbedFont = sharedPreferences.getBoolean(Constants.PREF_MPV_USE_EMBED_FONT_LEGACY, true)
+        sharedPreferences.edit {
+            if (!useEmbedFont && !sharedPreferences.contains(Constants.PREF_MPV_CUSTOM_CONFIG)) {
+                putString(Constants.PREF_MPV_CUSTOM_CONFIG, "embeddedfonts=no\n")
+            }
+            remove(Constants.PREF_MPV_USE_EMBED_FONT_LEGACY)
+        }
+    }
+
     var currentServerId: Long?
         get() = sharedPreferences.getLong(Constants.PREF_SERVER_ID, -1).takeIf { it >= 0 }
         set(value) {
@@ -133,7 +153,12 @@ class AppPreferences(context: Context) {
         get() = sharedPreferences.getString(Constants.PREF_EXTERNAL_PLAYER_APP, ExternalPlayerPackage.SYSTEM_DEFAULT)!!
         set(value) = sharedPreferences.edit { putString(Constants.PREF_EXTERNAL_PLAYER_APP, value) }
 
-    val mpvUseEmbedFont: Boolean
-        get() = sharedPreferences.getBoolean(Constants.PREF_MPV_USE_EMBED_FONT, true)
+    /**
+     * User-provided [mpv.conf](https://mpv.io/manual/master/#configuration-files) content.
+     * Written into mpv's config directory and parsed natively before playback starts.
+     */
+    var mpvCustomConfig: String
+        get() = sharedPreferences.getString(Constants.PREF_MPV_CUSTOM_CONFIG, null).orEmpty()
+        set(value) = sharedPreferences.edit { putString(Constants.PREF_MPV_CUSTOM_CONFIG, value) }
 
 }

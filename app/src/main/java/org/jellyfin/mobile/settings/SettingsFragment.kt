@@ -27,9 +27,11 @@ import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.app.StorageManager
 import org.jellyfin.mobile.databinding.FragmentSettingsBinding
 import org.jellyfin.mobile.downloads.DownloadMethod
+import org.jellyfin.mobile.player.mpv.MpvConfigManager
 import org.jellyfin.mobile.utils.BackPressInterceptor
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.applyWindowInsetsAsMargins
+import org.jellyfin.mobile.utils.extensions.addFragment
 import org.jellyfin.mobile.utils.extensions.requireMainActivity
 import org.jellyfin.mobile.utils.isPackageInstalled
 import org.jellyfin.mobile.utils.withThemedContext
@@ -63,7 +65,7 @@ class SettingsFragment : Fragment(), BackPressInterceptor {
     private lateinit var networkBufferPreference: Preference
     private lateinit var externalPlayerChoicePreference: Preference
     private lateinit var downloadLocationPreference: Preference
-    private lateinit var mpvUseEmbedFontPreference: Preference
+    private lateinit var mpvConfigPreference: Preference
 
     init {
         Preference.Config.titleMaxLines = 2
@@ -84,6 +86,24 @@ class SettingsFragment : Fragment(), BackPressInterceptor {
 
     override fun onInterceptBackPressed(): Boolean {
         return settingsAdapter.goBack()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Refresh the summary after returning from the config editor
+        if (::mpvConfigPreference.isInitialized) {
+            mpvConfigPreference.summary = mpvConfigSummary()
+            mpvConfigPreference.requestRebind()
+        }
+    }
+
+    private fun mpvConfigSummary(): String {
+        val optionCount = MpvConfigManager.countOptions(appPreferences.mpvCustomConfig)
+        return if (optionCount == 0) {
+            getString(R.string.pref_mpv_custom_config_summary_empty)
+        } else {
+            getString(R.string.pref_mpv_custom_config_summary_count, optionCount)
+        }
     }
 
     override fun onDestroyView() {
@@ -136,7 +156,7 @@ class SettingsFragment : Fragment(), BackPressInterceptor {
                 directPlayAssPreference.enabled = selection == VideoPlayerType.EXO_PLAYER
                 networkBufferPreference.enabled = selection == VideoPlayerType.EXO_PLAYER
                 externalPlayerChoicePreference.enabled = selection == VideoPlayerType.EXTERNAL_PLAYER
-                mpvUseEmbedFontPreference.enabled= selection ==VideoPlayerType.MPV_PLAYER
+                mpvConfigPreference.enabled = selection == VideoPlayerType.MPV_PLAYER
             }
         }
         startLandscapeVideoInLandscapePreference = checkBox(Constants.PREF_EXOPLAYER_START_LANDSCAPE_VIDEO_IN_LANDSCAPE) {
@@ -203,10 +223,13 @@ class SettingsFragment : Fragment(), BackPressInterceptor {
             enabled = appPreferences.videoPlayerType == VideoPlayerType.EXO_PLAYER
         }
 
-        mpvUseEmbedFontPreference = checkBox(Constants.PREF_MPV_USE_EMBED_FONT) {
-            titleRes = R.string.pref_mpv_use_embed_font
-            summaryRes = R.string.pref_mpv_use_embed_font_summary
+        mpvConfigPreference = pref(Constants.PREF_MPV_CUSTOM_CONFIG) {
+            titleRes = R.string.pref_mpv_custom_config
+            summary = mpvConfigSummary()
             enabled = appPreferences.videoPlayerType == VideoPlayerType.MPV_PLAYER
+            defaultOnClick {
+                parentFragmentManager.addFragment<MpvConfigEditorFragment>()
+            }
         }
 
         // Generate available external player options
