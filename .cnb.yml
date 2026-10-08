@@ -93,31 +93,6 @@
     test -s keystore.jks
     echo "已解码 keystore.jks ($(stat -c%s keystore.jks) bytes)"
 
-# ============================== CI：测试 + Lint + Debug 构建 ==============================
-# 对应 .github/workflows/app-test.yaml + app-lint.yaml + app-build.yaml
-
-.ci-pipeline: &ci-pipeline
-  name: ci
-  docker: *android-docker
-  env: *android-env
-  stages:
-    - *setup-stage
-
-    - name: Gradle 单元测试
-      script: ./gradlew --no-daemon --console=plain test
-
-    - name: Detekt 与 Android Lint
-      script: ./gradlew --no-daemon --console=plain detekt lint
-
-    - name: 构建 Debug APK
-      script: ./gradlew --no-daemon --console=plain assembleDebug
-
-    # CNB 没有与 GitHub upload-artifact 等价的临时制品能力，这里输出路径与校验和到日志，
-    # 需要可下载安装包时请使用 master 自动产出的 Nightly Release。
-    - name: 汇总构建产物
-      script: |
-        echo "Debug APK 构建结果："
-        find app/build/outputs/apk -type f -iname "*.apk" -print -exec sha256sum {} \;
 
 # ============================== Nightly 发版（对应 release.yml） ==============================
 
