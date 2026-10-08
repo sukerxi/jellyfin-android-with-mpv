@@ -425,7 +425,10 @@ class PlayerGestureHelper(
 
                 // Handle horizontal seek gesture completion
                 if (event.action == MotionEvent.ACTION_UP && currentGesture == GestureDirection.HORIZONTAL && isHorizontalSeeking && seekTimeAccumulator != 0L) {
-                    fragment.onSeekByOffset(seekTimeAccumulator)
+                    // Seek to the absolute position shown in the overlay. A relative seek from the
+                    // release-time position would overshoot by however far playback advanced during
+                    // the swipe, since playback keeps running while the gesture is active.
+                    fragment.onSeekTo(seekStartPosition + seekTimeAccumulator)
                     seekOverlayLayout.apply {
                         removeCallbacks(hideSeekOverlayAction)
                         postDelayed(

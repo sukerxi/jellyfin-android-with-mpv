@@ -283,26 +283,11 @@
 
 master:
   push:
-    - *ci-pipeline
     # 每次推送 master 自动发一个 Nightly Release（对应 release.yml）
     - *nightly-pipeline
-  pull_request:
-    - *ci-pipeline
   # master 分支详情页「发布 Nightly」按钮（对应 release.yml 的 workflow_dispatch）
   web_trigger_release:
     - *nightly-pipeline
-
-# 对应 app-test/app-lint/app-build 中 release-* 分支的触发
-"release-*":
-  push:
-    - *ci-pipeline
-  pull_request:
-    - *ci-pipeline
-
-# 兜底：目标为其余分支的 PR 也跑 CI（"$" 只匹配未被上面 glob 命中的分支，不会重复执行）
-$:
-  pull_request:
-    - *ci-pipeline
 
 # 推送 v* tag 触发正式发版（对应 app-publish.yaml）
 "v*":

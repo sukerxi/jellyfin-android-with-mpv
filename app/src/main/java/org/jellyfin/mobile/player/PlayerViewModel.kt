@@ -137,6 +137,13 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     // Media Segments Ask to Skip
     private var askToSkipMediaSegments: List<MediaSegmentDto> = emptyList()
 
+    // Media Segments configured to be skipped automatically (used by the mpv polling watcher)
+    private var autoSkipMediaSegments: List<MediaSegmentDto> = emptyList()
+
+    /** Segments already auto-skipped since the current item started; cleared on backward seeks. */
+    private val skippedAutoSegments = mutableSetOf<MediaSegmentDto>()
+    private var lastAutoSkipPositionMs = -1L
+
     private val _error = MutableLiveData<String>()
     val error: LiveData<String> = _error
 
@@ -149,6 +156,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     private var progressUpdateJob: Job? = null
     private var chapterMarkingUpdateJob: Job? = null
     private var skipMediaSegmentUpdateJob: Job? = null
+    private var autoSkipMediaSegmentUpdateJob: Job? = null
     private var fallbackRetryJob: Job? = null
 
     /**
@@ -410,6 +418,25 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     }
 
     /**
+     * Polls the playback position to auto-skip media segments for players without
+     * ExoPlayer's scheduled-message support (i.e. mpv).
+     */
+    private fun startAutoSkipMediaSegmentUpdates() {
+        autoSkipMediaSegmentUpdateJob?.cancel()
+        autoSkipMediaSegmentUpdateJob = viewModelScope.launch {
+            while (true) {
+                delay(Constants.SKIP_MEDIA_SEGMENT_UPDATE_DELAY)
+                playerOrNull?.performAutoSkipMediaSegments()
+            }
+        }
+    }
+
+    private fun stopAutoSkipMediaSegmentUpdates() {
+        autoSkipMediaSegmentUpdateJob?.cancel()
+        autoSkipMediaSegmentUpdateJob = null
+    }
+
+    /**
      * Updates the decoder of the [Player]. This will destroy the current player and
      * recreate the player with the selected decoder type
      */
@@ -465,6 +492,32 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
             val color = if (playbackPosition >= pos) R.color.jellyfin_accent else R.color.playback_timebar_unplayed
             marking.setColor(color)
         }
+    }
+
+    /**
+     * Auto-skips intro/outro segments for players without ExoPlayer's scheduled-message
+     * support (i.e. mpv). Each segment is skipped at most once per loaded item; the
+     * registry is reset whenever a new media source is applied.
+     */
+    private fun Player.performAutoSkipMediaSegments() {
+        val segments = autoSkipMediaSegments
+        if (segments.isEmpty()) return
+
+        val positionMs = currentPosition
+        // A backward jump beyond what normal playback progress can explain means the user
+        // rewound (e.g. back into the skipped intro); allow the segments to skip again.
+        if (lastAutoSkipPositionMs >= 0 && positionMs < lastAutoSkipPositionMs - Constants.SKIP_MEDIA_SEGMENT_UPDATE_DELAY) {
+            skippedAutoSegments.clear()
+        }
+        lastAutoSkipPositionMs = positionMs
+
+        val playbackPosition = positionMs.milliseconds
+        val segmentToSkip = segments.firstOrNull { seg ->
+            playbackPosition >= seg.start && playbackPosition < seg.end && seg !in skippedAutoSegments
+        } ?: return
+
+        skippedAutoSegments += segmentToSkip
+        seekTo(segmentToSkip.end.inWholeMilliseconds)
     }
 
     private fun Player.updateSkipMediaSegmentButton() {
@@ -567,6 +620,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
 
     private fun applyMediaSegments(jellyfinMediaSource: JellyfinMediaSource) {
         askToSkipMediaSegments = emptyList()
+        autoSkipMediaSegments = emptyList()
+        skippedAutoSegments.clear()
+        lastAutoSkipPositionMs = -1L
+        stopAutoSkipMediaSegmentUpdates()
 
         viewModelScope.launch {
             if (jellyfinMediaSource.item != null) {
@@ -577,13 +634,27 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
                     val action = mediaSegmentRepository.getMediaSegmentAction(mediaSegment)
 
                     when (action) {
-                        MediaSegmentAction.SKIP -> addSkipAction(mediaSegment)
+                        MediaSegmentAction.SKIP -> {
+                            autoSkipMediaSegments += mediaSegment
+                            addSkipAction(mediaSegment)
+                        }
                         MediaSegmentAction.ASK_TO_SKIP -> newAskToSkipMediaSegments.add(mediaSegment)
                         MediaSegmentAction.NOTHING -> Unit
                     }
                 }
 
                 askToSkipMediaSegments = newAskToSkipMediaSegments
+
+                // ExoPlayer skips via the scheduled messages sent in addSkipAction; mpv has no
+                // equivalent message bus, so poll the position to trigger the same auto-skips.
+                // The player may already be READY (and thus past onPlayerStateChanged) by the time
+                // the segments resolve, so start the watcher here too.
+                if (autoSkipMediaSegments.isNotEmpty() &&
+                    playerOrNull !is ExoPlayer &&
+                    playerOrNull?.isPlaying == true
+                ) {
+                    startAutoSkipMediaSegmentUpdates()
+                }
             }
         }
     }
@@ -621,8 +692,15 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         playerOrNull?.seekToOffset(displayPreferences.skipForwardLength)
     }
 
-    fun seekByOffset(offsetMs: Long) {
-        playerOrNull?.seekToOffset(offsetMs)
+    fun seekTo(positionMs: Long) {
+        val player = playerOrNull ?: return
+        val durationMs = player.duration
+        val clamped = if (durationMs != C.TIME_UNSET && durationMs > 0) {
+            positionMs.coerceIn(0, durationMs)
+        } else {
+            positionMs.coerceAtLeast(0)
+        }
+        player.seekTo(clamped)
     }
 
     private fun getCurrentChapterStartPosition(chapters: List<ChapterInfo>, playbackPosition: Duration): Duration? {
@@ -780,10 +858,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
             if (askToSkipMediaSegments.isNotEmpty()) {
                 startSkipMediaSegmentUpdates()
             }
+            if (autoSkipMediaSegments.isNotEmpty() && player !is ExoPlayer) {
+                startAutoSkipMediaSegmentUpdates()
+            }
         } else {
             stopProgressUpdates()
             stopChapterMarkingUpdates()
             stopSkipMediaSegmentUpdates()
+            stopAutoSkipMediaSegmentUpdates()
         }
 
         // Update media session
