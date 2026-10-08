@@ -8,6 +8,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Surface
 import dev.jdtech.mpv.MPVLib
+import dev.jdtech.mpv.MPVLib.MPV_FORMAT_DOUBLE
 import dev.jdtech.mpv.MPVLib.MPV_FORMAT_FLAG
 import dev.jdtech.mpv.MPVLib.MPV_FORMAT_NONE
 import kotlinx.serialization.SerialName
@@ -31,6 +32,16 @@ sealed interface MpvEvent {
 
     /** Playback was paused (true) or resumed (false) while waiting for the cache to fill. */
     data class Caching(val isCaching: Boolean) : MpvEvent
+
+    /**
+     * Playback reached (true) or left (false) end-of-file.
+     * With `keep-open=yes`, mpv stays on the last frame instead of unloading the file,
+     * so natural playback completion is reported through this property rather than [EndFile].
+     */
+    data class EofReached(val isEofReached: Boolean) : MpvEvent
+
+    /** Media duration changed, e.g. when it becomes known only after loading starts (HLS). */
+    data class DurationChanged(val durationMs: Long) : MpvEvent
 
     data object DecoderChanged : MpvEvent
     data object TrackListChanged : MpvEvent
@@ -185,10 +196,18 @@ class MpvCore private constructor(context: Application) {
         }
 
         override fun eventProperty(property: String, value: Long) {}
-        override fun eventProperty(property: String, value: Double) {}
+
+        override fun eventProperty(property: String, value: Double) {
+            if (property == "duration") {
+                postEvent(MpvEvent.DurationChanged((value * 1000).toLong()))
+            }
+        }
 
         override fun eventProperty(property: String, value: Boolean) {
-            if (property == "paused-for-cache") postEvent(MpvEvent.Caching(value))
+            when (property) {
+                "paused-for-cache" -> postEvent(MpvEvent.Caching(value))
+                "eof-reached" -> postEvent(MpvEvent.EofReached(value))
+            }
         }
 
         override fun eventProperty(property: String, value: String) {}
@@ -299,9 +318,11 @@ class MpvCore private constructor(context: Application) {
             "cache-pause-initial" to "yes",
             "vo" to "gpu_next,gpu",
             "save-position-on-quit" to "no",
-        ).forEach { (name, value) ->
-            MPVLib.setOptionString(name, value)
-        }
+            // Keep the file loaded and pause on the last frame at EOF. Without this, seeking
+            // to (or past) the end unloads the file and playback can no longer be revived by
+            // seeking back, and natural EOF is indistinguishable from an overshooting seek.
+            "keep-open" to "yes",
+        ).forEach { (name, value) -> MPVLib.setOptionString(name, value) }
         MPVLib.init()
 
 //        MPVLib.setOptionString("idle", "once")
@@ -316,6 +337,8 @@ class MpvCore private constructor(context: Application) {
         val properties = arrayOf(
             Property("paused-for-cache", MPV_FORMAT_FLAG),
             Property("hwdec-current"),
+            Property("eof-reached", MPV_FORMAT_FLAG),
+            Property("duration", MPV_FORMAT_DOUBLE),
             // Property("time-pos/full", MPV_FORMAT_INT64),
             // Property("duration/full", MPV_FORMAT_INT64),
             // Property("pause", MPV_FORMAT_FLAG),

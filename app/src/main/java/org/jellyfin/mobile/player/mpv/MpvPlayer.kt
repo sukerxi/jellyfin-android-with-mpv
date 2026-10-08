@@ -18,6 +18,7 @@ import androidx.media3.exoplayer.analytics.AnalyticsCollector
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import org.jellyfin.mobile.player.ui.DecoderType
+import org.jellyfin.mobile.utils.Constants
 import java.util.Locale
 import java.util.UUID
 
@@ -97,6 +98,8 @@ class MpvPlayer(
             MpvEvent.EndFile -> {
                 if (!loadingNewFile) {
                     // Distinguish natural end of file from manual stop / load errors.
+                    // With keep-open=yes natural EOF usually arrives via MpvEvent.EofReached
+                    // instead, but keep this as a fallback for stop-less EOF reporting.
                     val eofReached = MpvCore.getProperty<Boolean>("eof-reached") == true
                     playbackState = if (eofReached) STATE_ENDED else STATE_IDLE
                 }
@@ -111,6 +114,21 @@ class MpvPlayer(
             MpvEvent.Seek -> playbackState = STATE_BUFFERING
             is MpvEvent.Caching ->
                 playbackState = if (event.isCaching) STATE_BUFFERING else STATE_READY
+            is MpvEvent.EofReached -> {
+                // keep-open=yes keeps the file loaded on the last frame: this is the primary
+                // signal for natural playback completion, and seeking away clears it again.
+                playbackState = when {
+                    event.isEofReached -> STATE_ENDED
+                    playbackState == STATE_ENDED -> STATE_READY
+                    else -> playbackState
+                }
+            }
+            is MpvEvent.DurationChanged -> {
+                // Duration may only become known (or grow) after loading started.
+                if (event.durationMs > 0 && event.durationMs != durationMs) {
+                    durationMs = event.durationMs
+                }
+            }
             MpvEvent.DecoderChanged -> reportDecoderState()
             MpvEvent.TrackListChanged -> {
                 // External subtitle tracks, in particular network ones, may appear only after
@@ -187,7 +205,9 @@ class MpvPlayer(
         return State.Builder()
             .setPlaylist(listOf(mediaItemData))
             .setAvailableCommands(permanentAvailableCommands)
-            .setPlayWhenReady(!paused, PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
+            // keep-open leaves mpv internally paused on the last frame without changing the pause
+            // property, so STATE_ENDED has to report playWhenReady=false explicitly (media3 semantics).
+            .setPlayWhenReady(playbackState != STATE_ENDED && !paused, PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
             .setPlaybackState(playbackState)
             .setNewlyRenderedFirstFrame(consumePendingFirstFrame())
             .setPlaybackSuppressionReason(PLAYBACK_SUPPRESSION_REASON_NONE)
@@ -215,8 +235,31 @@ class MpvPlayer(
     }
 
     override fun handleSeek(mediaItemIndex: Int, positionMs: Long, seekCommand: Int): ListenableFuture<*> {
-        val seconds = "%.3f".format(Locale.ROOT, positionMs / 1000.0)
+        val wasEnded = playbackState == STATE_ENDED
+
+        // Duration may only become known after FILE_LOADED (e.g. HLS transcodes); refresh it
+        // so the EOF safety margin also works for those sources.
+        val currentDurationMs = readDurationMs()
+        if (currentDurationMs > 0) durationMs = currentDurationMs
+
+        // Never let a user seek (double-tap fast forward, swipe gesture, progress bar) land
+        // exactly on EOF: mpv would end playback immediately, mark the episode as watched and
+        // advance to the next one. Keep a small margin and let playback finish naturally.
+        val targetMs = if (durationMs > Constants.SEEK_TO_END_SAFETY_MARGIN_MS) {
+            positionMs.coerceIn(0, durationMs - Constants.SEEK_TO_END_SAFETY_MARGIN_MS)
+        } else {
+            positionMs.coerceAtLeast(0)
+        }
+
+        val seconds = "%.3f".format(Locale.ROOT, targetMs / 1000.0)
         MpvCore.command(arrayOf("seek", seconds, "absolute+exact"))
+
+        // With keep-open=yes mpv stays internally paused on the last frame at EOF.
+        // Seeking away from it has to resume playback, matching ExoPlayer's seekTo()
+        // behavior after STATE_ENDED.
+        if (wasEnded) {
+            MpvCore.setProperty("pause", false)
+        }
         return Futures.immediateFuture(null)
     }
 

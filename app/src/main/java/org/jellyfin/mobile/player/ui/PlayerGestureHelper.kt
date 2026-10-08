@@ -255,10 +255,14 @@ class PlayerGestureHelper(
 
                     seekTimeAccumulator += acceleratedSeekDelta
 
-                    // Clamp the accumulated seek time to valid range
+                    // Clamp the accumulated seek time to valid range.
+                    // Keep a safety margin from the end: landing exactly on EOF ends the
+                    // episode immediately (watched sync + auto-advance), so the overlay
+                    // target must match the clamped seek actually performed on release.
+                    val safeDurationMs = (mediaDuration - Constants.SEEK_TO_END_SAFETY_MARGIN_MS)
+                        .coerceAtLeast(0)
                     val minSeek = -seekStartPosition
-                    val maxSeek = if (mediaDuration > 0) mediaDuration - seekStartPosition else Long.MAX_VALUE
-                    // Allow seeking up to media duration (if known). Do not enforce an artificial MAX_SEEK_TIME_MS limit.
+                    val maxSeek = if (mediaDuration > 0) safeDurationMs - seekStartPosition else Long.MAX_VALUE
                     seekTimeAccumulator = seekTimeAccumulator.coerceIn(minSeek, maxSeek)
 
                     // Update the seek overlay with mm:ss format
@@ -270,7 +274,7 @@ class PlayerGestureHelper(
                     seekOverlayText.text = seekText
 
                     // Update position text (current position / duration)
-                    val targetPosition = (seekStartPosition + seekTimeAccumulator).coerceIn(0, mediaDuration)
+                    val targetPosition = (seekStartPosition + seekTimeAccumulator).coerceIn(0, safeDurationMs)
                     seekPositionText.text = "${formatTime(targetPosition)} / ${formatTime(mediaDuration)}"
 
                     // Update progress bar

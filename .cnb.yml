@@ -57,22 +57,28 @@
   script: |
     set -e
     chmod +x ./gradlew
-    if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+    # Android 17（API 37）起平台包采用小版本号（platforms;android-37.0），
+    # 旧版 cmdline-tools（11076708）无法识别，需使用 13114758 或更新版本。
+    # 用版本标记文件做守卫：数据卷里缓存的旧版 cmdline-tools 会被强制重装一次。
+    CMDLINE_TOOLS_BUILD=13114758
+    if [ ! -f "$ANDROID_SDK_ROOT/cmdline-tools/.ready-$CMDLINE_TOOLS_BUILD" ]; then
       apt-get update
       apt-get install -y --no-install-recommends ca-certificates curl unzip
       install -d "$ANDROID_SDK_ROOT/cmdline-tools"
+      rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
       curl -fsSL -o /tmp/cmdline-tools.zip \
-        https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+        "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_TOOLS_BUILD}_latest.zip"
       unzip -q /tmp/cmdline-tools.zip -d "$ANDROID_SDK_ROOT/cmdline-tools"
       mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" \
          "$ANDROID_SDK_ROOT/cmdline-tools/latest"
       rm -f /tmp/cmdline-tools.zip
+      touch "$ANDROID_SDK_ROOT/cmdline-tools/.ready-$CMDLINE_TOOLS_BUILD"
     fi
     export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
     yes | sdkmanager --licenses > /dev/null
     sdkmanager --install \
       "platform-tools" \
-      "platforms;android-37" \
+      "platforms;android-37.0" \
       "build-tools;37.0.0"
     echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
     sdkmanager --version
