@@ -1,0 +1,330 @@
+# CNB (cnb.cool) 云原生构建流水线，由 .github/workflows/ 下的 GitHub Actions 改造而来。
+# GitHub Actions 配置全部保留不变；本文件仅在 CNB 平台生效。
+#
+# 流水线对应关系：
+#   .github/workflows/app-build.yaml       -> ci 流水线（assembleDebug），master / release-* push 与所有 PR
+#   .github/workflows/app-test.yaml        -> ci 流水线（./gradlew test）
+#   .github/workflows/app-lint.yaml        -> ci 流水线（./gradlew detekt lint；SARIF 上传为 GitHub 专有，未迁移）
+#   .github/workflows/gradlew-validate.yaml-> 依赖 GitHub 官方 Action，CNB 无等价物，未迁移
+#   .github/workflows/release.yml          -> nightly-release 流水线（master push + 「发布 Nightly」按钮）
+#   .github/workflows/app-publish.yaml     -> release 流水线（推送 v* tag 触发）
+#   .github/workflows/repo-*.yaml          -> GitHub 机器人（triage/stale/merge-conflict），与 CNB 无关，未迁移
+#
+# 手动按钮定义见 .cnb/web_trigger.yml（在 master 分支详情页显示）。
+#
+# Nightly 发版（对应 release.yml）:
+#   每次推送到 master：版本号 3.0.0-<提交短哈希>，自动创建唯一 tag
+#   3.0.0-<CNB 构建号> 与 CNB Release，并上传 libre release APK + version.txt 作为附件。
+#   与 GitHub 版差异：直接构建当前仓库（GitHub 版跨仓库 checkout sukerxi/jellyfin-android）。
+#
+# 正式发版（对应 app-publish.yaml）:
+#   推送 vX.Y.Z 形式的 tag 即自动构建全部 APK/AAB，创建同名 CNB Release 并上传附件。
+#
+# Release 签名（可选）：
+#   未配置签名密钥时 release 产物为未签名包（AGP 默认行为，流水线不会失败）。
+#   如需签名，请在「密钥仓库」创建 android.yml（不要提交到本仓库）：
+#     KEYSTORE: <keystore.jks 的 base64 内容>
+#     KEYSTORE_PASSWORD: <keystore 密码>
+#     KEY_ALIAS: <key alias>
+#     KEY_PASSWORD: <key 密码>
+#   然后在下方 nightly-release / release 流水线中取消 imports 注释并改成你的密钥仓库地址：
+#     imports:
+#       - https://cnb.cool/sukerxi/<你的密钥仓库>/-/blob/master/android.yml
+#
+# 同步到 repo.jellyfin.org（可选，对应 app-publish.yaml 最后两步）：
+#   在密钥仓库增加 deploy.yml（REPO_HOST / REPO_USER / REPO_KEY 私钥），
+#   并在 release 流水线的 imports 中追加该文件；未配置时自动跳过。
+
+# ============================== 共享配置（锚点复用） ==============================
+
+# JDK 21（见 .tools-versions）+ Gradle 9.7.1 + AGP 9.x / compileSdk 37 的构建环境。
+# Android SDK 在「准备 Android SDK」阶段按需安装到数据卷，首次构建后跨流水线缓存复用。
+.android-docker: &android-docker
+  image: eclipse-temurin:21-jdk-noble
+  volumes:
+    # Gradle 依赖与 wrapper 发行包缓存
+    - /root/.gradle:copy-on-write
+    # Android SDK 缓存
+    - /opt/android-sdk:copy-on-write
+
+.android-env: &android-env
+  ANDROID_SDK_ROOT: /opt/android-sdk
+  ANDROID_HOME: /opt/android-sdk
+
+# 所有流水线共用的环境准备阶段
+.setup-stage: &setup-stage
+  name: 准备 Android SDK
+  script: |
+    set -e
+    chmod +x ./gradlew
+    if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+      apt-get update
+      apt-get install -y --no-install-recommends ca-certificates curl unzip
+      install -d "$ANDROID_SDK_ROOT/cmdline-tools"
+      curl -fsSL -o /tmp/cmdline-tools.zip \
+        https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+      unzip -q /tmp/cmdline-tools.zip -d "$ANDROID_SDK_ROOT/cmdline-tools"
+      mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" \
+         "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+      rm -f /tmp/cmdline-tools.zip
+    fi
+    export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+    yes | sdkmanager --licenses > /dev/null
+    sdkmanager --install \
+      "platform-tools" \
+      "platforms;android-37" \
+      "build-tools;37.0.0"
+    echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+    sdkmanager --version
+
+# 存在签名密钥（密钥仓库导入的 $KEYSTORE）时解码为 keystore.jks
+.decode-keystore-stage: &decode-keystore-stage
+  name: 解码签名密钥
+  if: test -n "$KEYSTORE"
+  script: |
+    set -e
+    echo "$KEYSTORE" | base64 -d > keystore.jks
+    test -s keystore.jks
+    echo "已解码 keystore.jks ($(stat -c%s keystore.jks) bytes)"
+
+# ============================== CI：测试 + Lint + Debug 构建 ==============================
+# 对应 .github/workflows/app-test.yaml + app-lint.yaml + app-build.yaml
+
+.ci-pipeline: &ci-pipeline
+  name: ci
+  docker: *android-docker
+  env: *android-env
+  stages:
+    - *setup-stage
+
+    - name: Gradle 单元测试
+      script: ./gradlew --no-daemon --console=plain test
+
+    - name: Detekt 与 Android Lint
+      script: ./gradlew --no-daemon --console=plain detekt lint
+
+    - name: 构建 Debug APK
+      script: ./gradlew --no-daemon --console=plain assembleDebug
+
+    # CNB 没有与 GitHub upload-artifact 等价的临时制品能力，这里输出路径与校验和到日志，
+    # 需要可下载安装包时请使用 master 自动产出的 Nightly Release。
+    - name: 汇总构建产物
+      script: |
+        echo "Debug APK 构建结果："
+        find app/build/outputs/apk -type f -iname "*.apk" -print -exec sha256sum {} \;
+
+# ============================== Nightly 发版（对应 release.yml） ==============================
+
+.nightly-pipeline: &nightly-pipeline
+  name: nightly-release
+  # 同一分支上的发版串行执行，避免并发抢占（对应 GitHub workflow 的 concurrency 配置）
+  lock: true
+  docker: *android-docker
+  env: *android-env
+  # 如需签名 Release，配置密钥仓库后取消注释：
+  # imports:
+  #   - https://cnb.cool/sukerxi/<你的密钥仓库>/-/blob/master/android.yml
+  stages:
+    - *setup-stage
+
+    # 版本号 = 3.0.0 + 提交短哈希；Tag = 3.0.0 + CNB 构建号（全局唯一，不会覆盖历史 Release）
+    - name: 设置版本变量
+      script: |
+        VERSION="3.0.0-${CNB_COMMIT_SHORT}"
+        TAG="3.0.0-${CNB_BUILD_ID}"
+        echo "Version: ${VERSION} | Tag: ${TAG} | Commit: ${CNB_COMMIT}"
+        echo "##[set-output version=$VERSION]"
+        echo "##[set-output tag=$TAG]"
+      exports:
+        version: JELLYFIN_VERSION
+        tag: NIGHTLY_TAG
+
+    - *decode-keystore-stage
+
+    - name: 构建 libre release
+      script: |
+        set -e
+        if [ -f keystore.jks ]; then
+          export KEYSTORE_FILE="$PWD/keystore.jks"
+          export KEYSTORE_PASSWORD
+          export SIGNING_KEY_ALIAS="$KEY_ALIAS"
+          export SIGNING_KEY_PASSWORD="$KEY_PASSWORD"
+        else
+          echo "未配置签名密钥（KEYSTORE），产出未签名 APK"
+        fi
+        ./gradlew --no-daemon --console=plain assembleLibreRelease versionTxt --stacktrace
+
+    - name: 整理发布产物
+      script: |
+        set -e
+        mkdir -p build/cnb-nightly
+        APK="$(find app/build/outputs/apk/libre/release -type f -name '*.apk' | head -n 1)"
+        cp "$APK" "build/cnb-nightly/jellyfin-android-v${JELLYFIN_VERSION}-libre-release.apk"
+        cp app/build/version.txt build/cnb-nightly/
+        ls -lh build/cnb-nightly/
+
+    - name: 创建发版 Tag
+      script: |
+        set -e
+        api="${CNB_API_ENDPOINT:-https://api.cnb.cool}/${CNB_REPO_SLUG}"
+        auth="Authorization: Bearer ${CNB_TOKEN}"
+        # CNB OPENAPI 强制要求该 Accept 头，缺失会返回 406
+        accept="Accept: application/vnd.cnb.api+json"
+        echo "在 $CNB_COMMIT 上创建 Tag: $NIGHTLY_TAG"
+        payload=$(printf '{"name":"%s","message":"Nightly %s","target":"%s"}' \
+          "$NIGHTLY_TAG" "$NIGHTLY_TAG" "$CNB_COMMIT")
+        curl -fsS -X POST \
+          -H "$accept" \
+          -H "$auth" \
+          -H "Content-Type: application/json" \
+          -d "$payload" \
+          "$api/-/git/tags"
+
+    - name: 创建 CNB Release
+      type: git:release
+      options:
+        tag: $NIGHTLY_TAG
+        title: "${NIGHTLY_TAG} (${JELLYFIN_VERSION})"
+        description: |
+          ## Jellyfin Android with MPV (Libre) 自动构建
+
+          - 版本号：`${JELLYFIN_VERSION}`
+          - 构建编号：`${CNB_BUILD_ID}`
+          - 提交：`${CNB_COMMIT}`
+        latest: true
+
+    - name: 上传 Release 附件
+      image: cnbcool/attachments:latest
+      settings:
+        tag: $NIGHTLY_TAG
+        attachments:
+          - ./build/cnb-nightly/*.apk
+          - ./build/cnb-nightly/version.txt
+
+# ============================== 正式发版（对应 app-publish.yaml） ==============================
+
+.publish-pipeline: &publish-pipeline
+  name: release
+  docker: *android-docker
+  env: *android-env
+  # 如需签名 Release / 同步 repo.jellyfin.org，配置密钥仓库后取消注释：
+  # imports:
+  #   - https://cnb.cool/sukerxi/<你的密钥仓库>/-/blob/master/android.yml
+  #   - https://cnb.cool/sukerxi/<你的密钥仓库>/-/blob/master/deploy.yml
+  stages:
+    - *setup-stage
+
+    # 版本号取 tag 名并去掉 v 前缀（v2.0.0 -> 2.0.0）
+    - name: 设置版本变量
+      script: |
+        VERSION="${CNB_BRANCH#v}"
+        echo "Release 版本: $VERSION (tag: $CNB_BRANCH)"
+        echo "##[set-output version=$VERSION]"
+      exports:
+        version: JELLYFIN_VERSION
+
+    - *decode-keystore-stage
+
+    - name: 构建全部 Release 产物
+      script: |
+        set -e
+        if [ -f keystore.jks ]; then
+          export KEYSTORE_FILE="$PWD/keystore.jks"
+          export KEYSTORE_PASSWORD
+          export SIGNING_KEY_ALIAS="$KEY_ALIAS"
+          export SIGNING_KEY_PASSWORD="$KEY_PASSWORD"
+        else
+          echo "未配置签名密钥（KEYSTORE），产出未签名 APK/AAB"
+        fi
+        ./gradlew --no-daemon --console=plain assemble bundleRelease versionTxt --stacktrace
+
+    - name: 整理发布产物
+      script: |
+        set -e
+        mkdir -p build/cnb-publish
+        find app/build/outputs/apk -type f -iname "*.apk" -exec cp {} build/cnb-publish/ \;
+        find app/build/outputs/bundle -type f -iname "*.aab" -exec cp {} build/cnb-publish/ \;
+        cp app/build/version.txt build/cnb-publish/
+        ls -lh build/cnb-publish/
+
+    # tag_push 事件下无需传 tag，自动取触发事件的 tag 名
+    - name: 创建 CNB Release
+      type: git:release
+      options:
+        title: $CNB_BRANCH
+        description: Jellyfin Android with MPV $CNB_BRANCH
+        latest: true
+
+    - name: 上传 Release 附件
+      image: cnbcool/attachments:latest
+      settings:
+        attachments:
+          - ./build/cnb-publish/*.apk
+          - ./build/cnb-publish/*.aab
+          - ./build/cnb-publish/version.txt
+
+    # 以下两步对应 app-publish.yaml 中上传 repo.jellyfin.org 的逻辑，
+    # 仅在密钥仓库提供 REPO_HOST / REPO_USER / REPO_KEY 时执行，否则自动跳过。
+    - name: 配置部署 SSH
+      if: test -n "$REPO_HOST" -a -n "$REPO_USER" -a -n "$REPO_KEY"
+      script: |
+        set -e
+        apt-get update
+        apt-get install -y --no-install-recommends openssh-client rsync
+        mkdir -p ~/.ssh
+        printf '%s' "$REPO_KEY" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+
+    - name: 上传发布产物到 repo.jellyfin.org
+      if: test -n "$REPO_HOST" -a -n "$REPO_USER" -a -f "$HOME/.ssh/id_rsa"
+      script: |
+        set -e
+        rsync -vrptz \
+          -e "ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no" \
+          build/cnb-publish/ \
+          "${REPO_USER}@${REPO_HOST}:/srv/incoming/android/v${JELLYFIN_VERSION}/"
+
+    - name: 更新 repo.jellyfin.org 软链接
+      if: test -n "$REPO_HOST" -a -n "$REPO_USER" -a -f "$HOME/.ssh/id_rsa"
+      script: |
+        ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no \
+          "${REPO_USER}@${REPO_HOST}" "bash -s" <<EOF
+          if [ -d "/srv/repository/main/client/android/versions/v${JELLYFIN_VERSION}" ] && [ -n "${JELLYFIN_VERSION}" ]; then
+              sudo rm -r /srv/repository/main/client/android/versions/v${JELLYFIN_VERSION}
+          fi
+          sudo mv /srv/incoming/android/v${JELLYFIN_VERSION} /srv/repository/main/client/android/versions/v${JELLYFIN_VERSION}
+          cd /srv/repository/main/client/android
+          sudo rm -rf *.apk version.txt
+          sudo ln -s versions/v${JELLYFIN_VERSION}/jellyfin-android-v${JELLYFIN_VERSION}-*.apk .
+          sudo ln -s versions/v${JELLYFIN_VERSION}/version.txt .
+        EOF
+
+# ============================== 事件绑定 ==============================
+
+master:
+  push:
+    - *ci-pipeline
+    # 每次推送 master 自动发一个 Nightly Release（对应 release.yml）
+    - *nightly-pipeline
+  pull_request:
+    - *ci-pipeline
+  # master 分支详情页「发布 Nightly」按钮（对应 release.yml 的 workflow_dispatch）
+  web_trigger_release:
+    - *nightly-pipeline
+
+# 对应 app-test/app-lint/app-build 中 release-* 分支的触发
+"release-*":
+  push:
+    - *ci-pipeline
+  pull_request:
+    - *ci-pipeline
+
+# 兜底：目标为其余分支的 PR 也跑 CI（"$" 只匹配未被上面 glob 命中的分支，不会重复执行）
+$:
+  pull_request:
+    - *ci-pipeline
+
+# 推送 v* tag 触发正式发版（对应 app-publish.yaml）
+"v*":
+  tag_push:
+    - *publish-pipeline

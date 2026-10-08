@@ -1,0 +1,10 @@
+# CNB 手动触发按钮配置（在「代码 - master 分支详情页」显示）。
+# 按钮触发的 web_trigger 事件流水线定义在根目录 .cnb.yml 中。
+
+branch:
+  - reg: ^master$
+    buttons:
+      - name: 发布 Nightly
+        description: 手动触发一次 master 构建并发布 Nightly Release（tag 为 3.0.0-<构建号>）
+        event: web_trigger_release
+        groupName: 发布
