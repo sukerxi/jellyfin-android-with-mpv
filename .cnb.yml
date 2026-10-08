@@ -128,7 +128,7 @@
   docker: *android-docker
   env: *android-env
   imports:
-    - https://cnb.cool/sukerxi/secrets/-/blob/master/android.yml
+    - https://cnb.cool/sukerxi/secrets/-/blob/main/android.yml
   stages:
     - *setup-stage
 
@@ -215,7 +215,7 @@
   # 如需同步 repo.jellyfin.org，配置 deploy.yml 后在 imports 中追加：
   #   - https://cnb.cool/sukerxi/secrets/-/blob/master/deploy.yml
   imports:
-    - https://cnb.cool/sukerxi/secrets/-/blob/master/android.yml
+    - https://cnb.cool/sukerxi/secrets/-/blob/main/android.yml
   stages:
     - *setup-stage
 
