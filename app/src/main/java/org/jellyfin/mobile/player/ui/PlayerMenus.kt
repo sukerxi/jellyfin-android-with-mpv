@@ -1,13 +1,17 @@
 package org.jellyfin.mobile.player.ui
 
+import android.view.LayoutInflater
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
+import android.view.ViewGroup
+import android.widget.AdapterView
+import android.widget.BaseAdapter
 import android.widget.Button
+import android.widget.GridView
 import android.widget.ImageButton
 import android.widget.PopupMenu
 import android.widget.TextView
-import androidx.annotation.StringRes
 import androidx.appcompat.widget.AppCompatImageView
 import androidx.appcompat.widget.AppCompatTextView
 import androidx.constraintlayout.widget.ConstraintLayout
@@ -15,7 +19,6 @@ import androidx.core.view.get
 import androidx.core.view.isVisible
 import androidx.core.view.size
 import androidx.core.view.updateLayoutParams
-import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.TimeBar
@@ -31,13 +34,15 @@ import org.jellyfin.mobile.player.mpv.MpvPlayer
 import org.jellyfin.mobile.player.ui.playermenuhelper.PlayerMenuHelper
 import org.jellyfin.mobile.player.ui.playermenuhelper.SkipMediaSegmentButton
 import org.jellyfin.mobile.settings.VideoPlayerType
+import org.jellyfin.sdk.model.api.BaseItemDto
+import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.ChapterInfo
 import org.jellyfin.sdk.model.api.MediaStream
-import org.jellyfin.sdk.model.api.MediaStreamType
 import org.jellyfin.sdk.model.api.VideoRange
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import java.util.Locale
+import java.util.UUID
 
 /**
  *  Provides a menu UI for audio, subtitle and video stream selection
@@ -64,10 +69,14 @@ class PlayerMenus(
     private val qualityButton: View by playerControlsBinding::qualityButton
     private val decoderButton: View by playerControlsBinding::decoderButton
     private val infoButton: View by playerControlsBinding::infoButton
+    private val episodesButton: View by playerControlsBinding::episodesButton
     private val playbackInfo: TextView by playerBinding::playbackInfo
     private val playbackInfoContainer: View by playerBinding::playbackInfoContainer
     private val playbackInfoToggle: TextView by playerBinding::playbackInfoToggle
     private val playbackInfoMore: TextView by playerBinding::playbackInfoMore
+    private val episodePickerContainer: View by playerBinding::episodePickerContainer
+    private val episodePickerCount: TextView by playerBinding::episodePickerCount
+    private val episodeGrid: GridView by playerBinding::episodeGrid
     private val audioStreamsMenu: PopupMenu = createAudioStreamsMenu()
     private val subtitlesMenu: PopupMenu = createSubtitlesMenu()
     private val speedMenu: PopupMenu = createSpeedMenu()
@@ -87,6 +96,9 @@ class PlayerMenus(
     private var playbackInfoExpanded = false
     private var currentMediaSource: JellyfinMediaSource? = null
     private var decoderType: DecoderType? = null
+
+    private var episodeAdapter: EpisodeAdapter? = null
+    private var episodePickerLoaded = false
 
     private val trickplayHelper = TrickplayHelper(
         trickplayContainer,
@@ -158,19 +170,45 @@ class PlayerMenus(
             decoderMenu.show()
         }
         infoButton.setOnClickListener {
+            if (episodePickerContainer.isVisible) dismissEpisodePicker()
             playbackInfoContainer.isVisible = !playbackInfoContainer.isVisible
             // Refresh runtime stats each time the panel is opened
             if (playbackInfoContainer.isVisible) {
+                fragment.suppressControllerAutoHide(true)
                 refreshPlaybackInfo()
                 currentMediaSource?.let { source -> playbackInfoMore.text = buildPlaybackInfoDetails(source) }
+            } else {
+                fragment.suppressControllerAutoHide(false)
             }
         }
+        // Tapping the scrim outside the card dismisses the panel
         playbackInfoContainer.setOnClickListener {
+            dismissPlaybackInfo()
+        }
+        playerBinding.playbackInfoClose.setOnClickListener {
             dismissPlaybackInfo()
         }
         playbackInfoToggle.setOnClickListener {
             playbackInfoExpanded = !playbackInfoExpanded
             updatePlaybackInfoExpanded()
+        }
+
+        episodesButton.setOnClickListener {
+            if (episodePickerContainer.isVisible) {
+                dismissEpisodePicker()
+            } else {
+                showEpisodePicker()
+            }
+        }
+        episodePickerContainer.setOnClickListener {
+            dismissEpisodePicker()
+        }
+        playerBinding.episodePickerClose.setOnClickListener {
+            dismissEpisodePicker()
+        }
+        episodeGrid.onItemClickListener = AdapterView.OnItemClickListener { _, _, position, _ ->
+            fragment.onEpisodeSelected(position)
+            dismissEpisodePicker()
         }
 
         fragment.setPlayerMenuHelper(playerMenuHelper)
@@ -179,6 +217,15 @@ class PlayerMenus(
     fun onQueueItemChanged(mediaSource: JellyfinMediaSource, hasNext: Boolean) {
         // previousButton is always enabled and will rewind if at the start of the queue
         nextButton.isEnabled = hasNext
+
+        val queueSize = fragment.queueManager.queueSize
+        val currentIndex = fragment.queueManager.currentIndex
+        episodesButton.isVisible = queueSize > 1
+        episodePickerCount.text = context.getString(R.string.episode_picker_count, currentIndex + 1, queueSize)
+        episodeAdapter?.let { adapter ->
+            adapter.selectedPosition = currentIndex
+            adapter.notifyDataSetChanged()
+        }
 
         trickplayHelper.onMediaSourceChanged(mediaSource)
 
@@ -228,35 +275,45 @@ class PlayerMenus(
     }
 
     /**
-     * Rebuild the basic playback info (play method, engine, streams) from the current media source.
+     * Rebuild the compact basic playback info. Only the currently active tracks are shown.
      */
     private fun refreshPlaybackInfo() {
         val mediaSource = currentMediaSource ?: return
-        val playMethod = context.getString(R.string.playback_info_play_method, mediaSource.playMethod)
-        val engineInfo = buildEngineInfo()
-        val videoTracksInfo = buildMediaStreamsInfo(
-            mediaStreams = listOfNotNull(mediaSource.selectedVideoStream),
-            prefix = R.string.playback_info_video_streams,
-            maxStreams = MAX_VIDEO_STREAMS_DISPLAY,
-            streamSuffix = { stream ->
-                stream.bitRate?.let { bitrate -> " (${formatBitrate(bitrate.toDouble())})" }.orEmpty()
-            },
-        )
-        val audioTracksInfo = buildMediaStreamsInfo(
-            mediaStreams = mediaSource.audioStreams,
-            prefix = R.string.playback_info_audio_streams,
-            maxStreams = MAX_AUDIO_STREAMS_DISPLAY,
-            streamSuffix = { stream ->
-                stream.language?.let { lang -> " ($lang)" }.orEmpty()
-            },
-        )
+        val lines = mutableListOf<String>()
 
-        playbackInfo.text = listOf(
-            playMethod,
-            engineInfo,
-            videoTracksInfo,
-            audioTracksInfo,
-        ).joinToString("\n\n")
+        lines += context.getString(R.string.playback_info_play_method, mediaSource.playMethod)
+
+        buildEngineInfo().takeUnless(String::isBlank)?.let { engine ->
+            lines += context.getString(R.string.playback_info_engine, engine)
+        }
+
+        mediaSource.selectedVideoStream?.let { stream ->
+            val title = stream.displayTitle?.takeUnless(String::isBlank) ?: buildStreamFallbackTitle(stream)
+            val bitrate = stream.bitRate?.let { " · ${formatBitrate(it.toDouble())}" }.orEmpty()
+            lines += "${context.getString(R.string.playback_info_video)}: $title$bitrate"
+        }
+
+        mediaSource.selectedAudioStream?.let { stream ->
+            val title = stream.displayTitle?.takeUnless(String::isBlank) ?: buildStreamFallbackTitle(stream)
+            val language = stream.language
+                ?.takeUnless(String::isBlank)
+                ?.let { " ($it)" }
+                .orEmpty()
+            lines += "${context.getString(R.string.playback_info_audio)}: $title$language"
+        }
+
+        val subtitleTitle = mediaSource.selectedSubtitleStream?.let { stream ->
+            stream.displayTitle?.takeUnless(String::isBlank) ?: buildStreamFallbackTitle(stream)
+        } ?: context.getString(R.string.playback_info_off)
+        lines += "${context.getString(R.string.playback_info_subtitle)}: $subtitleTitle"
+
+        playbackInfo.text = lines.joinToString("\n")
+    }
+
+    private fun buildStreamFallbackTitle(stream: MediaStream): String {
+        val codec = stream.codec?.uppercase(Locale.ROOT)
+        val language = stream.language?.takeUnless(String::isBlank)
+        return listOfNotNull(language, codec).joinToString(" - ")
     }
 
     /**
@@ -286,31 +343,17 @@ class PlayerMenus(
     }
 
     /**
-     * Build the collapsible "more info" section: container details and per-stream technical info.
+     * Build the collapsible "more info" section: container details and technical info
+     * of the currently active tracks only.
      */
     private fun buildPlaybackInfoDetails(mediaSource: JellyfinMediaSource): String {
         val sourceInfo = mediaSource.sourceInfo
         val lines = mutableListOf<String>()
 
-        // Runtime stats (refreshed each time the panel is opened/expanded)
-        fragment.currentPlayer?.let { player ->
-            val speed = player.playbackParameters.speed
-                .takeIf { it != 1f }
-                ?.let { "%.2gx".format(Locale.getDefault(), it) }
-            val buffered = (player.bufferedPosition - player.currentPosition)
-                .takeIf { it > 1000 }
-                ?.let { context.getString(R.string.playback_info_buffered, formatDuration(it)) }
-            val duration = player.duration
-                .takeIf { it > 0 }
-                ?: sourceInfo.runTimeTicks?.let { it / 10_000 }
-                ?: 0L
-            val stats = listOfNotNull(
-                speed,
-                buffered,
-                duration.takeIf { it > 0 }?.let { formatDuration(it) },
-            )
-            if (stats.isNotEmpty()) lines += stats.joinToString(" · ")
-        }
+        // Playback speed (only shown when not 1x)
+        fragment.currentPlayer?.playbackParameters?.speed
+            ?.takeIf { it != 1f }
+            ?.let { lines += "%.2fx".format(Locale.getDefault(), it) }
 
         // Streaming bitrate cap (remote sources only)
         if (mediaSource is RemoteJellyfinMediaSource) {
@@ -331,53 +374,47 @@ class PlayerMenus(
             lines += if (details.isEmpty()) container else "$container · $details"
         }
 
-        // Video streams
-        mediaSource.mediaStreams
-            .filter { it.type == MediaStreamType.VIDEO }
-            .forEach { stream ->
-                val parts = listOfNotNull(
-                    stream.codec?.uppercase(Locale.ROOT),
-                    stream.profile?.takeUnless(String::isBlank),
-                    stream.level?.let { "L${"%.1f".format(Locale.getDefault(), it)}" },
-                    stream.width?.let { w -> stream.height?.let { h -> "${w}x$h" } },
-                    (stream.realFrameRate ?: stream.averageFrameRate)?.let { "%.6g fps".format(Locale.getDefault(), it) },
-                    stream.bitDepth?.let { "${it}-bit" },
-                    stream.isInterlaced.takeIf { it }?.let { "interlaced" },
-                    stream.videoRange?.takeIf { it != VideoRange.UNKNOWN }?.name,
-                    stream.aspectRatio?.takeUnless(String::isBlank),
-                )
-                if (parts.isNotEmpty()) lines += "V: ${parts.joinToString(" · ")}"
-            }
+        // Active video stream
+        mediaSource.selectedVideoStream?.let { stream ->
+            val parts = listOfNotNull(
+                stream.codec?.uppercase(Locale.ROOT),
+                stream.profile?.takeUnless(String::isBlank),
+                stream.level?.let { "L${"%.1f".format(Locale.getDefault(), it)}" },
+                stream.width?.let { w -> stream.height?.let { h -> "${w}x$h" } },
+                (stream.realFrameRate ?: stream.averageFrameRate)?.let { "%.6g fps".format(Locale.getDefault(), it) },
+                stream.bitDepth?.let { "${it}-bit" },
+                stream.isInterlaced.takeIf { it }?.let { "interlaced" },
+                stream.videoRange.takeIf { it != VideoRange.UNKNOWN }?.name,
+                stream.aspectRatio?.takeUnless(String::isBlank),
+            )
+            if (parts.isNotEmpty()) lines += "V: ${parts.joinToString(" · ")}"
+        }
 
-        // Audio streams
-        mediaSource.mediaStreams
-            .filter { it.type == MediaStreamType.AUDIO }
-            .forEach { stream ->
-                val parts = listOfNotNull(
-                    stream.codec?.uppercase(Locale.ROOT),
-                    stream.profile?.takeUnless(String::isBlank),
-                    stream.language?.takeUnless(String::isBlank),
-                    stream.channels?.let { ch -> stream.channelLayout?.let { "$ch ch ($it)" } ?: "${ch} ch" },
-                    stream.sampleRate?.let { "%.1f kHz".format(Locale.getDefault(), it / 1000.0) },
-                    stream.bitDepth?.let { "${it}-bit" },
-                    stream.bitRate?.let { formatBitrate(it.toDouble()) },
-                )
-                if (parts.isNotEmpty()) lines += "A: ${parts.joinToString(" · ")}"
-            }
+        // Active audio stream
+        mediaSource.selectedAudioStream?.let { stream ->
+            val parts = listOfNotNull(
+                stream.codec?.uppercase(Locale.ROOT),
+                stream.profile?.takeUnless(String::isBlank),
+                stream.language?.takeUnless(String::isBlank),
+                stream.channels?.let { ch -> stream.channelLayout?.let { "$ch ch ($it)" } ?: "${ch} ch" },
+                stream.sampleRate?.let { "%.1f kHz".format(Locale.getDefault(), it / 1000.0) },
+                stream.bitDepth?.let { "${it}-bit" },
+                stream.bitRate?.let { formatBitrate(it.toDouble()) },
+            )
+            if (parts.isNotEmpty()) lines += "A: ${parts.joinToString(" · ")}"
+        }
 
-        // Subtitle streams
-        mediaSource.mediaStreams
-            .filter { it.type == MediaStreamType.SUBTITLE }
-            .forEach { stream ->
-                val parts = listOfNotNull(
-                    stream.codec?.uppercase(Locale.ROOT),
-                    stream.language?.takeUnless(String::isBlank),
-                    stream.isExternal.takeIf { it }?.let { "ext" },
-                    stream.isForced.takeIf { it }?.let { "forced" },
-                    stream.isDefault.takeIf { it }?.let { "default" },
-                )
-                if (parts.isNotEmpty()) lines += "S: ${parts.joinToString(" · ")}"
-            }
+        // Active subtitle stream
+        mediaSource.selectedSubtitleStream?.let { stream ->
+            val parts = listOfNotNull(
+                stream.codec?.uppercase(Locale.ROOT),
+                stream.language?.takeUnless(String::isBlank),
+                stream.isExternal.takeIf { it }?.let { "ext" },
+                stream.isForced.takeIf { it }?.let { "forced" },
+                stream.isDefault.takeIf { it }?.let { "default" },
+            )
+            if (parts.isNotEmpty()) lines += "S: ${parts.joinToString(" · ")}"
+        }
 
         return lines.joinToString("\n")
     }
@@ -403,18 +440,6 @@ class PlayerMenus(
         }
         val formatted = if (unitIndex == 0) value.toInt().toString() else "%.2f".format(Locale.getDefault(), value)
         return "$formatted ${units[unitIndex]}"
-    }
-
-    private fun formatDuration(ms: Long): String {
-        val totalSeconds = ms / 1000
-        val hours = totalSeconds / 3600
-        val minutes = (totalSeconds % 3600) / 60
-        val seconds = totalSeconds % 60
-        return if (hours > 0) {
-            "%d:%02d:%02d".format(Locale.getDefault(), hours, minutes, seconds)
-        } else {
-            "%d:%02d".format(Locale.getDefault(), minutes, seconds)
-        }
     }
 
     private fun updateLayoutConstraints(hasChapters: Boolean) {
@@ -447,23 +472,6 @@ class PlayerMenus(
             marking
         }
         playerMenuHelper.chapterMarkings.setMarkings(chapterMarkings)
-    }
-
-    private fun buildMediaStreamsInfo(
-        mediaStreams: List<MediaStream>,
-        @StringRes prefix: Int,
-        maxStreams: Int,
-        streamSuffix: (MediaStream) -> String,
-    ): String = mediaStreams.joinToString(
-        "\n",
-        "${fragment.getString(prefix)}:\n",
-        limit = maxStreams,
-        truncated = fragment.getString(R.string.playback_info_and_x_more, mediaStreams.size - maxStreams),
-    ) { stream ->
-        val title = stream.displayTitle?.takeUnless(String::isEmpty)
-            ?: fragment.getString(R.string.playback_info_stream_unknown_title)
-        val suffix = streamSuffix(stream)
-        "- $title$suffix"
     }
 
     private fun createSubtitlesMenu() = PopupMenu(context, subtitlesButton).apply {
@@ -600,7 +608,37 @@ class PlayerMenus(
     }
 
     fun dismissPlaybackInfo() {
+        if (!playbackInfoContainer.isVisible) return
         playbackInfoContainer.isVisible = false
+        fragment.suppressControllerAutoHide(false)
+    }
+
+    private fun showEpisodePicker() {
+        if (playbackInfoContainer.isVisible) dismissPlaybackInfo()
+        fragment.suppressControllerAutoHide(true)
+        episodePickerContainer.isVisible = true
+
+        val currentIndex = fragment.queueManager.currentIndex
+        if (!episodePickerLoaded) {
+            episodePickerLoaded = true
+            fragment.loadQueueEpisodes { itemMap, index ->
+                val adapter = EpisodeAdapter(fragment.queueManager.queueIds, itemMap, index)
+                episodeAdapter = adapter
+                episodeGrid.adapter = adapter
+                episodeGrid.post {
+                    // Bring the currently playing episode into view
+                    episodeGrid.setSelection(index.coerceAtLeast(0))
+                }
+            }
+        } else {
+            episodeGrid.post { episodeGrid.smoothScrollToPosition(currentIndex.coerceAtLeast(0)) }
+        }
+    }
+
+    fun dismissEpisodePicker() {
+        if (!episodePickerContainer.isVisible) return
+        episodePickerContainer.isVisible = false
+        fragment.suppressControllerAutoHide(false)
     }
 
     override fun onDismiss(menu: PopupMenu) {
@@ -620,15 +658,54 @@ class PlayerMenus(
         return formatted + unit
     }
 
+    /**
+     * Grid adapter for the episode picker. Each cell represents one position in the queue.
+     */
+    private class EpisodeAdapter(
+        private val queueIds: List<UUID>,
+        private val items: Map<UUID, BaseItemDto>,
+        var selectedPosition: Int,
+    ) : BaseAdapter() {
+
+        override fun getCount(): Int = queueIds.size
+
+        override fun getItem(position: Int): BaseItemDto? = items[queueIds[position]]
+
+        override fun getItemId(position: Int): Long = position.toLong()
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val textView = (convertView ?: LayoutInflater.from(parent.context)
+                .inflate(R.layout.item_episode_picker, parent, false)) as TextView
+            val item = items[queueIds[position]]
+            textView.text = buildEpisodeLabel(item, position)
+            val selected = position == selectedPosition
+            textView.isSelected = selected
+            textView.alpha = when {
+                selected -> 1f
+                item?.userData?.played == true -> 0.5f
+                else -> 1f
+            }
+            return textView
+        }
+
+        private fun buildEpisodeLabel(item: BaseItemDto?, position: Int): String {
+            if (item == null) return (position + 1).toString()
+            return when (item.type) {
+                BaseItemKind.EPISODE -> when {
+                    item.parentIndexNumber == 0 -> item.indexNumber?.let { "SP$it" }
+                    else -> item.indexNumber?.toString()
+                } ?: item.name?.takeUnless(String::isBlank) ?: (position + 1).toString()
+                else -> item.name?.takeUnless(String::isBlank) ?: (position + 1).toString()
+            }
+        }
+    }
+
     companion object {
         private const val SUBTITLES_MENU_GROUP = 0
         private const val AUDIO_MENU_GROUP = 1
         private const val SPEED_MENU_GROUP = 2
         private const val QUALITY_MENU_GROUP = 3
         private const val DECODER_MENU_GROUP = 4
-
-        private const val MAX_VIDEO_STREAMS_DISPLAY = 3
-        private const val MAX_AUDIO_STREAMS_DISPLAY = 5
 
         private const val BITRATE_MEGA_BIT = 1_000_000
         private const val BITRATE_KILO_BIT = 1_000

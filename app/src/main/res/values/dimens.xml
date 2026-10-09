@@ -16,4 +16,11 @@
     <dimen name="exo_chapter_marking_width">3dp</dimen>
     <dimen name="exo_chapter_marking_height">15dp</dimen>
     <dimen name="trickplay_thumbnail_height">160dp</dimen>
+
+    <!-- Playback info card -->
+    <dimen name="playback_info_card_max_width">400dp</dimen>
+    <!-- Episode picker sheet -->
+    <dimen name="episode_picker_card_max_width">460dp</dimen>
+    <dimen name="episode_picker_column_width">64dp</dimen>
+    <dimen name="episode_picker_item_height">44dp</dimen>
 </resources>

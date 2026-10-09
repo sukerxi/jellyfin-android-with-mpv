@@ -23,10 +23,15 @@ import androidx.lifecycle.withStarted
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import org.jellyfin.mobile.events.ActivityEventHandler
+import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.player.cast.Chromecast
 import org.jellyfin.mobile.player.cast.IChromecast
 import org.jellyfin.mobile.player.ui.PlayerFragment
 import org.jellyfin.mobile.setup.ConnectFragment
+import org.jellyfin.mobile.update.UpdateCheckResult
+import org.jellyfin.mobile.update.UpdateChecker
+import org.jellyfin.mobile.update.UpdateDownloadWorker
+import org.jellyfin.mobile.update.UpdateManager
 import org.jellyfin.mobile.utils.AndroidVersion
 import org.jellyfin.mobile.utils.BackPressInterceptor
 import org.jellyfin.mobile.utils.BluetoothPermissionHelper
@@ -48,6 +53,9 @@ class MainActivity : AppCompatActivity() {
     val bluetoothPermissionHelper: BluetoothPermissionHelper = BluetoothPermissionHelper(this, get())
     val chromecast: IChromecast = Chromecast()
     private val permissionRequestHelper: PermissionRequestHelper by inject()
+    private val appPreferences: AppPreferences by inject()
+    private val updateChecker: UpdateChecker by inject()
+    private val updateManager: UpdateManager by inject()
 
     var serviceBinder: RemotePlayerService.ServiceBinder? = null
         private set
@@ -144,6 +152,37 @@ class MainActivity : AppCompatActivity() {
 
         // Setup Chromecast
         chromecast.initializePlugin(this)
+
+        // Check for updates (at most once per 24h)
+        maybeCheckForUpdates()
+    }
+
+    private fun maybeCheckForUpdates() {
+        if (!appPreferences.autoCheckUpdates) return
+        val now = System.currentTimeMillis()
+        if (now - appPreferences.lastUpdateCheckTime < AUTO_UPDATE_CHECK_INTERVAL_MS) return
+        appPreferences.lastUpdateCheckTime = now
+
+        lifecycleScope.launch {
+            when (val result = updateChecker.check()) {
+                is UpdateCheckResult.UpdateAvailable -> {
+                    if (appPreferences.silentUpdateDownload) {
+                        UpdateDownloadWorker.enqueue(this@MainActivity, result.info)
+                    } else if (!isFinishing && !isDestroyed) {
+                        updateManager.showUpdateDialog(
+                            this@MainActivity,
+                            result.info,
+                            allowDismiss = true,
+                        )
+                    }
+                }
+                else -> Unit
+            }
+        }
+    }
+
+    companion object {
+        private const val AUTO_UPDATE_CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000
     }
 
     override fun onStart() {

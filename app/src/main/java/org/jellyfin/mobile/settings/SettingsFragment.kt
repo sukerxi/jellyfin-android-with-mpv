@@ -7,8 +7,10 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
 import de.Maxr1998.modernpreferences.Preference
 import de.Maxr1998.modernpreferences.PreferencesAdapter
 import de.Maxr1998.modernpreferences.helpers.categoryHeader
@@ -22,12 +24,17 @@ import de.Maxr1998.modernpreferences.helpers.screen
 import de.Maxr1998.modernpreferences.helpers.singleChoice
 import de.Maxr1998.modernpreferences.preferences.CheckBoxPreference
 import de.Maxr1998.modernpreferences.preferences.choice.SelectionItem
+import kotlinx.coroutines.launch
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.app.StorageManager
 import org.jellyfin.mobile.databinding.FragmentSettingsBinding
 import org.jellyfin.mobile.downloads.DownloadMethod
 import org.jellyfin.mobile.player.mpv.MpvConfigManager
+import org.jellyfin.mobile.update.UpdateCheckResult
+import org.jellyfin.mobile.update.UpdateChannel
+import org.jellyfin.mobile.update.UpdateChecker
+import org.jellyfin.mobile.update.UpdateManager
 import org.jellyfin.mobile.utils.BackPressInterceptor
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.applyWindowInsetsAsMargins
@@ -41,6 +48,8 @@ class SettingsFragment : Fragment(), BackPressInterceptor {
 
     private val appPreferences: AppPreferences by inject()
     private val storageManager: StorageManager by inject()
+    private val updateChecker: UpdateChecker by inject()
+    private val updateManager: UpdateManager by inject()
 
     private val storageLocationPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -329,11 +338,61 @@ class SettingsFragment : Fragment(), BackPressInterceptor {
                 false
             }
         }
+
+        categoryHeader(PREF_CATEGORY_UPDATE) {
+            titleRes = R.string.pref_category_update
+        }
+
+        // 更新渠道由构建来源决定，此处只读展示
+        pref(Constants.PREF_UPDATE_CHANNEL) {
+            titleRes = R.string.pref_update_channel
+            val channelName = if (updateChecker.currentChannel == UpdateChannel.GITHUB) {
+                getString(R.string.update_channel_github)
+            } else {
+                getString(R.string.update_channel_cnb)
+            }
+            summary = getString(R.string.pref_update_channel_summary, channelName)
+        }
+
+        checkBox(Constants.PREF_AUTO_CHECK_UPDATES) {
+            titleRes = R.string.pref_auto_check_updates
+            summaryRes = R.string.pref_auto_check_updates_summary
+        }
+
+        checkBox(Constants.PREF_SILENT_DOWNLOAD) {
+            titleRes = R.string.pref_silent_download
+            summaryRes = R.string.pref_silent_download_summary
+        }
+
+        pref(Constants.PREF_CHECK_UPDATE) {
+            titleRes = R.string.pref_check_update
+            summaryRes = R.string.pref_check_update_summary
+            defaultOnClick {
+                checkForUpdateNow()
+            }
+        }
+    }
+
+    private fun checkForUpdateNow() {
+        val activity = requireActivity()
+        Toast.makeText(activity, R.string.update_checking, Toast.LENGTH_SHORT).show()
+        activity.lifecycleScope.launch {
+            val result = updateChecker.check(ignoreDismissed = true)
+            when (result) {
+                is UpdateCheckResult.UpToDate ->
+                    Toast.makeText(activity, R.string.update_up_to_date, Toast.LENGTH_SHORT).show()
+                is UpdateCheckResult.UpdateAvailable ->
+                    updateManager.showUpdateDialog(activity, result.info, allowDismiss = false)
+                is UpdateCheckResult.Error ->
+                    Toast.makeText(activity, R.string.update_check_failed, Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     companion object {
         const val PREF_CATEGORY_MUSIC_PLAYER = "pref_category_music"
         const val PREF_CATEGORY_VIDEO_PLAYER = "pref_category_video"
         const val PREF_CATEGORY_DOWNLOADS = "pref_category_downloads"
+        const val PREF_CATEGORY_UPDATE = "pref_category_update"
     }
 }

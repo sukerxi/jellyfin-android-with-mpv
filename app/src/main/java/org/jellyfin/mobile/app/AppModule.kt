@@ -42,6 +42,10 @@ import org.jellyfin.mobile.player.qualityoptions.QualityOptionsProvider
 import org.jellyfin.mobile.player.source.MediaSourceResolver
 import org.jellyfin.mobile.player.ui.PlayerFragment
 import org.jellyfin.mobile.setup.ConnectionHelper
+import org.jellyfin.mobile.update.CnbReleaseSource
+import org.jellyfin.mobile.update.GitHubReleaseSource
+import org.jellyfin.mobile.update.UpdateChecker
+import org.jellyfin.mobile.update.UpdateManager
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.PermissionRequestHelper
 import org.jellyfin.mobile.utils.extractId
@@ -186,4 +190,10 @@ val applicationModule = module {
     single { DownloadNotificationManager(get()) }
     single { DownloadQueue(get(), get(), get(), get(), get(), get()) }
     single { FileDownloader(get()) }
+
+    // App updates
+    single { GitHubReleaseSource(get()) }
+    single { CnbReleaseSource(get()) }
+    single { UpdateChecker(get(), get(), get()) }
+    single { UpdateManager(get()) }
 }

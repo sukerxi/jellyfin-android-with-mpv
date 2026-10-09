@@ -25,9 +25,11 @@ import org.jellyfin.mobile.player.source.MediaSourceResolver
 import org.jellyfin.mobile.player.source.PlaybackDetails
 import org.jellyfin.mobile.player.source.RemoteJellyfinMediaSource
 import org.jellyfin.sdk.api.client.ApiClient
+import org.jellyfin.sdk.api.client.extensions.itemsApi
 import org.jellyfin.sdk.api.client.extensions.systemApi
 import org.jellyfin.sdk.api.client.extensions.videosApi
 import org.jellyfin.sdk.api.operations.VideosApi
+import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.MediaProtocol
 import org.jellyfin.sdk.model.api.MediaStream
 import org.jellyfin.sdk.model.api.MediaStreamProtocol
@@ -46,6 +48,7 @@ class QueueManager(
 ) : KoinComponent {
     private val apiClient: ApiClient = get()
     private val videosApi: VideosApi = apiClient.videosApi
+    private val itemsApi = apiClient.itemsApi
     private val mediaSourceResolver: MediaSourceResolver by inject()
     private val deviceProfileBuilder: DeviceProfileBuilder by inject()
     private val downloadDao: DownloadDao by inject()
@@ -276,24 +279,65 @@ class QueueManager(
         ) == null
     }
 
+    /** Ordered item ids of the current playback queue. */
+    val queueIds: List<UUID>
+        get() = currentQueue
+
+    val queueSize: Int
+        get() = currentQueue.size
+
+    val currentIndex: Int
+        get() = currentQueueIndex
+
     fun hasPrevious(): Boolean = currentQueue.isNotEmpty() && currentQueueIndex > 0
 
     fun hasNext(): Boolean = currentQueue.isNotEmpty() && currentQueueIndex < currentQueue.lastIndex
 
-    suspend fun previous(): Boolean {
-        if (!hasPrevious()) return false
+    /**
+     * Fetch metadata for all items in the playback queue, keyed by item id.
+     *
+     * Falls back to the local download database when the server is unavailable,
+     * so the episode picker also works for downloaded content.
+     */
+    suspend fun getQueueItemMap(): Map<UUID, BaseItemDto> = withContext(Dispatchers.IO) {
+        if (currentQueue.isEmpty()) return@withContext emptyMap()
+        runCatching {
+            val response = itemsApi.getItems(ids = currentQueue)
+            response.content.items.associateBy { it.id }
+        }.getOrElse {
+            runCatching {
+                downloadDao.getDownloadsByItemIds(currentQueue).associate { it.itemId to it.item }
+            }.getOrDefault(emptyMap())
+        }
+    }
 
-        val currentMediaSource = getCurrentMediaSourceOrNull() as? RemoteJellyfinMediaSource ?: return false
+    /**
+     * Jump to the item at [index] in the playback queue.
+     *
+     * @return true if playback switched to the requested item.
+     */
+    suspend fun jumpTo(index: Int): Boolean {
+        if (index !in currentQueue.indices || index == currentQueueIndex) return false
+
+        val currentMediaSource = getCurrentMediaSourceOrNull() ?: return false
 
         resetPlaybackFallback()
 
-        startRemotePlayback(
-            itemId = currentQueue[--currentQueueIndex],
-            mediaSourceId = null,
-            maxStreamingBitrate = currentMediaSource.maxStreamingBitrate,
-        )
-        return true
+        currentQueueIndex = index
+        return when (currentMediaSource) {
+            is LocalJellyfinMediaSource -> startDownloadPlayback(
+                itemId = currentQueue[index],
+                playWhenReady = true,
+            ) == null
+            is RemoteJellyfinMediaSource -> startRemotePlayback(
+                itemId = currentQueue[index],
+                mediaSourceId = null,
+                maxStreamingBitrate = currentMediaSource.maxStreamingBitrate,
+            ) == null
+        }
     }
+
+    suspend fun previous(): Boolean = jumpTo(currentQueueIndex - 1)
 
     suspend fun next(): Boolean {
         if (!hasNext()) return false

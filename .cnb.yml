@@ -113,6 +113,39 @@
     test -s keystore.jks
     echo "已解码 keystore.jks ($(stat -c%s keystore.jks) bytes)"
 
+# 生成 Release 更新内容：自上一个 Tag 以来的所有提交，压成单行（<br> 分隔）。
+# CNB 的 git:release description 只接受单行字符串，因此换行统一转成 <br>。
+# 导出为环境变量 RELEASE_BODY，供后续「创建 CNB Release」的 description 插值使用。
+# 注意：CNB 检出可能是浅克隆，先补全历史与 Tag；失败不阻断流水线（仅丢失提交列表）。
+.changelog-stage: &changelog-stage
+  name: 生成更新内容
+  exports:
+    body: RELEASE_BODY
+  script: |
+    set -e
+    git fetch --unshallow --tags > /dev/null 2>&1 || git fetch --tags > /dev/null 2>&1 || true
+    PREV_TAG="$(git describe --tags --abbrev=0 HEAD 2>/dev/null || true)"
+    # tag_push 场景下 HEAD 自身即触发 Tag，需回退到上一个 Tag，否则区间为空
+    if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" = "$CNB_BRANCH" ]; then
+      PREV_TAG="$(git describe --tags --abbrev=0 "${CNB_BRANCH}^" 2>/dev/null || true)"
+    fi
+    if [ -n "$PREV_TAG" ]; then
+      COMMITS="$(git log "${PREV_TAG}..HEAD" -n 300 --no-merges --pretty='- `%h` %s (%an)' 2>/dev/null | sed 's/$/<br>/' | tr -d '\n')"
+      HEADER="自 ${PREV_TAG} 以来的提交：<br>"
+    else
+      COMMITS="$(git log -n 300 --no-merges --pretty='- `%h` %s (%an)' 2>/dev/null | sed 's/$/<br>/' | tr -d '\n')"
+      HEADER="最近提交：<br>"
+    fi
+    if [ -z "$COMMITS" ]; then
+      COMMITS="（无新增提交或历史不可用）<br>"
+      HEADER=""
+    fi
+    BODY="## 更新内容（提交记录）<br><br>${HEADER}${COMMITS}"
+    # 方括号会破坏 ##[set-output ...] 指令解析，提交信息中的方括号统一去掉
+    BODY="$(printf '%s' "$BODY" | tr -d '[]')"
+    echo "更新内容长度: ${#BODY}"
+    echo "##[set-output body=$BODY]"
+
 
 # ============================== Nightly 发版（对应 release.yml） ==============================
 
@@ -145,6 +178,8 @@
       exports:
         version: JELLYFIN_VERSION
         tag: NIGHTLY_TAG
+
+    - *changelog-stage
 
     - *decode-keystore-stage
 
@@ -192,12 +227,8 @@
       options:
         tag: $NIGHTLY_TAG
         title: "${NIGHTLY_TAG} (${JELLYFIN_VERSION})"
-        description: |
-          ## Jellyfin Android with MPV (Libre) 自动构建
-
-          - 版本号：`${JELLYFIN_VERSION}`
-          - 构建编号：`${CNB_BUILD_ID}`
-          - 提交：`${CNB_COMMIT}`
+        # RELEASE_BODY 由「生成更新内容」阶段导出（单行、<br> 分隔的提交列表）
+        description: "## Jellyfin Android with MPV (Libre) 自动构建<br><br>- 版本号：`${JELLYFIN_VERSION}`<br>- 构建编号：`${CNB_BUILD_ID}`<br>- 提交：`${CNB_COMMIT}`<br><br>${RELEASE_BODY}"
         latest: true
 
     # 附件插件需在单个 Job 默认超时（60s）内完成；大体积 APK 上传易超时，显式放宽到 10 分钟。
@@ -232,6 +263,8 @@
       exports:
         version: JELLYFIN_VERSION
 
+    - *changelog-stage
+
     - *decode-keystore-stage
 
     - name: 构建全部 Release 产物
@@ -261,7 +294,8 @@
       type: git:release
       options:
         title: $CNB_BRANCH
-        description: Jellyfin Android with MPV $CNB_BRANCH
+        # RELEASE_BODY 由「生成更新内容」阶段导出（单行、<br> 分隔的提交列表）
+        description: "## Jellyfin Android with MPV $CNB_BRANCH<br><br>${RELEASE_BODY}"
         latest: true
 
     # 附件插件需在单个 Job 默认超时（60s）内完成；多个 APK/AAB 上传易超时，显式放宽到 10 分钟。

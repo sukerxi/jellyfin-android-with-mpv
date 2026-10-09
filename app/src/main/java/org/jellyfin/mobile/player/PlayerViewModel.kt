@@ -762,6 +762,15 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         }
     }
 
+    /**
+     * Switch to the queue item at [index], e.g. an episode picked from the episode list.
+     */
+    fun selectQueueItem(index: Int) {
+        viewModelScope.launch {
+            queueManager.jumpTo(index)
+        }
+    }
+
     fun skipToNext() {
         viewModelScope.launch {
             queueManager.next()

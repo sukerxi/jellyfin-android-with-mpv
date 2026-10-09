@@ -73,6 +73,16 @@ class MpvPlayer(
     private var pendingFirstFrame = false
 
     /**
+     * Target position of the latest explicit seek, kept until playback actually restarts at
+     * that position. While a seek is in flight mpv keeps reporting the pre-seek [time-pos]
+     * (network seeks can take well over a second), whereas ExoPlayer exposes the seek target
+     * immediately. The pending target is therefore reported from [currentPositionMs] during
+     * the seek, matching ExoPlayer semantics — required e.g. by the upstream "press previous
+     * twice to switch episodes" logic (see [org.jellyfin.mobile.player.PlayerViewModel]).
+     */
+    private var pendingSeekTargetMs: Long? = null
+
+    /**
      * True while a new file is being loaded. The END_FILE of the previously playing file
      * that is emitted by mpv during replacement must not be treated as playback end.
      */
@@ -109,6 +119,7 @@ class MpvPlayer(
                 stopRequested = false
                 durationMs = 0
                 firstFrameRendered = false
+                pendingSeekTargetMs = null
                 playbackState = STATE_BUFFERING
             }
             MpvEvent.FileLoaded -> {
@@ -144,6 +155,8 @@ class MpvPlayer(
             }
             MpvEvent.PlaybackRestart -> {
                 playbackState = STATE_READY
+                // Seek completed: time-pos is authoritative again
+                pendingSeekTargetMs = null
                 if (!firstFrameRendered) {
                     firstFrameRendered = true
                     pendingFirstFrame = true
@@ -290,8 +303,14 @@ class MpvPlayer(
             positionMs.coerceAtLeast(0)
         }
 
+        // Report the target position immediately, even before mpv processed the command,
+        // so callers reading currentPosition right after seekTo() (e.g. a quick second
+        // press of "previous") don't observe the stale pre-seek position.
+        pendingSeekTargetMs = targetMs
+
         val seconds = "%.3f".format(Locale.ROOT, targetMs / 1000.0)
         MpvCore.command(arrayOf("seek", seconds, "absolute+exact"))
+        invalidateState()
 
         // With keep-open=yes mpv stays internally paused on the last frame at EOF.
         // Seeking away from it has to resume playback, matching ExoPlayer's seekTo()
@@ -441,6 +460,15 @@ class MpvPlayer(
     }
 
     private fun currentPositionMs(): Long {
+        // While a seek is in flight mpv keeps reporting the pre-seek time-pos (for network
+        // sources this can take more than a second). Return the seek target instead until
+        // playback restarts, matching ExoPlayer's immediate position update on seekTo().
+        val pendingTarget = pendingSeekTargetMs
+        if (pendingTarget != null &&
+            (MpvCore.getProperty<Boolean>("seeking") == true || playbackState == STATE_BUFFERING)
+        ) {
+            return pendingTarget
+        }
         val timePos = MpvCore.getProperty<Double>("time-pos/full") ?: 0.0
         return (timePos * 1000).toLong()
     }

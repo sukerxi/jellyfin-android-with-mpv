@@ -53,9 +53,11 @@ import org.jellyfin.mobile.utils.extensions.getParcelableCompat
 import org.jellyfin.mobile.utils.extensions.isLandscape
 import org.jellyfin.mobile.utils.extensions.keepScreenOn
 import org.jellyfin.mobile.utils.toast
+import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.MediaSegmentDto
 import org.jellyfin.sdk.model.api.MediaStream
 import org.koin.android.ext.android.inject
+import java.util.UUID
 import kotlin.math.max
 import androidx.media3.ui.R as Media3R
 
@@ -66,6 +68,8 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
     private val viewModel: PlayerViewModel by viewModels()
     internal val currentPlayer: Player?
         get() = viewModel.playerOrNull
+    internal val queueManager
+        get() = viewModel.queueManager
     private var _playerBinding: FragmentPlayerBinding? = null
     private val playerBinding: FragmentPlayerBinding get() = _playerBinding!!
     private val playerView: PlayerView get() = playerBinding.playerView
@@ -367,6 +371,21 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
         viewModel.skipToNext()
     }
 
+    /**
+     * Load metadata for the items in the current playback queue.
+     *
+     * @param callback invoked with the queue items keyed by id and the current queue index
+     */
+    fun loadQueueEpisodes(callback: (Map<UUID, BaseItemDto>, Int) -> Unit): Job = lifecycleScope.launch {
+        val itemMap = viewModel.queueManager.getQueueItemMap()
+        if (_playerBinding == null) return@launch
+        callback(itemMap, viewModel.queueManager.currentIndex)
+    }
+
+    fun onEpisodeSelected(index: Int) {
+        viewModel.selectQueueItem(index)
+    }
+
     fun onSkipMediaSegment(mediaSegmentDto: MediaSegmentDto?) {
         viewModel.skipMediaSegment(mediaSegmentDto)
     }
@@ -414,6 +433,7 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
         playerView.useController = !isInPictureInPictureMode
         if (isInPictureInPictureMode) {
             playerMenus?.dismissPlaybackInfo()
+            playerMenus?.dismissEpisodePicker()
             playerLockScreenHelper.hideUnlockButton()
         }
     }

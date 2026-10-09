@@ -50,6 +50,12 @@ object Constants {
     const val PREF_MEDIA_SEGMENT_ACTIONS = "pref_media_segment_actions"
     const val PREF_MPV_CUSTOM_CONFIG = "pref_mpv_custom_config"
 
+    // Update preferences
+    const val PREF_UPDATE_CHANNEL = "pref_update_channel"
+    const val PREF_AUTO_CHECK_UPDATES = "pref_auto_check_updates"
+    const val PREF_SILENT_DOWNLOAD = "pref_silent_download"
+    const val PREF_CHECK_UPDATE = "pref_check_update"
+
     // Legacy preference, retained for one-time migration into [PREF_MPV_CUSTOM_CONFIG]
     const val PREF_MPV_USE_EMBED_FONT_LEGACY = "pref_mpv_use_embed_font"
 

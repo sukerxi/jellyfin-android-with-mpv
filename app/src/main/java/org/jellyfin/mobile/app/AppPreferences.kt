@@ -161,4 +161,25 @@ class AppPreferences(context: Context) {
         get() = sharedPreferences.getString(Constants.PREF_MPV_CUSTOM_CONFIG, null).orEmpty()
         set(value) = sharedPreferences.edit { putString(Constants.PREF_MPV_CUSTOM_CONFIG, value) }
 
+    val autoCheckUpdates: Boolean
+        get() = sharedPreferences.getBoolean(Constants.PREF_AUTO_CHECK_UPDATES, false)
+
+    /** 自动检查发现新版本时是否静默后台下载。 */
+    val silentUpdateDownload: Boolean
+        get() = sharedPreferences.getBoolean(Constants.PREF_SILENT_DOWNLOAD, false)
+
+    var dismissedUpdateVersion: String?
+        get() = sharedPreferences.getString(PREF_DISMISSED_UPDATE_VERSION, null)
+        set(value) = sharedPreferences.edit {
+            if (value == null) remove(PREF_DISMISSED_UPDATE_VERSION) else putString(PREF_DISMISSED_UPDATE_VERSION, value)
+        }
+
+    var lastUpdateCheckTime: Long
+        get() = sharedPreferences.getLong(PREF_LAST_UPDATE_CHECK_TIME, 0L)
+        set(value) = sharedPreferences.edit { putLong(PREF_LAST_UPDATE_CHECK_TIME, value) }
+
+    private companion object {
+        const val PREF_DISMISSED_UPDATE_VERSION = "pref_dismissed_update_version"
+        const val PREF_LAST_UPDATE_CHECK_TIME = "pref_last_update_check_time"
+    }
 }

@@ -235,6 +235,18 @@
         app:layout_constraintStart_toEndOf="@id/decoder_button" />
 
     <androidx.appcompat.widget.AppCompatImageButton
+        android:id="@+id/episodes_button"
+        android:layout_width="@dimen/exo_bottom_controls_size"
+        android:layout_height="@dimen/exo_bottom_controls_size"
+        android:layout_marginBottom="@dimen/exo_bottom_controls_margin"
+        android:background="@drawable/ripple_background_circular"
+        android:contentDescription="@string/episode_picker_title"
+        android:padding="@dimen/exo_bottom_controls_padding"
+        android:src="@drawable/ic_playlist"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toEndOf="@id/info_button" />
+
+    <androidx.appcompat.widget.AppCompatImageButton
         android:id="@+id/fullscreen_switcher"
         android:layout_width="@dimen/exo_bottom_controls_size"
         android:layout_height="@dimen/exo_bottom_controls_size"

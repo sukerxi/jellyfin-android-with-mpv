@@ -1,6 +1,18 @@
 import io.gitlab.arturbosch.detekt.Detekt
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
+/**
+ * 根据构建来源决定应用内更新检查渠道：
+ * - CNB 流水线（存在 CNB_COMMIT / CNB_BRANCH 环境变量）-> "cnb"
+ * - GitHub Actions（GITHUB_ACTIONS=true）-> "github"
+ * - 本地开发构建默认 "cnb"
+ */
+fun resolveUpdateChannel(): String = when {
+    System.getenv("CNB_COMMIT") != null || System.getenv("CNB_BRANCH") != null -> "cnb"
+    System.getenv("GITHUB_ACTIONS") == "true" -> "github"
+    else -> "cnb"
+}
+
 plugins {
     alias(libs.plugins.android.app)
     alias(libs.plugins.kotlin.ksp)
@@ -37,6 +49,14 @@ android {
         versionCode = getVersionCode(versionName!!)
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+
+        // 更新检查渠道由构建来源决定：
+        // CNB 流水线构建 -> 走 CNB 检查；GitHub Actions 构建 -> 走 GitHub 检查；本地默认 CNB。
+        buildConfigField(
+            "String",
+            "UPDATE_CHANNEL",
+            "\"" + resolveUpdateChannel() + "\"",
+        )
     }
 
     signingConfigs {
