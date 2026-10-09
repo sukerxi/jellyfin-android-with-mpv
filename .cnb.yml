@@ -123,11 +123,11 @@
     body: RELEASE_BODY
   script: |
     set -e
-    # 诊断 + 兜底：构建镜像 eclipse-temurin 基于 Ubuntu，默认不含 git；若 changelog 阶段
-    # 的 git 命令因「git 未安装 / .git 属主可疑 / 非 git 仓库」而静默失败（都被 2>/dev/null
-    # || true 吞掉），提交列表就会恒为空，Release 显示「暂无提交记录」。这里显式探测环境、
-    # 缺 git 则安装，并把探测结果 $DIAG 在仍为空时并入 Release 正文，便于无日志访问权时直接定位。
-    DIAG="git=?"
+    # 构建镜像 eclipse-temurin 基于 Ubuntu，默认不含 git；缺 git 则安装并放行可疑属主。
+    # 为定位「两条 Release 提交列表雷同（区间未生效、走了最近提交兜底）」问题，本轮把环境
+    # 探测 $DIAG 常驻附加到 Release 正文末尾（relapi=releases API 响应字节数，为后续改用
+    # API 取上一 tag 铺路），定案后移除。
+    DIAG="git=missing"
     if ! command -v git >/dev/null 2>&1; then
       apt-get update -qq >/dev/null 2>&1 || true
       apt-get install -y -qq git >/dev/null 2>&1 || true
@@ -135,20 +135,26 @@
     if command -v git >/dev/null 2>&1; then
       git config --global --add safe.directory '*' >/dev/null 2>&1 || true
       DIAG="git=ok"
-    else
-      DIAG="git=missing"
+      DIAG="$DIAG shallow=$(git rev-parse --is-shallow-repository 2>/dev/null || echo q)"
+      DIAG="$DIAG remotes=$(git remote 2>/dev/null | tr '\n' '/' | sed 's|/$||')"
+      git fetch --unshallow > /dev/null 2>&1 || git fetch --deepen=500 > /dev/null 2>&1 || true
+      DIAG="$DIAG n=$(git rev-list --count HEAD 2>/dev/null || echo q)"
+      # 遍历所有 remote 拉取 tag（此前硬编码 origin，若 CNB 检出 remote 名不同则永远拉不到，
+      # describe 找不到上一 nightly tag，区间失效、恒走「最近提交」兜底 → 相邻 Release 雷同）
+      TAGFETCH=fail
+      for R in $(git remote 2>/dev/null); do
+        if git fetch --tags --force --prune "$R" '+refs/tags/*:refs/tags/*' > /dev/null 2>&1; then TAGFETCH="ok-$R"; break; fi
+      done
+      if [ "$TAGFETCH" = fail ]; then
+        if git fetch --tags --force > /dev/null 2>&1; then TAGFETCH=ok-default; fi
+      fi
+      DIAG="$DIAG tagfetch=$TAGFETCH"
+      DIAG="$DIAG tags=$(git tag -l 2>/dev/null | wc -l | tr -d ' ')"
+      RSPL="$(curl -fsS -m 10 -H 'Accept: application/vnd.cnb.api+json' -H "Authorization: Bearer ${CNB_TOKEN}" "${CNB_API_ENDPOINT:-https://api.cnb.cool}/${CNB_REPO_SLUG}/-/releases?limit=2" 2>/dev/null | head -c 200 || true)"
+      DIAG="$DIAG relapi=${#RSPL}"
     fi
-    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-      DIAG="$DIAG repo=yes n=$(git rev-list --count HEAD 2>/dev/null || echo '?')"
-    else
-      DIAG="$DIAG repo=no"
-    fi
-    echo "CHANGELOG-DIAG: $DIAG"
-    # 尽力补全历史与标签：浅克隆先 unshallow，失败再 deepen，最后强制拉取所有 tag。
-    # 任一步失败都不阻断流水线（仅可能丢失完整提交列表）。
-    git fetch --unshallow > /dev/null 2>&1 || git fetch --deepen=500 > /dev/null 2>&1 || true
-    git fetch --tags --force --prune origin '+refs/tags/*:refs/tags/*' > /dev/null 2>&1 || git fetch --tags --force > /dev/null 2>&1 || true
     PREV_TAG="$(git describe --tags --abbrev=0 HEAD 2>/dev/null || true)"
+    DIAG="$DIAG describe=${PREV_TAG:-none}"
     # tag_push 场景下 HEAD 自身即触发 Tag，需回退到上一个 Tag，否则区间为空
     if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" = "$CNB_BRANCH" ]; then
       PREV_TAG="$(git describe --tags --abbrev=0 "${CNB_BRANCH}^" 2>/dev/null || true)"
@@ -168,10 +174,13 @@
       HEADER="最近提交：<br>"
     fi
     if [ -z "$COMMITS" ]; then
-      COMMITS="（暂无提交记录 $DIAG）<br>"
+      COMMITS="（暂无提交记录）<br>"
       HEADER=""
     fi
-    BODY="## 更新内容（提交记录）<br><br>${HEADER}${COMMITS}"
+    # 正文是单行 <br> 拼接，块级语法（## 标题）在 <br> 之后不在行首不会渲染，改用行内加粗；
+    # 诊断信息附在正文末尾，无需打开流水线日志即可定位（定案后移除）
+    BODY="**更新内容（提交记录）**<br><br>${HEADER}${COMMITS}<br>（诊断: ${DIAG}）"
+    echo "CHANGELOG-DIAG: ${DIAG}"
     # 方括号会破坏 ##[set-output ...] 指令解析，提交信息中的方括号统一去掉
     BODY="$(printf '%s' "$BODY" | tr -d '[]')"
     echo "更新内容长度: ${#BODY}"
