@@ -38,8 +38,14 @@
 # 同步到 GitHub（master push 即触发，见 sync-github 流水线）：
 #   需在密钥仓库（sukerxi/secrets main 分支）创建 github.yml：
 #     GH_USERNAME: <GitHub 用户名>
-#     GH_TOKEN: <GitHub PAT（fine-grained，目标仓库 Contents: Read and write）>
+#     GH_TOKEN: <GitHub PAT>
 #   目标仓库需已存在（空仓库即可），force push 使 GitHub master 与 CNB master 保持一致。
+#
+#   【Token 权限】本仓库会推送 .github/workflows/ 下的文件，PAT 必须带 workflow 权限：
+#     - 经典 PAT（classic）：勾选 repo + workflow 两个 scope
+#     - Fine-grained PAT：Repository permissions → Contents: Read and write
+#                         + Workflows: Read and write（缺了会在推送 workflow 文件时报
+#                           refusing to allow a Personal Access Token to create or update workflow）
 #   注意：同步内容包含 .github/workflows/，GitHub 侧 Actions 会被推送触发；
 #   如不希望 GitHub 跑 CI/发版，请在 GitHub 仓库 Settings → Actions 中关闭流水线。
 
@@ -327,6 +333,10 @@
         password: ${GH_TOKEN}
         branch: master
         force: true
+      # 该 Job 失败不阻断流水线（镜像同步是旁路，不应把整条 master 流水线拖红）。
+      # 失败时最常见的原因是 PAT 缺少 workflow 权限，被 GitHub 拒绝推送 .github/workflows/，
+      # 报错形如：refusing to allow a Personal Access Token to create or update workflow。
+      allowFailure: true
 
 # ============================== 事件绑定 ==============================
 
