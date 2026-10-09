@@ -34,6 +34,14 @@
 # 同步到 repo.jellyfin.org（可选，对应 app-publish.yaml 最后两步）：
 #   在密钥仓库增加 deploy.yml（REPO_HOST / REPO_USER / REPO_KEY 私钥），
 #   并在 release 流水线的 imports 中追加该文件；未配置时自动跳过。
+#
+# 同步到 GitHub（master push 即触发，见 sync-github 流水线）：
+#   需在密钥仓库（sukerxi/secrets main 分支）创建 github.yml：
+#     GH_USERNAME: <GitHub 用户名>
+#     GH_TOKEN: <GitHub PAT（fine-grained，目标仓库 Contents: Read and write）>
+#   目标仓库需已存在（空仓库即可），force push 使 GitHub master 与 CNB master 保持一致。
+#   注意：同步内容包含 .github/workflows/，GitHub 侧 Actions 会被推送触发；
+#   如不希望 GitHub 跑 CI/发版，请在 GitHub 仓库 Settings → Actions 中关闭流水线。
 
 # ============================== 共享配置（锚点复用） ==============================
 
@@ -279,12 +287,38 @@
           sudo ln -s versions/v${JELLYFIN_VERSION}/version.txt .
         EOF
 
+# ============================== 同步 master 到 GitHub ==============================
+
+# push 即同步：master 每次推送后用 git-sync 插件强推到 GitHub 镜像仓库（仅 master 分支）。
+# 与 nightly-release 并行执行，同步失败不影响发版。
+# 独立锁 key 保证多次连续推送串行同步（避免并发 force push 互相覆盖），且不与 nightly 抢锁。
+.sync-github-pipeline: &sync-github-pipeline
+  name: sync-github
+  lock:
+    key: sync-github
+    wait: true
+    timeout: 300
+  imports:
+    - https://cnb.cool/sukerxi/secrets/-/blob/main/github.yml
+  stages:
+    - name: Sync master to GitHub
+      image: tencentcom/git-sync
+      settings:
+        target_url: https://github.com/sukerxi/jellyfin-android-with-mpv.git
+        auth_type: https
+        username: ${GH_USERNAME}
+        password: ${GH_TOKEN}
+        branch: master
+        force: true
+
 # ============================== 事件绑定 ==============================
 
 master:
   push:
     # 每次推送 master 自动发一个 Nightly Release（对应 release.yml）
     - *nightly-pipeline
+    # 每次推送 master 实时同步到 GitHub 镜像仓库
+    - *sync-github-pipeline
   # master 分支详情页「发布 Nightly」按钮（对应 release.yml 的 workflow_dispatch）
   web_trigger_release:
     - *nightly-pipeline
