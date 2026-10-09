@@ -123,6 +123,27 @@
     body: RELEASE_BODY
   script: |
     set -e
+    # 诊断 + 兜底：构建镜像 eclipse-temurin 基于 Ubuntu，默认不含 git；若 changelog 阶段
+    # 的 git 命令因「git 未安装 / .git 属主可疑 / 非 git 仓库」而静默失败（都被 2>/dev/null
+    # || true 吞掉），提交列表就会恒为空，Release 显示「暂无提交记录」。这里显式探测环境、
+    # 缺 git 则安装，并把探测结果 $DIAG 在仍为空时并入 Release 正文，便于无日志访问权时直接定位。
+    DIAG="git=?"
+    if ! command -v git >/dev/null 2>&1; then
+      apt-get update -qq >/dev/null 2>&1 || true
+      apt-get install -y -qq git >/dev/null 2>&1 || true
+    fi
+    if command -v git >/dev/null 2>&1; then
+      git config --global --add safe.directory '*' >/dev/null 2>&1 || true
+      DIAG="git=ok"
+    else
+      DIAG="git=missing"
+    fi
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      DIAG="$DIAG repo=yes n=$(git rev-list --count HEAD 2>/dev/null || echo '?')"
+    else
+      DIAG="$DIAG repo=no"
+    fi
+    echo "CHANGELOG-DIAG: $DIAG"
     # 尽力补全历史与标签：浅克隆先 unshallow，失败再 deepen，最后强制拉取所有 tag。
     # 任一步失败都不阻断流水线（仅可能丢失完整提交列表）。
     git fetch --unshallow > /dev/null 2>&1 || git fetch --deepen=500 > /dev/null 2>&1 || true
@@ -132,9 +153,7 @@
     if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" = "$CNB_BRANCH" ]; then
       PREV_TAG="$(git describe --tags --abbrev=0 "${CNB_BRANCH}^" 2>/dev/null || true)"
     fi
-    # 注意：不能用 --no-merges——GitHub 同步产生的 merge commit 作为 HEAD 时，
-    # 浅克隆下 merge 被过滤且其父提交不在本地历史中，git log 输出为空，
-    # Release 说明就变成「暂无提交记录」。merge 提交一并展示。
+    # 不使用 --no-merges：GitHub 同步会产生 merge commit，过滤后可能整段区间为空。
     if [ -n "$PREV_TAG" ]; then
       COMMITS="$(git log "${PREV_TAG}..HEAD" -n 300 --pretty='- `%h` %s (%an)' 2>/dev/null | sed 's/$/<br>/' | tr -d '\n')"
       HEADER="自 ${PREV_TAG} 以来的提交：<br>"
@@ -149,7 +168,7 @@
       HEADER="最近提交：<br>"
     fi
     if [ -z "$COMMITS" ]; then
-      COMMITS="（暂无提交记录）<br>"
+      COMMITS="（暂无提交记录 $DIAG）<br>"
       HEADER=""
     fi
     BODY="## 更新内容（提交记录）<br><br>${HEADER}${COMMITS}"
