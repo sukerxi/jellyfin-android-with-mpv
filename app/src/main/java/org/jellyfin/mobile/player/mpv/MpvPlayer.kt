@@ -24,7 +24,7 @@ import java.util.Locale
 import java.util.UUID
 
 /**
- * Media3 [SimpleBasePlayer] backed by native mpv via [MpvCore].
+ * Media3  [SimpleBasePlayer]  backed by native mpv via [MpvCore].
  *
  * @author dr
  */
