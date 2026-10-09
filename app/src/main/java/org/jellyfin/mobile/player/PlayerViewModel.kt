@@ -126,10 +126,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     // ExoPlayer
     private val _player = MutableLiveData<Player?>()
     private val _playerState = MutableLiveData<Int>()
+    /** Decoder selection made by the user; null means no explicit choice (auto). */
     private val _decoderType = MutableLiveData<DecoderType>()
+    /** Decoder actually in use, as reported by the player after (re)loading. */
+    private val _detectedDecoderType = MutableLiveData<DecoderType>()
     val player: LiveData<Player?> get() = _player
     val playerState: LiveData<Int> get() = _playerState
     val decoderType: LiveData<DecoderType> get() = _decoderType
+    val detectedDecoderType: LiveData<DecoderType> get() = _detectedDecoderType
 
     // Player Menus
     private var playerMenuHelper: PlayerMenuHelper? = null
@@ -278,13 +282,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
                     DecoderType.SOFTWARE -> decoderInfoList.filterNot(MediaCodecInfo::hardwareAccelerated)
                     else -> decoderInfoList
                 }
-                // Update the decoderType based on the first decoder selected
+                // Update the detected decoder based on the first decoder selected; never
+                // overwrite the user's selection, which would feed back into the next load.
                 filteredDecoderList.firstOrNull()?.let { decoder ->
                     val decoderType = when {
                         decoder.hardwareAccelerated -> DecoderType.HARDWARE
                         else -> DecoderType.SOFTWARE
                     }
-                    _decoderType.postValue(decoderType)
+                    _detectedDecoderType.postValue(decoderType)
                 }
 
                 filteredDecoderList
@@ -308,8 +313,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
             VideoPlayerType.MPV_PLAYER -> {
                 _player.value = MpvPlayer(application, Looper.getMainLooper()).apply {
                     setDecoderProcessor(
-                        { decoderType.value ?: DecoderType.HARDWARE },
-                        { _decoderType.postValue(it) },
+                        { _decoderType.value ?: DecoderType.HARDWARE },
+                        { _detectedDecoderType.postValue(it) },
                     )
                     setAnalyticsCollector(analyticsCollector)
                     addListener(this@PlayerViewModel)

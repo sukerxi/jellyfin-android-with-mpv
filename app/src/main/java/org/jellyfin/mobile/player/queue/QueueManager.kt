@@ -27,14 +27,17 @@ import org.jellyfin.mobile.player.source.RemoteJellyfinMediaSource
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.itemsApi
 import org.jellyfin.sdk.api.client.extensions.systemApi
+import org.jellyfin.sdk.api.client.extensions.tvShowsApi
 import org.jellyfin.sdk.api.client.extensions.videosApi
 import org.jellyfin.sdk.api.operations.VideosApi
 import org.jellyfin.sdk.model.api.BaseItemDto
+import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.MediaProtocol
 import org.jellyfin.sdk.model.api.MediaStream
 import org.jellyfin.sdk.model.api.MediaStreamProtocol
 import org.jellyfin.sdk.model.api.MediaStreamType
 import org.jellyfin.sdk.model.api.PlayMethod
+import org.jellyfin.sdk.model.api.request.GetEpisodesRequest
 import org.jellyfin.sdk.model.serializer.toUUIDOrNull
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.get
@@ -49,6 +52,7 @@ class QueueManager(
     private val apiClient: ApiClient = get()
     private val videosApi: VideosApi = apiClient.videosApi
     private val itemsApi = apiClient.itemsApi
+    private val tvShowsApi = apiClient.tvShowsApi
     private val mediaSourceResolver: MediaSourceResolver by inject()
     private val deviceProfileBuilder: DeviceProfileBuilder by inject()
     private val downloadDao: DownloadDao by inject()
@@ -81,6 +85,10 @@ class QueueManager(
             currentQueue.isNotEmpty() -> currentQueue[currentQueueIndex]
             else -> playOptions.mediaSourceId?.toUUIDOrNull()
         } ?: return PlayerException.InvalidPlayOptions()
+
+        // The web client only queues the current episode and its successors; expand to the
+        // full season so "previous" and the episode picker can also reach earlier episodes.
+        if (playOptions.playFromDownloads != true) expandQueueToSeason(itemId)
 
         val maxStreamingBitrate = preferences?.let {
             withContext(Dispatchers.IO) {
@@ -277,6 +285,50 @@ class QueueManager(
             subtitleStreamIndex = currentMediaSource.selectedSubtitleStreamIndex,
             playWhenReady = currentPlayState.playWhenReady,
         ) == null
+    }
+
+    /**
+     * The web client only queues the current episode and its successors, which makes earlier
+     * episodes of the season unreachable for "previous" and the episode picker. Replace the
+     * queue with the full season, keeping any foreign (other-season) items before/after the
+     * current episode at their relative positions.
+     */
+    private suspend fun expandQueueToSeason(itemId: UUID) {
+        val current = withContext(Dispatchers.IO) {
+            runCatching { itemsApi.getItems(ids = listOf(itemId)).content.items.firstOrNull() }
+                .getOrNull()
+        } ?: return
+        if (current.type != BaseItemKind.EPISODE) return
+        val seriesId = current.seriesId ?: return
+        val season = current.parentIndexNumber ?: return
+
+        val seasonIds = withContext(Dispatchers.IO) {
+            runCatching {
+                tvShowsApi
+                    .getEpisodes(
+                        GetEpisodesRequest(
+                            seriesId = seriesId,
+                            season = season,
+                        ),
+                    )
+                    .content.items
+                    .map { it.id }
+            }.getOrDefault(emptyList())
+        }
+        if (itemId !in seasonIds) return
+
+        val foreignPrefix = currentQueue.take(currentQueueIndex).filterNot { it in seasonIds }
+        val foreignSuffix = currentQueue.drop(currentQueueIndex + 1).filterNot { it in seasonIds }
+        currentQueue = foreignPrefix + seasonIds + foreignSuffix
+        currentQueueIndex = foreignPrefix.size + seasonIds.indexOf(itemId)
+
+        Timber.d(
+            "Expanded playback queue to season %d of %s: %d items, starting at %d",
+            season,
+            seriesId,
+            currentQueue.size,
+            currentQueueIndex,
+        )
     }
 
     /** Ordered item ids of the current playback queue. */
