@@ -181,8 +181,10 @@
           - 提交：`${CNB_COMMIT}`
         latest: true
 
+    # 附件插件需在单个 Job 默认超时（60s）内完成；大体积 APK 上传易超时，显式放宽到 10 分钟。
     - name: 上传 Release 附件
       image: cnbcool/attachments:latest
+      timeout: 10m
       settings:
         tag: $NIGHTLY_TAG
         attachments:
@@ -243,8 +245,10 @@
         description: Jellyfin Android with MPV $CNB_BRANCH
         latest: true
 
+    # 附件插件需在单个 Job 默认超时（60s）内完成；多个 APK/AAB 上传易超时，显式放宽到 10 分钟。
     - name: 上传 Release 附件
       image: cnbcool/attachments:latest
+      timeout: 10m
       settings:
         attachments:
           - ./build/cnb-publish/*.apk
