@@ -288,10 +288,13 @@ class QueueManager(
     }
 
     /**
-     * The web client only queues the current episode and its successors, which makes earlier
-     * episodes of the season unreachable for "previous" and the episode picker. Replace the
-     * queue with the full season, keeping any foreign (other-season) items before/after the
-     * current episode at their relative positions.
+     * The web client only queues the current episode and its successors — and for cross-season
+     * entry points like "Next up" that queue mixes episodes from multiple seasons. Replace the
+     * queue with the full season of the current episode only, so the episode picker always shows
+     * exactly one season.
+     *
+     * Specials seasons often have no season number (parentIndexNumber == null); fall back to
+     * the season id so those items can be expanded too.
      */
     private suspend fun expandQueueToSeason(itemId: UUID) {
         val current = withContext(Dispatchers.IO) {
@@ -300,7 +303,9 @@ class QueueManager(
         } ?: return
         if (current.type != BaseItemKind.EPISODE) return
         val seriesId = current.seriesId ?: return
-        val season = current.parentIndexNumber ?: return
+        val season = current.parentIndexNumber
+        val seasonId = current.seasonId
+        if (season == null && seasonId == null) return
 
         val seasonIds = withContext(Dispatchers.IO) {
             runCatching {
@@ -309,6 +314,7 @@ class QueueManager(
                         GetEpisodesRequest(
                             seriesId = seriesId,
                             season = season,
+                            seasonId = seasonId,
                         ),
                     )
                     .content.items
@@ -317,14 +323,12 @@ class QueueManager(
         }
         if (itemId !in seasonIds) return
 
-        val foreignPrefix = currentQueue.take(currentQueueIndex).filterNot { it in seasonIds }
-        val foreignSuffix = currentQueue.drop(currentQueueIndex + 1).filterNot { it in seasonIds }
-        currentQueue = foreignPrefix + seasonIds + foreignSuffix
-        currentQueueIndex = foreignPrefix.size + seasonIds.indexOf(itemId)
+        currentQueue = seasonIds
+        currentQueueIndex = seasonIds.indexOf(itemId)
 
         Timber.d(
-            "Expanded playback queue to season %d of %s: %d items, starting at %d",
-            season,
+            "Expanded playback queue to season %s of %s: %d items, starting at %d",
+            season?.toString() ?: seasonId,
             seriesId,
             currentQueue.size,
             currentQueueIndex,

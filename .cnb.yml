@@ -123,17 +123,20 @@
     body: RELEASE_BODY
   script: |
     set -e
-    # 尽力补全历史与标签：浅克隆先 unshallow，再强制拉取所有 tag。
+    # 尽力补全历史与标签：浅克隆先 unshallow，失败再 deepen，最后强制拉取所有 tag。
     # 任一步失败都不阻断流水线（仅可能丢失完整提交列表）。
-    git fetch --unshallow > /dev/null 2>&1 || true
+    git fetch --unshallow > /dev/null 2>&1 || git fetch --deepen=500 > /dev/null 2>&1 || true
     git fetch --tags --force --prune origin '+refs/tags/*:refs/tags/*' > /dev/null 2>&1 || git fetch --tags --force > /dev/null 2>&1 || true
     PREV_TAG="$(git describe --tags --abbrev=0 HEAD 2>/dev/null || true)"
     # tag_push 场景下 HEAD 自身即触发 Tag，需回退到上一个 Tag，否则区间为空
     if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" = "$CNB_BRANCH" ]; then
       PREV_TAG="$(git describe --tags --abbrev=0 "${CNB_BRANCH}^" 2>/dev/null || true)"
     fi
+    # 注意：不能用 --no-merges——GitHub 同步产生的 merge commit 作为 HEAD 时，
+    # 浅克隆下 merge 被过滤且其父提交不在本地历史中，git log 输出为空，
+    # Release 说明就变成「暂无提交记录」。merge 提交一并展示。
     if [ -n "$PREV_TAG" ]; then
-      COMMITS="$(git log "${PREV_TAG}..HEAD" -n 300 --no-merges --pretty='- `%h` %s (%an)' 2>/dev/null | sed 's/$/<br>/' | tr -d '\n')"
+      COMMITS="$(git log "${PREV_TAG}..HEAD" -n 300 --pretty='- `%h` %s (%an)' 2>/dev/null | sed 's/$/<br>/' | tr -d '\n')"
       HEADER="自 ${PREV_TAG} 以来的提交：<br>"
     else
       COMMITS=""
@@ -142,7 +145,7 @@
     # 区间为空（标签未取全、HEAD 即最新 tag、或本次无新增提交）时，
     # 回退展示最近若干条提交，避免出现「无新增提交或历史不可用」。
     if [ -z "$COMMITS" ]; then
-      COMMITS="$(git log -n 20 --no-merges --pretty='- `%h` %s (%an)' 2>/dev/null | sed 's/$/<br>/' | tr -d '\n')"
+      COMMITS="$(git log -n 20 --pretty='- `%h` %s (%an)' 2>/dev/null | sed 's/$/<br>/' | tr -d '\n')"
       HEADER="最近提交：<br>"
     fi
     if [ -z "$COMMITS" ]; then
