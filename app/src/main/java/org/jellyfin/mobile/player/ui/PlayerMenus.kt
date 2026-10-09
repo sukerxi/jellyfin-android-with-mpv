@@ -679,7 +679,9 @@ class PlayerMenus(
             val item = items[queueIds[position]]
             textView.text = buildEpisodeLabel(item, position)
             val selected = position == selectedPosition
-            textView.isSelected = selected
+            // GridView.setupChild() overwrites isSelected in touch mode, so the
+            // current-episode highlight must use the activated state instead.
+            textView.isActivated = selected
             textView.alpha = when {
                 selected -> 1f
                 item?.userData?.played == true -> 0.5f
