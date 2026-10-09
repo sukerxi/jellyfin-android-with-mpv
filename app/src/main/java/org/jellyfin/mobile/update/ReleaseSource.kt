@@ -112,17 +112,23 @@ class CnbReleaseSource(
             val versionName = match.groupValues[1]
             val fileName = match.value
 
-            // 尝试从页面内嵌 JSON 中提取更新说明（description 字段）
-            val changelog = Regex("\"description\":\"((?:[^\"\\\\]|\\\\.)*)\"")
+            // 更新说明在 release 的 "body" 字段（页面内嵌 JSON），
+            // 注意不要误抓 "description"（那是 CNB 页面 AI 模型的描述文案）。
+            // body 内含 \u003c 等 JSON 转义，先整体解码再剥离标签。
+            val changelog = Regex("\"body\":\"((?:[^\"\\\\]|\\\\.)*)\"")
                 .find(html)
                 ?.groupValues
                 ?.get(1)
-                ?.let { raw ->
-                    raw.replace("\\n", "\n")
-                        .replace("\\\"", "\"")
-                        .replace("\\\\", "\\")
-                        .replace(Regex("""<br\s*/?>"""), "\n")
+                ?.let { escaped ->
+                    val decoded = try {
+                        json.parseToJsonElement("\"$escaped\"").jsonPrimitive.content
+                    } catch (_: Exception) {
+                        escaped
+                    }
+                    decoded
+                        .replace(Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE), "\n")
                         .let { text -> Regex("""</?[^>]+>""").replace(text, "") }
+                        .replace("`", "")
                         .trim()
                 }
                 .orEmpty()

@@ -4,6 +4,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.PendingIntentCompat
@@ -160,7 +161,11 @@ class UpdateDownloadWorker(
 
     override suspend fun getForegroundInfo(): ForegroundInfo {
         ensureChannel(applicationContext)
-        return ForegroundInfo(DOWNLOAD_NOTIFICATION_ID, builder.build())
+        return ForegroundInfo(
+            DOWNLOAD_NOTIFICATION_ID,
+            builder.build(),
+            if (AndroidVersion.isAtLeastQ) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
+        )
     }
 
     override suspend fun doWork(): Result {

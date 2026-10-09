@@ -37,11 +37,12 @@ class UpdateManager(
             append(context.getString(R.string.update_new_version, info.versionName))
             append("\n")
             append(context.getString(R.string.update_channel_label, channelLabel(context, info.channel)))
-            if (info.changelog.isNotBlank()) {
+            val changelog = formatChangelog(info.changelog)
+            if (changelog.isNotBlank()) {
                 append("\n\n")
                 append(context.getString(R.string.update_changelog_label))
                 append("\n")
-                append(info.changelog)
+                append(changelog)
             }
         }
 
@@ -230,6 +231,44 @@ class UpdateManager(
         } else {
             context.getString(R.string.update_channel_cnb)
         }
+
+    /**
+     * 规范化 release 正文用于对话框展示：
+     * - 去掉与对话框"更新内容："标题重复的 markdown 标题（如 "## 更新内容（提交记录）"）；
+     * - 去掉自动构建样板标题（"## Jellyfin Android ..."）；
+     * - 把 markdown 转成纯文本：标题转普通行、反引号去除、链接保留文字。
+     */
+    private fun formatChangelog(raw: String): String {
+        if (raw.isBlank()) return ""
+        val lines = raw.lineSequence()
+            .map { it.trimEnd() }
+            .filter { line ->
+                val t = line.trim()
+                !(t.startsWith("#") &&
+                    (t.contains("更新内容") || t.contains("Jellyfin Android", ignoreCase = true)))
+            }
+            .map { line ->
+                line
+                    .replace(Regex("""^#{1,6}\s*"""), "")
+                    .replace("`", "")
+                    .replace(Regex("""\*\*([^*]+)\*\*"""), "$1")
+                    .replace(Regex("""\[([^\]]+)\]\([^)]+\)"""), "$1")
+            }
+        // 压掉连续空行
+        val sb = StringBuilder()
+        var blankRun = 0
+        for (line in lines) {
+            if (line.isBlank()) {
+                blankRun++
+                if (blankRun > 1) continue
+            } else {
+                blankRun = 0
+            }
+            if (sb.isNotEmpty()) sb.append('\n')
+            sb.append(line.trimStart())
+        }
+        return sb.toString().trim()
+    }
 
     private fun dp(context: Context, value: Int): Int =
         (value * context.resources.displayMetrics.density).toInt()
