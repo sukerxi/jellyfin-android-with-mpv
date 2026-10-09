@@ -21,7 +21,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          repository: sukerxi/jellyfin-android
+          repository: sukerxi/jellyfin-android-with-mpv
           ref: master
           fetch-depth: 0 # 必须获取完整历史，否则 git rev-parse 可能失败
 
@@ -87,14 +87,19 @@ jobs:
             PREV_TAG="$(git describe --tags --abbrev=0 HEAD 2>/dev/null || true)"
             COMMITS=""
             HEADER=""
+            # 不使用 --no-merges：仓库历史含 GitHub/CNB 同步产生的 merge commit，过滤后列表可能异常
             if [ -n "$PREV_TAG" ]; then
-              COMMITS="$(git log "${PREV_TAG}..HEAD" -n 300 --no-merges --pretty='- `%h` %s (%an)' || true)"
+              COMMITS="$(git log "${PREV_TAG}..HEAD" -n 300 --pretty='- `%h` %s (%an)' || true)"
               HEADER="自 \`${PREV_TAG}\` 以来的提交："
             fi
             # 区间为空时回退展示最近提交，避免出现空的提交列表
             if [ -z "$COMMITS" ]; then
-              COMMITS="$(git log -n 20 --no-merges --pretty='- `%h` %s (%an)' || true)"
+              COMMITS="$(git log -n 20 --pretty='- `%h` %s (%an)' || true)"
               HEADER="最近提交："
+            fi
+            if [ -z "$COMMITS" ]; then
+              COMMITS="（暂无提交记录）"
+              HEADER=""
             fi
             echo "$HEADER"
             echo ''
