@@ -43,6 +43,12 @@
 #   注意：同步内容包含 .github/workflows/，GitHub 侧 Actions 会被推送触发；
 #   如不希望 GitHub 跑 CI/发版，请在 GitHub 仓库 Settings → Actions 中关闭流水线。
 
+# 关于并发与锁：流水线默认无锁、可并发；需要串行的用
+#   lock: { key: <名字>, wait: true, timeout: <秒> }
+# 不要用 `lock: true`——它是「非等待锁」，锁被占用时后触发的构建会在 Prepare 阶段
+# 直接失败并抛错：The lock (xxx) is occupied and the current process is terminated.
+# 这正是 cnb-k5v-1k4f86k2a 的失败原因。wait 有上限：等待超时同样会失败（详见下方发版锁）。
+
 # ============================== 共享配置（锚点复用） ==============================
 
 # JDK 21（见 .tools-versions）+ Gradle 9.7.1 + AGP 9.x / compileSdk 37 的构建环境。
@@ -106,8 +112,15 @@
 
 .nightly-pipeline: &nightly-pipeline
   name: nightly-release
-  # 同一分支上的发版串行执行，避免并发抢占（对应 GitHub workflow 的 concurrency 配置）
-  lock: true
+  # 同一分支上的发版串行执行（对应 GitHub workflow 的 concurrency 配置）。
+  # 必须用 wait: true 排队：`lock: true` 是非等待锁，锁被占用时后触发的构建会在
+  # Prepare 阶段直接失败（见 cnb-k5v-1k4f86k2a）。
+  # 单次构建约 3~5 分钟，等待上限设为 600s，可覆盖 1~2 个构建排队；
+  # 等待超时同样会失败，因此应避免密集连推 master（同步 GitHub 的流水线走独立锁，不受影响）。
+  lock:
+    key: nightly-release
+    wait: true
+    timeout: 600
   docker: *android-docker
   env: *android-env
   imports:
