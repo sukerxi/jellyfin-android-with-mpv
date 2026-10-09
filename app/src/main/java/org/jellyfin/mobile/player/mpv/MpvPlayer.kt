@@ -7,6 +7,7 @@ import android.view.SurfaceView
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.SimpleBasePlayer
@@ -77,6 +78,26 @@ class MpvPlayer(
      */
     private var loadingNewFile = false
 
+    /**
+     * Whether the current item ever reached FILE_LOADED. An END_FILE without a preceding
+     * FILE_LOADED means mpv failed to open/decode the stream (e.g. a direct-play source the
+     * codec-profile relaxation now allows but mpv itself cannot handle). In that case a
+     * [pendingError] is reported so the ViewModel can fall back to direct stream / transcoding.
+     */
+    private var fileLoadedForCurrentItem = false
+
+    /**
+     * Error surfaced through [getState] to trigger the playback fallback in PlayerViewModel.
+     * Reset whenever a new item starts loading.
+     */
+    private var pendingError: PlaybackException? = null
+
+    /**
+     * Set while an explicit stop was requested (handleStop / handleRelease), so the resulting
+     * END_FILE is not misinterpreted as a failed load.
+     */
+    private var stopRequested = false
+
     private var decoderProvider: () -> DecoderType = { DecoderType.HARDWARE }
     private var decoderListener: (DecoderType) -> Unit = {}
 
@@ -84,11 +105,14 @@ class MpvPlayer(
         when (event) {
             MpvEvent.StartFile -> {
                 loadingNewFile = false
+                fileLoadedForCurrentItem = false
+                stopRequested = false
                 durationMs = 0
                 firstFrameRendered = false
                 playbackState = STATE_BUFFERING
             }
             MpvEvent.FileLoaded -> {
+                fileLoadedForCurrentItem = true
                 tracks = MpvCore.getTracks()
                 durationMs = readDurationMs()
                 applyAudioTrack()
@@ -101,7 +125,21 @@ class MpvPlayer(
                     // With keep-open=yes natural EOF usually arrives via MpvEvent.EofReached
                     // instead, but keep this as a fallback for stop-less EOF reporting.
                     val eofReached = MpvCore.getProperty<Boolean>("eof-reached") == true
-                    playbackState = if (eofReached) STATE_ENDED else STATE_IDLE
+                    if (!fileLoadedForCurrentItem && !stopRequested && !eofReached) {
+                        // mpv never reached FILE_LOADED for the current item and playback ended
+                        // without an explicit stop: the stream could not be opened/decoded
+                        // (e.g. a direct-play source allowed by the relaxed codec profiles that
+                        // mpv itself cannot handle). Report an error so PlayerViewModel falls back
+                        // to direct stream / transcoding instead of hanging in STATE_IDLE.
+                        pendingError = PlaybackException(
+                            "mpv failed to open the media stream",
+                            null,
+                            PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
+                        )
+                        playbackState = STATE_IDLE
+                    } else {
+                        playbackState = if (eofReached) STATE_ENDED else STATE_IDLE
+                    }
                 }
             }
             MpvEvent.PlaybackRestart -> {
@@ -209,6 +247,7 @@ class MpvPlayer(
             // property, so STATE_ENDED has to report playWhenReady=false explicitly (media3 semantics).
             .setPlayWhenReady(playbackState != STATE_ENDED && !paused, PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
             .setPlaybackState(playbackState)
+            .setPlayerError(pendingError)
             .setNewlyRenderedFirstFrame(consumePendingFirstFrame())
             .setPlaybackSuppressionReason(PLAYBACK_SUPPRESSION_REASON_NONE)
             .setContentPositionMs { currentPositionMs() }
@@ -269,6 +308,7 @@ class MpvPlayer(
     }
 
     override fun handleStop(): ListenableFuture<*> {
+        stopRequested = true
         MpvCore.command(arrayOf("stop"))
         return Futures.immediateFuture(null)
     }
@@ -290,6 +330,9 @@ class MpvPlayer(
             ?: return Futures.immediateFuture(null)
 
         loadingNewFile = true
+        fileLoadedForCurrentItem = false
+        stopRequested = false
+        pendingError = null
         mediaItemUid = UUID.randomUUID()
         currentMediaItem = mediaItem
         tracks = emptyList()
@@ -326,6 +369,7 @@ class MpvPlayer(
     }
 
     override fun handleRelease(): ListenableFuture<*> {
+        stopRequested = true
         MpvCore.unsubscribe(eventListener)
         MpvCore.command(arrayOf("stop"))
         return Futures.immediateFuture(null)

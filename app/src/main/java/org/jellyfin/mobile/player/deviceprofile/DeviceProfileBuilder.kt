@@ -138,8 +138,12 @@ class DeviceProfileBuilder(
                         audioCodec = supportedAudioCodecs[i].joinToString(","),
                     ),
                 )
-                for (videoCodec in supportedVideoCodecs[i]) {
-                    generateCodecProfile(container, videoCodec)?.let(codecProfiles::add)
+                // MPV decodes on its own and is not limited by the device MediaCodec profiles,
+                // so skip codec profile restrictions to keep direct play working (upstream e421a0b regression)
+                if (appPreferences.videoPlayerType != VideoPlayerType.MPV_PLAYER) {
+                    for (videoCodec in supportedVideoCodecs[i]) {
+                        generateCodecProfile(container, videoCodec)?.let(codecProfiles::add)
+                    }
                 }
             }
             if (supportedAudioCodecs[i].isNotEmpty()) {
