@@ -64,6 +64,8 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
     private val appPreferences: AppPreferences by inject()
     private val assHandler: AssHandler by inject()
     private val viewModel: PlayerViewModel by viewModels()
+    internal val currentPlayer: Player?
+        get() = viewModel.playerOrNull
     private var _playerBinding: FragmentPlayerBinding? = null
     private val playerBinding: FragmentPlayerBinding get() = _playerBinding!!
     private val playerView: PlayerView get() = playerBinding.playerView

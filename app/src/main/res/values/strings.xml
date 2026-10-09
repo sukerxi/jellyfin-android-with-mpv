@@ -77,6 +77,10 @@
     <string name="playback_info_audio_streams">Audio streams</string>
     <string name="playback_info_stream_unknown_title">Unknown title</string>
     <string name="playback_info_and_x_more">…and %d more</string>
+    <string name="playback_info_more">More info ▸</string>
+    <string name="playback_info_less">Less info ▾</string>
+    <string name="playback_info_buffered">Buffered %s</string>
+    <string name="playback_info_bitrate_limit">Bitrate limit: %s</string>
     <string name="menu_item_none">None</string>
     <string name="menu_item_auto">Auto</string>
     <string name="menu_item_hardware_decoding">Hardware Decoding</string>

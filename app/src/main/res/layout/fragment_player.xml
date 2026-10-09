@@ -123,8 +123,8 @@
             android:layout_gravity="center"
             android:visibility="gone" />
 
-        <androidx.appcompat.widget.AppCompatTextView
-            android:id="@+id/playback_info"
+        <LinearLayout
+            android:id="@+id/playback_info_container"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="start|top"
@@ -134,10 +134,36 @@
             android:layout_marginBottom="96dp"
             android:background="@drawable/playback_info_background"
             android:clickable="true"
+            android:orientation="vertical"
             android:padding="16dp"
             android:visibility="gone"
             tools:ignore="KeyboardInaccessibleWidget"
-            tools:visibility="visible" />
+            tools:visibility="visible">
+
+            <androidx.appcompat.widget.AppCompatTextView
+                android:id="@+id/playback_info"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                tools:text="Play method: DirectPlay" />
+
+            <androidx.appcompat.widget.AppCompatTextView
+                android:id="@+id/playback_info_toggle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:paddingVertical="4dp"
+                android:textColor="@android:color/darker_gray"
+                android:textSize="14sp"
+                tools:text="More info ▸" />
+
+            <androidx.appcompat.widget.AppCompatTextView
+                android:id="@+id/playback_info_more"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:visibility="gone"
+                tools:visibility="visible" />
+        </LinearLayout>
 
         <androidx.appcompat.widget.AppCompatImageButton
             android:id="@+id/unlock_screen_button"

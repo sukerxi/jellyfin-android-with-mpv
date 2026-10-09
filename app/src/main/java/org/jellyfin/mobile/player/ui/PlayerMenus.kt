@@ -15,19 +15,26 @@ import androidx.core.view.get
 import androidx.core.view.isVisible
 import androidx.core.view.size
 import androidx.core.view.updateLayoutParams
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.TimeBar
 import org.jellyfin.mobile.R
+import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.databinding.ExoPlayerControlViewBinding
 import org.jellyfin.mobile.databinding.FragmentPlayerBinding
 import org.jellyfin.mobile.player.qualityoptions.QualityOptionsProvider
 import org.jellyfin.mobile.player.source.JellyfinMediaSource
 import org.jellyfin.mobile.player.source.LocalJellyfinMediaSource
 import org.jellyfin.mobile.player.source.RemoteJellyfinMediaSource
+import org.jellyfin.mobile.player.mpv.MpvPlayer
 import org.jellyfin.mobile.player.ui.playermenuhelper.PlayerMenuHelper
 import org.jellyfin.mobile.player.ui.playermenuhelper.SkipMediaSegmentButton
+import org.jellyfin.mobile.settings.VideoPlayerType
 import org.jellyfin.sdk.model.api.ChapterInfo
 import org.jellyfin.sdk.model.api.MediaStream
+import org.jellyfin.sdk.model.api.MediaStreamType
+import org.jellyfin.sdk.model.api.VideoRange
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import java.util.Locale
@@ -44,6 +51,7 @@ class PlayerMenus(
 
     private val context = playerBinding.root.context
     private val qualityOptionsProvider: QualityOptionsProvider by inject()
+    private val appPreferences: AppPreferences by inject()
     private val playPauseContainer: View by playerControlsBinding::playPauseContainer
     private val previousButton: View by playerControlsBinding::previousButton
     private val nextButton: View by playerControlsBinding::nextButton
@@ -57,6 +65,9 @@ class PlayerMenus(
     private val decoderButton: View by playerControlsBinding::decoderButton
     private val infoButton: View by playerControlsBinding::infoButton
     private val playbackInfo: TextView by playerBinding::playbackInfo
+    private val playbackInfoContainer: View by playerBinding::playbackInfoContainer
+    private val playbackInfoToggle: TextView by playerBinding::playbackInfoToggle
+    private val playbackInfoMore: TextView by playerBinding::playbackInfoMore
     private val audioStreamsMenu: PopupMenu = createAudioStreamsMenu()
     private val subtitlesMenu: PopupMenu = createSubtitlesMenu()
     private val speedMenu: PopupMenu = createSpeedMenu()
@@ -73,6 +84,9 @@ class PlayerMenus(
 
     private var subtitleCount = 0
     private var subtitlesEnabled = false
+    private var playbackInfoExpanded = false
+    private var currentMediaSource: JellyfinMediaSource? = null
+    private var decoderType: DecoderType? = null
 
     private val trickplayHelper = TrickplayHelper(
         trickplayContainer,
@@ -144,10 +158,19 @@ class PlayerMenus(
             decoderMenu.show()
         }
         infoButton.setOnClickListener {
-            playbackInfo.isVisible = !playbackInfo.isVisible
+            playbackInfoContainer.isVisible = !playbackInfoContainer.isVisible
+            // Refresh runtime stats each time the panel is opened
+            if (playbackInfoContainer.isVisible) {
+                refreshPlaybackInfo()
+                currentMediaSource?.let { source -> playbackInfoMore.text = buildPlaybackInfoDetails(source) }
+            }
         }
-        playbackInfo.setOnClickListener {
+        playbackInfoContainer.setOnClickListener {
             dismissPlaybackInfo()
+        }
+        playbackInfoToggle.setOnClickListener {
+            playbackInfoExpanded = !playbackInfoExpanded
+            updatePlaybackInfoExpanded()
         }
 
         fragment.setPlayerMenuHelper(playerMenuHelper)
@@ -197,9 +220,22 @@ class PlayerMenus(
             }
         }
 
+        currentMediaSource = mediaSource
+        refreshPlaybackInfo()
+
+        playbackInfoMore.text = buildPlaybackInfoDetails(mediaSource)
+        updatePlaybackInfoExpanded()
+    }
+
+    /**
+     * Rebuild the basic playback info (play method, engine, streams) from the current media source.
+     */
+    private fun refreshPlaybackInfo() {
+        val mediaSource = currentMediaSource ?: return
         val playMethod = context.getString(R.string.playback_info_play_method, mediaSource.playMethod)
+        val engineInfo = buildEngineInfo()
         val videoTracksInfo = buildMediaStreamsInfo(
-            mediaStreams = listOfNotNull(videoStream),
+            mediaStreams = listOfNotNull(mediaSource.selectedVideoStream),
             prefix = R.string.playback_info_video_streams,
             maxStreams = MAX_VIDEO_STREAMS_DISPLAY,
             streamSuffix = { stream ->
@@ -207,7 +243,7 @@ class PlayerMenus(
             },
         )
         val audioTracksInfo = buildMediaStreamsInfo(
-            mediaStreams = audioStreams,
+            mediaStreams = mediaSource.audioStreams,
             prefix = R.string.playback_info_audio_streams,
             maxStreams = MAX_AUDIO_STREAMS_DISPLAY,
             streamSuffix = { stream ->
@@ -217,9 +253,168 @@ class PlayerMenus(
 
         playbackInfo.text = listOf(
             playMethod,
+            engineInfo,
             videoTracksInfo,
             audioTracksInfo,
         ).joinToString("\n\n")
+    }
+
+    /**
+     * Player engine (mpv / ExoPlayer) and the decoder currently in use.
+     */
+    private fun buildEngineInfo(): String {
+        val player = fragment.currentPlayer
+        val engine = when {
+            player is MpvPlayer -> "mpv"
+            player is ExoPlayer -> "ExoPlayer"
+            else -> when (appPreferences.videoPlayerType) {
+                VideoPlayerType.MPV_PLAYER -> "mpv"
+                VideoPlayerType.EXO_PLAYER -> "ExoPlayer"
+                VideoPlayerType.EXTERNAL_PLAYER -> context.getString(R.string.video_player_external)
+                else -> appPreferences.videoPlayerType
+            }
+        }
+        val decoder = decoderType?.let { type ->
+            context.getString(
+                when (type) {
+                    DecoderType.HARDWARE -> R.string.menu_item_hardware_decoding
+                    DecoderType.SOFTWARE -> R.string.menu_item_software_decoding
+                },
+            )
+        }
+        return listOfNotNull(engine, decoder).joinToString(" · ")
+    }
+
+    /**
+     * Build the collapsible "more info" section: container details and per-stream technical info.
+     */
+    private fun buildPlaybackInfoDetails(mediaSource: JellyfinMediaSource): String {
+        val sourceInfo = mediaSource.sourceInfo
+        val lines = mutableListOf<String>()
+
+        // Runtime stats (refreshed each time the panel is opened/expanded)
+        fragment.currentPlayer?.let { player ->
+            val speed = player.playbackParameters.speed
+                .takeIf { it != 1f }
+                ?.let { "%.2gx".format(Locale.getDefault(), it) }
+            val buffered = (player.bufferedPosition - player.currentPosition)
+                .takeIf { it > 1000 }
+                ?.let { context.getString(R.string.playback_info_buffered, formatDuration(it)) }
+            val duration = player.duration
+                .takeIf { it > 0 }
+                ?: sourceInfo.runTimeTicks?.let { it / 10_000 }
+                ?: 0L
+            val stats = listOfNotNull(
+                speed,
+                buffered,
+                duration.takeIf { it > 0 }?.let { formatDuration(it) },
+            )
+            if (stats.isNotEmpty()) lines += stats.joinToString(" · ")
+        }
+
+        // Streaming bitrate cap (remote sources only)
+        if (mediaSource is RemoteJellyfinMediaSource) {
+            mediaSource.maxStreamingBitrate?.let { bitrate ->
+                lines += context.getString(
+                    R.string.playback_info_bitrate_limit,
+                    formatBitrate(bitrate.toDouble()),
+                )
+            }
+        }
+
+        // Container
+        sourceInfo.container?.takeUnless(String::isBlank)?.let { container ->
+            val details = listOfNotNull(
+                sourceInfo.size?.let { formatFileSize(it) },
+                sourceInfo.bitrate?.let { formatBitrate(it.toDouble()) },
+            ).joinToString(" · ")
+            lines += if (details.isEmpty()) container else "$container · $details"
+        }
+
+        // Video streams
+        mediaSource.mediaStreams
+            .filter { it.type == MediaStreamType.VIDEO }
+            .forEach { stream ->
+                val parts = listOfNotNull(
+                    stream.codec?.uppercase(Locale.ROOT),
+                    stream.profile?.takeUnless(String::isBlank),
+                    stream.level?.let { "L${"%.1f".format(Locale.getDefault(), it)}" },
+                    stream.width?.let { w -> stream.height?.let { h -> "${w}x$h" } },
+                    (stream.realFrameRate ?: stream.averageFrameRate)?.let { "%.6g fps".format(Locale.getDefault(), it) },
+                    stream.bitDepth?.let { "${it}-bit" },
+                    stream.isInterlaced.takeIf { it }?.let { "interlaced" },
+                    stream.videoRange?.takeIf { it != VideoRange.UNKNOWN }?.name,
+                    stream.aspectRatio?.takeUnless(String::isBlank),
+                )
+                if (parts.isNotEmpty()) lines += "V: ${parts.joinToString(" · ")}"
+            }
+
+        // Audio streams
+        mediaSource.mediaStreams
+            .filter { it.type == MediaStreamType.AUDIO }
+            .forEach { stream ->
+                val parts = listOfNotNull(
+                    stream.codec?.uppercase(Locale.ROOT),
+                    stream.profile?.takeUnless(String::isBlank),
+                    stream.language?.takeUnless(String::isBlank),
+                    stream.channels?.let { ch -> stream.channelLayout?.let { "$ch ch ($it)" } ?: "${ch} ch" },
+                    stream.sampleRate?.let { "%.1f kHz".format(Locale.getDefault(), it / 1000.0) },
+                    stream.bitDepth?.let { "${it}-bit" },
+                    stream.bitRate?.let { formatBitrate(it.toDouble()) },
+                )
+                if (parts.isNotEmpty()) lines += "A: ${parts.joinToString(" · ")}"
+            }
+
+        // Subtitle streams
+        mediaSource.mediaStreams
+            .filter { it.type == MediaStreamType.SUBTITLE }
+            .forEach { stream ->
+                val parts = listOfNotNull(
+                    stream.codec?.uppercase(Locale.ROOT),
+                    stream.language?.takeUnless(String::isBlank),
+                    stream.isExternal.takeIf { it }?.let { "ext" },
+                    stream.isForced.takeIf { it }?.let { "forced" },
+                    stream.isDefault.takeIf { it }?.let { "default" },
+                )
+                if (parts.isNotEmpty()) lines += "S: ${parts.joinToString(" · ")}"
+            }
+
+        return lines.joinToString("\n")
+    }
+
+    private fun updatePlaybackInfoExpanded() {
+        playbackInfoMore.isVisible = playbackInfoExpanded
+        playbackInfoToggle.text = context.getString(
+            if (playbackInfoExpanded) R.string.playback_info_less else R.string.playback_info_more,
+        )
+        // Runtime stats are only accurate when (re)built; refresh on expand and while visible
+        if (playbackInfoExpanded) {
+            currentMediaSource?.let { playbackInfoMore.text = buildPlaybackInfoDetails(it) }
+        }
+    }
+
+    private fun formatFileSize(bytes: Long): String {
+        val units = arrayOf("B", "KB", "MB", "GB", "TB")
+        var value = bytes.toDouble()
+        var unitIndex = 0
+        while (value >= 1024 && unitIndex < units.lastIndex) {
+            value /= 1024
+            unitIndex++
+        }
+        val formatted = if (unitIndex == 0) value.toInt().toString() else "%.2f".format(Locale.getDefault(), value)
+        return "$formatted ${units[unitIndex]}"
+    }
+
+    private fun formatDuration(ms: Long): String {
+        val totalSeconds = ms / 1000
+        val hours = totalSeconds / 3600
+        val minutes = (totalSeconds % 3600) / 60
+        val seconds = totalSeconds % 60
+        return if (hours > 0) {
+            "%d:%02d:%02d".format(Locale.getDefault(), hours, minutes, seconds)
+        } else {
+            "%d:%02d".format(Locale.getDefault(), minutes, seconds)
+        }
     }
 
     private fun updateLayoutConstraints(hasChapters: Boolean) {
@@ -351,7 +546,9 @@ class PlayerMenus(
     }
 
     fun updatedSelectedDecoder(type: DecoderType) {
+        decoderType = type
         decoderMenu.menu.findItem(type.ordinal).isChecked = true
+        if (playbackInfoContainer.isVisible) refreshPlaybackInfo()
     }
 
     private fun buildMenuItems(
@@ -403,7 +600,7 @@ class PlayerMenus(
     }
 
     fun dismissPlaybackInfo() {
-        playbackInfo.isVisible = false
+        playbackInfoContainer.isVisible = false
     }
 
     override fun onDismiss(menu: PopupMenu) {

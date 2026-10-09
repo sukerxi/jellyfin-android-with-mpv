@@ -21,6 +21,10 @@
     <string name="pref_category_music_player">音乐播放器</string>
     <string name="activity_name_settings">Jellyfin设置</string>
     <string name="playback_info_and_x_more">....还有 %d 个</string>
+    <string name="playback_info_more">更多信息 ▸</string>
+    <string name="playback_info_less">收起信息 ▾</string>
+    <string name="playback_info_buffered">已缓冲 %s</string>
+    <string name="playback_info_bitrate_limit">码率上限：%s</string>
     <string name="playback_info_audio_streams">音频流</string>
     <string name="playback_info_video_streams">视频流</string>
     <string name="playback_info_transcoding">转码： %b</string>
