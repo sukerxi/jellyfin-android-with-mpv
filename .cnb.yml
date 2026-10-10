@@ -16,6 +16,10 @@
 #   每次推送到 master：版本号 3.0.0-<提交短哈希>，自动创建唯一 tag
 #   3.0.0-<CNB 构建号> 与 CNB Release，并上传 libre release APK + version.txt 作为附件。
 #
+# Release 定时清理（prune-releases 流水线）:
+#   每天 04:00（Asia/Shanghai）由 CNB 定时任务自动触发，只保留最近 10 条 Release，
+#   更早的 Release 连同其 nightly tag 一并删除（正式 v* tag 永不清理）。
+#
 # 正式发版（对应 app-publish.yaml）:
 #   推送 vX.Y.Z 形式的 tag 即自动构建全部 APK/AAB，创建同名 CNB Release 并上传附件。
 #
@@ -398,6 +402,119 @@
           sudo ln -s versions/v${JELLYFIN_VERSION}/version.txt .
         EOF
 
+# ============================== Release 定时清理 ==============================
+
+# 只保留最近 10 条 Release（CNB 最佳实践：nightly 频繁发版，历史版本及时清理）。
+# 每天 04:00（Asia/Shanghai，CNB 定时任务按系统时区解析）由 crontab 事件触发。
+# 实现要点：
+#   - GET  /-/releases?page=N&page_size=10  列表按创建时间倒序（OpenAPI 文档确认），
+#     翻页收集第 11 条及以后的 Release；页大小固定按 10 请求，避免参数歧义。
+#   - DELETE /-/releases/{id}  删除 Release（不级联删 tag，需单独调用 tag 删除接口）。
+#   - DELETE /-/git/tags/{tag} 删除 nightly tag（204 No Content）。
+#   - 仅清理 nightly 形态的 tag（3.0.0-cnb-*）；正式 v* tag 及其 Release 永不清理，
+#     但 v* Release 仍计入「保留 10 条」的总数。
+#   - is_latest=true 的 Release 跳过删除，避免 latest 标记悬空。
+#   - 流水线内置 CNB_TOKEN 以触发者身份签发、限本仓库，含 repo-release:rw 写权限，
+#     足够调用上述接口（OpenAPI 文档确认）。
+#   - 删除顺序：先 Release 后 tag（tag 删除失败只留悬空 tag，不会留下无 tag 的 Release）。
+#   - 单次删除失败仅告警不中断（404 视为已不存在），整体退出码保持成功，
+#     避免偶发接口抖动使定时流水线飘红。
+.prune-pipeline: &prune-pipeline
+  name: prune-releases
+  # 与发版共用同一把锁：清理时如有 nightly 正在发版则排队等待，
+  # 防止刚创建的 Release 被并发翻页快照误删。
+  lock:
+    key: nightly-release
+    wait: true
+    timeout: 600
+  stages:
+    - name: 清理旧 Release（保留最近 10 条）
+      script: |
+        set -e
+        # 默认构建镜像不保证带 curl/gawk，缺失时按需安装。
+        if ! command -v curl >/dev/null 2>&1 || ! command -v awk >/dev/null 2>&1; then
+          apt-get update -qq >/dev/null 2>&1 || true
+          apt-get install -y -qq curl gawk >/dev/null 2>&1 || true
+        fi
+        KEEP=10
+        api="${CNB_API_ENDPOINT:-https://api.cnb.cool}/${CNB_REPO_SLUG}"
+        accept="Accept: application/vnd.cnb.api+json"
+        auth="Authorization: Bearer ${CNB_TOKEN}"
+
+        # 翻页收集全部 Release（列表按创建时间倒序，第 1 页为最新）。
+        # 每行 "序号<TAB>id<TAB>tag_name<TAB>latest"；序号用于全局保留区判断，
+        # 不能用页内序号（页大小固定 10，跨页会错位）。
+        # 注意：附件对象同样含 "id" 字段，记录数按 tag_name 出现次数统计。
+        LIST="$(mktemp)"
+        : > "$LIST"
+        idx=0
+        page=1
+        while :; do
+          resp="$(curl -fsS -H "$accept" -H "$auth" "$api/-/releases?page=${page}&page_size=10")" || break
+          count=$(printf '%s' "$resp" | grep -o '"tag_name":' | wc -l)
+          [ "$count" -gt 0 ] || break
+          printf '%s' "$resp" | awk -v start="$idx" '
+            BEGIN { RS="{"; ORS="" }
+            NR > 1 {
+              rec = $0
+              id = ""; tag = ""; latest = ""
+              if (match(rec, /"id":"[^"]*"/)) { id = substr(rec, RSTART+6, RLENGTH-7) }
+              if (match(rec, /"tag_name":"[^"]*"/)) { tag = substr(rec, RSTART+12, RLENGTH-13) }
+              if (rec ~ /"is_latest":true/) { latest = "1" }
+              if (id != "" && tag != "") { n++; print (start+n) "\t" id "\t" tag "\t" latest "\n" }
+            }
+          ' >> "$LIST"
+          idx=$((idx + count))
+          [ "$count" -lt 10 ] && break
+          page=$((page + 1))
+          [ "$page" -gt 100 ] && break
+        done
+        echo "Release 总数: $idx"
+
+        total_deleted=0
+        total_skipped=0
+        while read -r num id tag latest; do
+          [ -n "$id" ] || continue
+          # 前 KEEP 条为保留区。
+          if [ "$num" -le "$KEEP" ]; then continue; fi
+          # 正式 v* tag 的 Release 不清理。
+          case "$tag" in
+            v*) total_skipped=$((total_skipped + 1)); continue ;;
+          esac
+          # 仅清理 nightly 形态 tag；其他未知形态保守跳过。
+          case "$tag" in
+            3.0.0-cnb-*) ;;
+            *) total_skipped=$((total_skipped + 1)); continue ;;
+          esac
+          # latest 标记悬空保护。
+          if [ "$latest" = "1" ]; then
+            echo "跳过 is_latest Release: $tag"
+            total_skipped=$((total_skipped + 1))
+            continue
+          fi
+          # 先删 Release，再删 tag；404 视为已不存在，不报错。
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+            -H "$accept" -H "$auth" "$api/-/releases/$id" || echo 000)
+          if [ "$code" = 200 ] || [ "$code" = 204 ] || [ "$code" = 404 ]; then
+            echo "已删除 Release: $tag"
+          else
+            echo "警告: 删除 Release $tag 失败 (HTTP $code)，跳过其 tag"
+            total_skipped=$((total_skipped + 1))
+            continue
+          fi
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+            -H "$accept" -H "$auth" "$api/-/git/tags/$tag" || echo 000)
+          if [ "$code" = 204 ] || [ "$code" = 404 ]; then
+            echo "已删除 tag: $tag"
+          else
+            echo "警告: 删除 tag $tag 失败 (HTTP $code)"
+          fi
+          total_deleted=$((total_deleted + 1))
+        done < "$LIST"
+        rm -f "$LIST"
+
+        echo "清理完成：删除 $total_deleted 条，跳过 $total_skipped 条，保留最近 $KEEP 条"
+
 # ============================== 同步 master 到 GitHub ==============================
 
 # push 即同步：master 每次推送后用 git-sync 插件强推到 GitHub 镜像仓库（仅 master 分支）。
@@ -437,6 +554,14 @@ master:
   # master 分支详情页「发布 Nightly」按钮（对应 release.yml 的 workflow_dispatch）
   web_trigger_release:
     - *nightly-pipeline
+  # master 分支详情页「清理旧 Release」按钮（手动验证用，与定时任务同一流水线）
+  web_trigger_prune:
+    - *prune-pipeline
+  # 每天 04:00（Asia/Shanghai）定时清理，只保留最近 10 条 Release。
+  # 注意：定时任务不支持 glob，必须挂在明确分支下；最小调度间隔 5 分钟。
+  # 执行身份为最后修改本 crontab 配置并推送的用户，CNB_TOKEN 限本仓库。
+  "crontab: 0 4 * * *":
+    - *prune-pipeline
 
 # 推送 v* tag 触发正式发版（对应 app-publish.yaml）
 "v*":

@@ -8,3 +8,7 @@ branch:
         description: 手动触发一次 master 构建并发布 Nightly Release（tag 为 3.0.0-<构建号>）
         event: web_trigger_release
         groupName: 发布
+      - name: 清理旧 Release
+        description: 立即执行一次 Release 清理，只保留最近 10 条 nightly Release（正式 v* 不受影响）
+        event: web_trigger_prune
+        groupName: 发布
