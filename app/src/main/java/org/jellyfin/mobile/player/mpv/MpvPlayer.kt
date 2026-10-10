@@ -120,6 +120,8 @@ class MpvPlayer(
                 durationMs = 0
                 firstFrameRendered = false
                 pendingSeekTargetMs = null
+                // A new file invalidates any error reported for the previous file.
+                pendingError = null
                 playbackState = STATE_BUFFERING
             }
             MpvEvent.FileLoaded -> {
@@ -253,13 +255,20 @@ class MpvPlayer(
             .setIsSeekable(true)
             .build()
 
+        // A reported player error is terminal for the current item. The fallback triggered
+        // in PlayerViewModel is asynchronous, so while it runs, late property events of the
+        // failed file (paused-for-cache / eof-reached) may move playbackState out of IDLE.
+        // media3's State only permits a playerError in STATE_IDLE, so pin the reported state
+        // to IDLE until StartFile of the next item clears pendingError.
+        val effectivePlaybackState = if (pendingError != null) STATE_IDLE else playbackState
+
         return State.Builder()
             .setPlaylist(listOf(mediaItemData))
             .setAvailableCommands(permanentAvailableCommands)
             // keep-open leaves mpv internally paused on the last frame without changing the pause
             // property, so STATE_ENDED has to report playWhenReady=false explicitly (media3 semantics).
-            .setPlayWhenReady(playbackState != STATE_ENDED && !paused, PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
-            .setPlaybackState(playbackState)
+            .setPlayWhenReady(effectivePlaybackState != STATE_ENDED && !paused, PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
+            .setPlaybackState(effectivePlaybackState)
             .setPlayerError(pendingError)
             .setNewlyRenderedFirstFrame(consumePendingFirstFrame())
             .setPlaybackSuppressionReason(PLAYBACK_SUPPRESSION_REASON_NONE)
