@@ -21,7 +21,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          repository: sukerxi/jellyfin-android
+          repository: sukerxi/jellyfin-android-with-mpv
           ref: master
           fetch-depth: 0 # 必须获取完整历史，否则 git rev-parse 可能失败
 
