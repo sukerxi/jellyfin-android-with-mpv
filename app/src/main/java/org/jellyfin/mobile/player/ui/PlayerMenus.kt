@@ -1,5 +1,7 @@
 package org.jellyfin.mobile.player.ui
 
+import android.graphics.Typeface
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.Menu
 import android.view.MenuItem
@@ -9,9 +11,12 @@ import android.widget.AdapterView
 import android.widget.BaseAdapter
 import android.widget.Button
 import android.widget.GridView
+import android.widget.HorizontalScrollView
 import android.widget.ImageButton
+import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.TextView
+import androidx.annotation.StringRes
 import androidx.appcompat.widget.AppCompatImageView
 import androidx.appcompat.widget.AppCompatTextView
 import androidx.constraintlayout.widget.ConstraintLayout
@@ -70,10 +75,9 @@ class PlayerMenus(
     private val decoderButton: View by playerControlsBinding::decoderButton
     private val infoButton: View by playerControlsBinding::infoButton
     private val episodesButton: View by playerControlsBinding::episodesButton
-    private val playbackInfo: TextView by playerBinding::playbackInfo
     private val playbackInfoContainer: View by playerBinding::playbackInfoContainer
-    private val playbackInfoToggle: TextView by playerBinding::playbackInfoToggle
-    private val playbackInfoMore: TextView by playerBinding::playbackInfoMore
+    private val playbackInfoSubtitle: TextView by playerBinding::playbackInfoSubtitle
+    private val playbackInfoSections: LinearLayout by playerBinding::playbackInfoSections
     private val episodePickerContainer: View by playerBinding::episodePickerContainer
     private val episodePickerCount: TextView by playerBinding::episodePickerCount
     private val episodeGrid: GridView by playerBinding::episodeGrid
@@ -93,7 +97,6 @@ class PlayerMenus(
 
     private var subtitleCount = 0
     private var subtitlesEnabled = false
-    private var playbackInfoExpanded = false
     private var currentMediaSource: JellyfinMediaSource? = null
     private var decoderType: DecoderType? = null
 
@@ -172,11 +175,10 @@ class PlayerMenus(
         infoButton.setOnClickListener {
             if (episodePickerContainer.isVisible) dismissEpisodePicker()
             playbackInfoContainer.isVisible = !playbackInfoContainer.isVisible
-            // Refresh runtime stats each time the panel is opened
+            // Rebuild the panel each time it is opened so runtime stats are current
             if (playbackInfoContainer.isVisible) {
                 fragment.suppressControllerAutoHide(true)
-                refreshPlaybackInfo()
-                currentMediaSource?.let { source -> playbackInfoMore.text = buildPlaybackInfoDetails(source) }
+                rebuildPlaybackInfo()
             } else {
                 fragment.suppressControllerAutoHide(false)
             }
@@ -187,10 +189,6 @@ class PlayerMenus(
         }
         playerBinding.playbackInfoClose.setOnClickListener {
             dismissPlaybackInfo()
-        }
-        playbackInfoToggle.setOnClickListener {
-            playbackInfoExpanded = !playbackInfoExpanded
-            updatePlaybackInfoExpanded()
         }
 
         episodesButton.setOnClickListener {
@@ -268,47 +266,263 @@ class PlayerMenus(
         }
 
         currentMediaSource = mediaSource
-        refreshPlaybackInfo()
-
-        playbackInfoMore.text = buildPlaybackInfoDetails(mediaSource)
-        updatePlaybackInfoExpanded()
+        rebuildPlaybackInfo()
     }
 
     /**
-     * Rebuild the compact basic playback info. Only the currently active tracks are shown.
+     * Rebuild the playback info panel as grouped sections: metadata chips for the
+     * technical tags and aligned label/value rows for details. Only the currently
+     * active tracks are displayed.
      */
-    private fun refreshPlaybackInfo() {
+    private fun rebuildPlaybackInfo() {
         val mediaSource = currentMediaSource ?: return
-        val lines = mutableListOf<String>()
+        val sections = playbackInfoSections
+        sections.removeAllViews()
 
-        lines += context.getString(R.string.playback_info_play_method, mediaSource.playMethod)
+        val itemName = mediaSource.item?.name?.takeUnless(String::isBlank)
+        playbackInfoSubtitle.isVisible = itemName != null
+        playbackInfoSubtitle.text = itemName
 
+        // ---- Overview ----
+        sections.appendSectionHeader(R.string.playback_info_section_overview)
+        sections.appendInfoRow(R.string.playback_info_label_play_method, mediaSource.playMethod.toString())
         buildEngineInfo().takeUnless(String::isBlank)?.let { engine ->
-            lines += context.getString(R.string.playback_info_engine, engine)
+            sections.appendInfoRow(R.string.playback_info_label_engine, engine)
+        }
+        fragment.currentPlayer?.playbackParameters?.speed
+            ?.takeIf { it != 1f }
+            ?.let { speed ->
+                sections.appendInfoRow(
+                    R.string.playback_info_label_speed,
+                    "%.2fx".format(Locale.getDefault(), speed),
+                )
+            }
+        if (mediaSource is RemoteJellyfinMediaSource) {
+            mediaSource.maxStreamingBitrate?.let { bitrate ->
+                sections.appendInfoRow(
+                    R.string.playback_info_label_bitrate_limit,
+                    formatBitrate(bitrate.toDouble()),
+                )
+            }
         }
 
+        // ---- Container / file ----
+        val sourceInfo = mediaSource.sourceInfo
+        val container = sourceInfo.container?.takeUnless(String::isBlank)
+        if (container != null || sourceInfo.size != null || sourceInfo.bitrate != null) {
+            sections.appendSectionHeader(R.string.playback_info_section_media)
+            sections.appendInfoRow(R.string.playback_info_label_container, container)
+            sourceInfo.size?.let { size ->
+                sections.appendInfoRow(R.string.playback_info_label_file_size, formatFileSize(size))
+            }
+            sourceInfo.bitrate?.let { bitrate ->
+                sections.appendInfoRow(
+                    R.string.playback_info_label_total_bitrate,
+                    formatBitrate(bitrate.toDouble()),
+                )
+            }
+        }
+
+        // ---- Video ----
         mediaSource.selectedVideoStream?.let { stream ->
-            val title = stream.displayTitle?.takeUnless(String::isBlank) ?: buildStreamFallbackTitle(stream)
-            val bitrate = stream.bitRate?.let { " · ${formatBitrate(it.toDouble())}" }.orEmpty()
-            lines += "${context.getString(R.string.playback_info_video)}: $title$bitrate"
+            sections.appendSectionHeader(R.string.playback_info_video)
+            val chips = buildList {
+                stream.codec?.takeUnless(String::isBlank)?.let { add(it.uppercase(Locale.ROOT)) }
+                stream.profile?.takeUnless(String::isBlank)?.let { add(it) }
+                stream.level?.let { add("L${"%.1f".format(Locale.getDefault(), it)}") }
+                val width = stream.width
+                val height = stream.height
+                if (width != null && height != null) add("${width}×$height")
+                (stream.realFrameRate ?: stream.averageFrameRate)?.let { frameRate ->
+                    add("%.6g fps".format(Locale.getDefault(), frameRate))
+                }
+                stream.bitDepth?.let { add("$it-bit") }
+                if (stream.isInterlaced) add(context.getString(R.string.playback_info_chip_interlaced))
+                stream.videoRange
+                    .takeIf { it != VideoRange.UNKNOWN }
+                    ?.let { add(it.name) }
+            }
+            sections.appendChipRow(chips)
+            stream.bitRate?.let { bitrate ->
+                sections.appendInfoRow(
+                    R.string.playback_info_label_bitrate,
+                    formatBitrate(bitrate.toDouble()),
+                )
+            }
+            sections.appendInfoRow(
+                R.string.playback_info_label_aspect_ratio,
+                stream.aspectRatio?.takeUnless(String::isBlank),
+            )
         }
 
+        // ---- Audio ----
         mediaSource.selectedAudioStream?.let { stream ->
-            val title = stream.displayTitle?.takeUnless(String::isBlank) ?: buildStreamFallbackTitle(stream)
-            val language = stream.language
-                ?.takeUnless(String::isBlank)
-                ?.let { " ($it)" }
-                .orEmpty()
-            lines += "${context.getString(R.string.playback_info_audio)}: $title$language"
+            sections.appendSectionHeader(R.string.playback_info_audio)
+            val chips = buildList {
+                stream.codec?.takeUnless(String::isBlank)?.let { add(it.uppercase(Locale.ROOT)) }
+                stream.profile?.takeUnless(String::isBlank)?.let { add(it) }
+                stream.channelLayout
+                    ?.takeUnless(String::isBlank)
+                    ?.let { add(it) }
+                    ?: stream.channels?.let { add("$it ch") }
+                stream.sampleRate?.let { sampleRate ->
+                    add("%.1f kHz".format(Locale.getDefault(), sampleRate / 1000.0))
+                }
+                stream.bitDepth?.let { add("$it-bit") }
+            }
+            sections.appendChipRow(chips)
+            sections.appendInfoRow(
+                R.string.playback_info_label_language,
+                stream.language?.takeUnless(String::isBlank),
+            )
+            stream.bitRate?.let { bitrate ->
+                sections.appendInfoRow(
+                    R.string.playback_info_label_bitrate,
+                    formatBitrate(bitrate.toDouble()),
+                )
+            }
         }
 
-        val subtitleTitle = mediaSource.selectedSubtitleStream?.let { stream ->
-            stream.displayTitle?.takeUnless(String::isBlank) ?: buildStreamFallbackTitle(stream)
-        } ?: context.getString(R.string.playback_info_off)
-        lines += "${context.getString(R.string.playback_info_subtitle)}: $subtitleTitle"
-
-        playbackInfo.text = lines.joinToString("\n")
+        // ---- Subtitle ----
+        sections.appendSectionHeader(R.string.playback_info_subtitle)
+        val subtitleStream = mediaSource.selectedSubtitleStream
+        if (subtitleStream == null) {
+            sections.appendInfoRow(
+                R.string.playback_info_label_track,
+                context.getString(R.string.playback_info_off),
+            )
+        } else {
+            val chips = buildList {
+                subtitleStream.codec?.takeUnless(String::isBlank)?.let { add(it.uppercase(Locale.ROOT)) }
+                subtitleStream.language?.takeUnless(String::isBlank)?.let { add(it) }
+                if (subtitleStream.isExternal) add(context.getString(R.string.playback_info_chip_external))
+                if (subtitleStream.isForced) add(context.getString(R.string.playback_info_chip_forced))
+                if (subtitleStream.isDefault) add(context.getString(R.string.playback_info_chip_default))
+            }
+            if (chips.isNotEmpty()) {
+                sections.appendChipRow(chips)
+            } else {
+                val title = subtitleStream.displayTitle
+                    ?.takeUnless(String::isBlank)
+                    ?: buildStreamFallbackTitle(subtitleStream).takeUnless(String::isBlank)
+                sections.appendInfoRow(R.string.playback_info_label_track, title)
+            }
+        }
     }
+
+    /**
+     * Append a section header with a brand-colored accent bar.
+     */
+    private fun LinearLayout.appendSectionHeader(@StringRes titleRes: Int) {
+        val isFirst = childCount == 0
+        val row = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                topMargin = if (isFirst) 0 else 20.dpToPx()
+            }
+        }
+        val accent = View(context).apply { setBackgroundColor(ACCENT_COLOR) }
+        row.addView(
+            accent,
+            LinearLayout.LayoutParams(4.dpToPx(), 14.dpToPx()).apply { marginEnd = 8.dpToPx() },
+        )
+        row.addView(
+            TextView(context).apply {
+                text = context.getString(titleRes)
+                setTextColor(COLOR_TEXT_PRIMARY)
+                textSize = 13f
+                typeface = Typeface.DEFAULT_BOLD
+                letterSpacing = 0.06f
+            },
+        )
+        addView(row)
+    }
+
+    /**
+     * Append an aligned label/value row. Blank or null values are skipped.
+     */
+    private fun LinearLayout.appendInfoRow(@StringRes labelRes: Int, value: String?) {
+        if (value.isNullOrBlank()) return
+        val row = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.TOP
+            setPadding(0, 6.dpToPx(), 0, 6.dpToPx())
+        }
+        row.addView(
+            TextView(context).apply {
+                text = context.getString(labelRes)
+                setTextColor(COLOR_TEXT_SECONDARY)
+                textSize = 13f
+            },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                weight = LABEL_WEIGHT
+                marginEnd = 16.dpToPx()
+            },
+        )
+        row.addView(
+            TextView(context).apply {
+                text = value
+                setTextColor(COLOR_TEXT_PRIMARY)
+                textSize = 13f
+                setTextIsSelectable(true)
+            },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                weight = VALUE_WEIGHT
+            },
+        )
+        addView(row)
+    }
+
+    /**
+     * Append a horizontally scrollable row of metadata chips.
+     */
+    private fun LinearLayout.appendChipRow(chips: List<String>) {
+        val validChips = chips.filter { it.isNotBlank() }
+        if (validChips.isEmpty()) return
+
+        val scroller = HorizontalScrollView(context).apply {
+            isHorizontalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            isClickable = false
+            isFocusable = false
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = 6.dpToPx() }
+        }
+        val chipGroup = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        validChips.forEachIndexed { index, chip ->
+            chipGroup.addView(
+                TextView(context).apply {
+                    text = chip
+                    setTextColor(COLOR_TEXT_PRIMARY)
+                    textSize = 12f
+                    typeface = Typeface.DEFAULT_BOLD
+                    letterSpacing = 0.02f
+                    setBackgroundResource(R.drawable.playback_info_chip_background)
+                    setPadding(10.dpToPx(), 5.dpToPx(), 10.dpToPx(), 6.dpToPx())
+                },
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply {
+                    if (index != validChips.lastIndex) marginEnd = 6.dpToPx()
+                },
+            )
+        }
+        scroller.addView(chipGroup)
+        addView(scroller)
+    }
+
+    private fun Int.dpToPx(): Int =
+        (this * context.resources.displayMetrics.density + 0.5f).toInt()
 
     private fun buildStreamFallbackTitle(stream: MediaStream): String {
         val codec = stream.codec?.uppercase(Locale.ROOT)
@@ -340,94 +554,6 @@ class PlayerMenus(
             )
         }
         return listOfNotNull(engine, decoder).joinToString(" · ")
-    }
-
-    /**
-     * Build the collapsible "more info" section: container details and technical info
-     * of the currently active tracks only.
-     */
-    private fun buildPlaybackInfoDetails(mediaSource: JellyfinMediaSource): String {
-        val sourceInfo = mediaSource.sourceInfo
-        val lines = mutableListOf<String>()
-
-        // Playback speed (only shown when not 1x)
-        fragment.currentPlayer?.playbackParameters?.speed
-            ?.takeIf { it != 1f }
-            ?.let { lines += "%.2fx".format(Locale.getDefault(), it) }
-
-        // Streaming bitrate cap (remote sources only)
-        if (mediaSource is RemoteJellyfinMediaSource) {
-            mediaSource.maxStreamingBitrate?.let { bitrate ->
-                lines += context.getString(
-                    R.string.playback_info_bitrate_limit,
-                    formatBitrate(bitrate.toDouble()),
-                )
-            }
-        }
-
-        // Container
-        sourceInfo.container?.takeUnless(String::isBlank)?.let { container ->
-            val details = listOfNotNull(
-                sourceInfo.size?.let { formatFileSize(it) },
-                sourceInfo.bitrate?.let { formatBitrate(it.toDouble()) },
-            ).joinToString(" · ")
-            lines += if (details.isEmpty()) container else "$container · $details"
-        }
-
-        // Active video stream
-        mediaSource.selectedVideoStream?.let { stream ->
-            val parts = listOfNotNull(
-                stream.codec?.uppercase(Locale.ROOT),
-                stream.profile?.takeUnless(String::isBlank),
-                stream.level?.let { "L${"%.1f".format(Locale.getDefault(), it)}" },
-                stream.width?.let { w -> stream.height?.let { h -> "${w}x$h" } },
-                (stream.realFrameRate ?: stream.averageFrameRate)?.let { "%.6g fps".format(Locale.getDefault(), it) },
-                stream.bitDepth?.let { "${it}-bit" },
-                stream.isInterlaced.takeIf { it }?.let { "interlaced" },
-                stream.videoRange.takeIf { it != VideoRange.UNKNOWN }?.name,
-                stream.aspectRatio?.takeUnless(String::isBlank),
-            )
-            if (parts.isNotEmpty()) lines += "V: ${parts.joinToString(" · ")}"
-        }
-
-        // Active audio stream
-        mediaSource.selectedAudioStream?.let { stream ->
-            val parts = listOfNotNull(
-                stream.codec?.uppercase(Locale.ROOT),
-                stream.profile?.takeUnless(String::isBlank),
-                stream.language?.takeUnless(String::isBlank),
-                stream.channels?.let { ch -> stream.channelLayout?.let { "$ch ch ($it)" } ?: "${ch} ch" },
-                stream.sampleRate?.let { "%.1f kHz".format(Locale.getDefault(), it / 1000.0) },
-                stream.bitDepth?.let { "${it}-bit" },
-                stream.bitRate?.let { formatBitrate(it.toDouble()) },
-            )
-            if (parts.isNotEmpty()) lines += "A: ${parts.joinToString(" · ")}"
-        }
-
-        // Active subtitle stream
-        mediaSource.selectedSubtitleStream?.let { stream ->
-            val parts = listOfNotNull(
-                stream.codec?.uppercase(Locale.ROOT),
-                stream.language?.takeUnless(String::isBlank),
-                stream.isExternal.takeIf { it }?.let { "ext" },
-                stream.isForced.takeIf { it }?.let { "forced" },
-                stream.isDefault.takeIf { it }?.let { "default" },
-            )
-            if (parts.isNotEmpty()) lines += "S: ${parts.joinToString(" · ")}"
-        }
-
-        return lines.joinToString("\n")
-    }
-
-    private fun updatePlaybackInfoExpanded() {
-        playbackInfoMore.isVisible = playbackInfoExpanded
-        playbackInfoToggle.text = context.getString(
-            if (playbackInfoExpanded) R.string.playback_info_less else R.string.playback_info_more,
-        )
-        // Runtime stats are only accurate when (re)built; refresh on expand and while visible
-        if (playbackInfoExpanded) {
-            currentMediaSource?.let { playbackInfoMore.text = buildPlaybackInfoDetails(it) }
-        }
     }
 
     private fun formatFileSize(bytes: Long): String {
@@ -556,7 +682,7 @@ class PlayerMenus(
     fun updatedSelectedDecoder(type: DecoderType) {
         decoderType = type
         decoderMenu.menu.findItem(type.ordinal).isChecked = true
-        if (playbackInfoContainer.isVisible) refreshPlaybackInfo()
+        if (playbackInfoContainer.isVisible) rebuildPlaybackInfo()
     }
 
     private fun buildMenuItems(
@@ -711,6 +837,13 @@ class PlayerMenus(
 
         private const val BITRATE_MEGA_BIT = 1_000_000
         private const val BITRATE_KILO_BIT = 1_000
+
+        // Playback info panel styling
+        private const val ACCENT_COLOR = 0xFF00A4DC.toInt()
+        private const val COLOR_TEXT_PRIMARY = 0xF2FFFFFF.toInt()
+        private const val COLOR_TEXT_SECONDARY = 0x99FFFFFF.toInt()
+        private const val LABEL_WEIGHT = 0.85f
+        private const val VALUE_WEIGHT = 1.6f
 
         private const val SPEED_MENU_STEP_SIZE = 0.25f
         private const val SPEED_MENU_STEP_MIN = 2 // → 0.5x
