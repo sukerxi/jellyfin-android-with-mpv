@@ -112,78 +112,88 @@
     test -s keystore.jks
     echo "已解码 keystore.jks ($(stat -c%s keystore.jks) bytes)"
 
-# 生成 Release 更新内容：自上一个 Tag 以来的所有提交，压成单行（<br> 分隔）。
-# CNB 的 git:release description 只接受单行字符串，因此换行统一转成 <br>。
-# 导出为环境变量 RELEASE_BODY，供后续「创建 CNB Release」的 description 插值使用。
-# 注意：CNB 检出可能是浅克隆，先补全历史与 Tag；失败不阻断流水线（仅丢失提交列表）。
+# 生成 Release 更新内容（与 GitHub release.yml 的 generateReleaseNotes 等价）：
+# 取上一个 Tag 到 HEAD 的提交记录，写成标准多行 Markdown 文件 RELEASE_NOTES.md，
+# 后续「创建 CNB Release」用 descriptionFromFile 读取该文件。
+# 注意：CNB 检出可能是浅克隆，先补全历史与 Tag；失败不阻断流水线（仅丢失提交区间）。
 .changelog-stage: &changelog-stage
   name: 生成更新内容
-  exports:
-    body: RELEASE_BODY
   script: |
     set -e
     # 构建镜像 eclipse-temurin 基于 Ubuntu，默认不含 git；缺 git 则安装并放行可疑属主。
-    # 为定位「两条 Release 提交列表雷同（区间未生效、走了最近提交兜底）」问题，本轮把环境
-    # 探测 $DIAG 常驻附加到 Release 正文末尾（relapi=releases API 响应字节数，为后续改用
-    # API 取上一 tag 铺路），定案后移除。
-    DIAG="git=missing"
     if ! command -v git >/dev/null 2>&1; then
       apt-get update -qq >/dev/null 2>&1 || true
       apt-get install -y -qq git >/dev/null 2>&1 || true
     fi
-    if command -v git >/dev/null 2>&1; then
-      git config --global --add safe.directory '*' >/dev/null 2>&1 || true
-      DIAG="git=ok"
-      DIAG="$DIAG shallow=$(git rev-parse --is-shallow-repository 2>/dev/null || echo q)"
-      DIAG="$DIAG remotes=$(git remote 2>/dev/null | tr '\n' '/' | sed 's|/$||')"
-      git fetch --unshallow > /dev/null 2>&1 || git fetch --deepen=500 > /dev/null 2>&1 || true
-      DIAG="$DIAG n=$(git rev-list --count HEAD 2>/dev/null || echo q)"
-      # 遍历所有 remote 拉取 tag（此前硬编码 origin，若 CNB 检出 remote 名不同则永远拉不到，
-      # describe 找不到上一 nightly tag，区间失效、恒走「最近提交」兜底 → 相邻 Release 雷同）
-      TAGFETCH=fail
-      for R in $(git remote 2>/dev/null); do
-        if git fetch --tags --force --prune "$R" '+refs/tags/*:refs/tags/*' > /dev/null 2>&1; then TAGFETCH="ok-$R"; break; fi
-      done
-      if [ "$TAGFETCH" = fail ]; then
-        if git fetch --tags --force > /dev/null 2>&1; then TAGFETCH=ok-default; fi
+    git config --global --add safe.directory '*' >/dev/null 2>&1 || true
+    # 补全历史；普通 fetch 拉全 Tag 即可。切勿使用 '+refs/tags/*:refs/tags/*' refspec，
+    # 它会让 git 把 tag 名误识别成 refs/tags/<name>。
+    git fetch --unshallow >/dev/null 2>&1 || git fetch --deepen=500 >/dev/null 2>&1 || true
+    for R in $(git remote 2>/dev/null); do
+      if git fetch --tags --force --prune "$R" >/dev/null 2>&1; then break; fi
+    done
+
+    # 找「上一个 Tag」。不能用 git describe：CNB API 创建的带注释 Tag，其对象内部的
+    # tag 名带 refs/tags/ 前缀（对象里写的是 refs/tags/<name>），describe 会输出
+    # 不可用的 refs/tags/<tag>-n-g<hash>，导致 git log 区间恒为空、回退成最近提交，
+    # 相邻 Release 的更新内容因此雷同。改为按 Tag 创建时间倒序枚举，取第一个
+    # 「指向 HEAD 祖先提交」且不指向 HEAD 自身的 Tag（用 peel 后的提交 SHA 判断，
+    # 与 Tag 内部名字无关；同时兼容 tag_push / 失败重试场景）。
+    HEAD_SHA="$(git rev-parse HEAD)"
+    PREV_TAG=""
+    while read -r name type; do
+      case "$name" in
+        *[!A-Za-z0-9._-]*) continue ;;
+      esac
+      if [ "$type" = "tag" ]; then
+        obj="$(git rev-parse "refs/tags/$name^{commit}" 2>/dev/null || true)"
+      else
+        obj="$(git rev-parse "refs/tags/$name" 2>/dev/null || true)"
       fi
-      DIAG="$DIAG tagfetch=$TAGFETCH"
-      DIAG="$DIAG tags=$(git tag -l 2>/dev/null | wc -l | tr -d ' ')"
-      RSPL="$(curl -fsS -m 10 -H 'Accept: application/vnd.cnb.api+json' -H "Authorization: Bearer ${CNB_TOKEN}" "${CNB_API_ENDPOINT:-https://api.cnb.cool}/${CNB_REPO_SLUG}/-/releases?limit=2" 2>/dev/null | head -c 200 || true)"
-      DIAG="$DIAG relapi=${#RSPL}"
-    fi
-    PREV_TAG="$(git describe --tags --abbrev=0 HEAD 2>/dev/null || true)"
-    DIAG="$DIAG describe=${PREV_TAG:-none}"
-    # tag_push 场景下 HEAD 自身即触发 Tag，需回退到上一个 Tag，否则区间为空
-    if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" = "$CNB_BRANCH" ]; then
-      PREV_TAG="$(git describe --tags --abbrev=0 "${CNB_BRANCH}^" 2>/dev/null || true)"
-    fi
+      [ -n "$obj" ] || continue
+      [ "$obj" = "$HEAD_SHA" ] && continue
+      if git merge-base --is-ancestor "$obj" HEAD 2>/dev/null; then
+        PREV_TAG="$name"
+        break
+      fi
+    done < <(git for-each-ref --sort=-creatordate \
+             --format='%(refname:strip=2) %(objecttype)' refs/tags)
+
     # 不使用 --no-merges：GitHub 同步会产生 merge commit，过滤后可能整段区间为空。
+    COMMITS=""
     if [ -n "$PREV_TAG" ]; then
-      COMMITS="$(git log "${PREV_TAG}..HEAD" -n 300 --pretty='- `%h` %s (%an)' 2>/dev/null | sed 's/$/<br>/' | tr -d '\n')"
-      HEADER="自 ${PREV_TAG} 以来的提交：<br>"
-    else
-      COMMITS=""
-      HEADER=""
+      COMMITS="$(git log "${PREV_TAG}..HEAD" -n 300 --pretty='- `%h` %s (%an)' 2>/dev/null || true)"
+      RANGE_HEADER="自 ${PREV_TAG} 以来的提交："
     fi
-    # 区间为空（标签未取全、HEAD 即最新 tag、或本次无新增提交）时，
-    # 回退展示最近若干条提交，避免出现「无新增提交或历史不可用」。
+    # 区间为空（历史不全、HEAD 即最新 Tag、或本次确无新增提交）时回退最近 20 条。
     if [ -z "$COMMITS" ]; then
-      COMMITS="$(git log -n 20 --pretty='- `%h` %s (%an)' 2>/dev/null | sed 's/$/<br>/' | tr -d '\n')"
-      HEADER="最近提交：<br>"
+      COMMITS="$(git log -n 20 --pretty='- `%h` %s (%an)' 2>/dev/null || true)"
+      RANGE_HEADER="最近提交："
     fi
-    if [ -z "$COMMITS" ]; then
-      COMMITS="（暂无提交记录）<br>"
-      HEADER=""
-    fi
-    # 正文是单行 <br> 拼接，块级语法（## 标题）在 <br> 之后不在行首不会渲染，改用行内加粗；
-    # 诊断信息附在正文末尾，无需打开流水线日志即可定位（定案后移除）
-    BODY="**更新内容（提交记录）**<br><br>${HEADER}${COMMITS}<br>（诊断: ${DIAG}）"
-    echo "CHANGELOG-DIAG: ${DIAG}"
-    # 方括号会破坏 ##[set-output ...] 指令解析，提交信息中的方括号统一去掉
-    BODY="$(printf '%s' "$BODY" | tr -d '[]')"
-    echo "更新内容长度: ${#BODY}"
-    echo "##[set-output body=$BODY]"
+    [ -n "$COMMITS" ] || COMMITS="（暂无提交记录）"
+
+    # 头部与 GitHub release.yml 的 body 对齐；nightly 流水线导出了 NIGHTLY_TAG。
+    {
+      if [ -n "$NIGHTLY_TAG" ]; then
+        echo "## Jellyfin Android (Libre)"
+        echo
+        echo "- 版本号：\`${JELLYFIN_VERSION}\`"
+        echo "- 构建编号：\`${CNB_BUILD_ID}\`"
+        echo "- 提交：\`${CNB_COMMIT}\`"
+      else
+        echo "## Jellyfin Android with MPV ${CNB_BRANCH}"
+      fi
+      echo
+      echo "**更新内容（提交记录）**"
+      echo
+      echo "${RANGE_HEADER}"
+      echo
+      printf '%s\n' "$COMMITS"
+    } > RELEASE_NOTES.md
+
+    echo "上一个 Tag: ${PREV_TAG:-无（回退最近提交）}"
+    echo "===== RELEASE_NOTES.md ====="
+    cat RELEASE_NOTES.md
 
 
 # ============================== Nightly 发版（对应 release.yml） ==============================
@@ -266,8 +276,8 @@
       options:
         tag: $NIGHTLY_TAG
         title: "${NIGHTLY_TAG} (${JELLYFIN_VERSION})"
-        # RELEASE_BODY 由「生成更新内容」阶段导出（单行、<br> 分隔的提交列表）
-        description: "## Jellyfin Android with MPV (Libre) 自动构建<br><br>- 版本号：`${JELLYFIN_VERSION}`<br>- 构建编号：`${CNB_BUILD_ID}`<br>- 提交：`${CNB_COMMIT}`<br><br>${RELEASE_BODY}"
+        # 更新内容由「生成更新内容」阶段写入 RELEASE_NOTES.md（标准多行 Markdown）
+        descriptionFromFile: RELEASE_NOTES.md
         latest: true
 
     # 附件插件需在单个 Job 默认超时（60s）内完成；大体积 APK 上传易超时，显式放宽到 10 分钟。
@@ -333,8 +343,8 @@
       type: git:release
       options:
         title: $CNB_BRANCH
-        # RELEASE_BODY 由「生成更新内容」阶段导出（单行、<br> 分隔的提交列表）
-        description: "## Jellyfin Android with MPV $CNB_BRANCH<br><br>${RELEASE_BODY}"
+        # 更新内容由「生成更新内容」阶段写入 RELEASE_NOTES.md（标准多行 Markdown）
+        descriptionFromFile: RELEASE_NOTES.md
         latest: true
 
     # 附件插件需在单个 Job 默认超时（60s）内完成；多个 APK/AAB 上传易超时，显式放宽到 10 分钟。

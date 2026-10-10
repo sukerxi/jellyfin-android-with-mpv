@@ -1,7 +1,6 @@
 package org.jellyfin.mobile.update
 
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -24,18 +23,55 @@ private val json = Json { ignoreUnknownKeys = true }
 
 private const val REPO = "sukerxi/jellyfin-android-with-mpv"
 
+private val VERSION_IN_NAME = Regex("""\(([^)]+)\)""")
+
+/**
+ * GitHub 与 CNB 的 release JSON 结构一致，统一解析：
+ * - `name` 形如 `3.0.0-49 (3.0.0-c7a636a4)`，括号内为 versionName，解析失败回退 `tag_name`；
+ * - APK 取 assets 中第一个 `.apk` 文件；
+ * - `body` 为更新说明（markdown 文本）。
+ *
+ * @param normalizeBody 渠道特有的正文预处理（如 CNB 的 `<br>` 换行）
+ */
+private fun parseReleaseJson(
+    payload: String,
+    channel: String,
+    fallbackReleaseUrl: String,
+    normalizeBody: (String) -> String = { it },
+): UpdateInfo? {
+    val release = json.parseToJsonElement(payload).jsonObject
+
+    val name = release["name"]?.jsonPrimitive?.content.orEmpty()
+    val tag = release["tag_name"]?.jsonPrimitive?.content.orEmpty()
+    val versionName = VERSION_IN_NAME.find(name)?.groupValues?.get(1) ?: tag
+    if (versionName.isBlank()) return null
+
+    val apk = release["assets"]?.jsonArray?.firstOrNull { asset ->
+        (asset.jsonObject["name"]?.jsonPrimitive?.content ?: "").endsWith(".apk")
+    }?.jsonObject ?: return null
+
+    val downloadUrl = apk["browser_download_url"]?.jsonPrimitive?.content ?: return null
+    val fileName = apk["name"]?.jsonPrimitive?.content ?: "update.apk"
+
+    return UpdateInfo(
+        versionName = versionName,
+        tag = tag,
+        releaseUrl = release["html_url"]?.jsonPrimitive?.content ?: fallbackReleaseUrl,
+        downloadUrl = downloadUrl,
+        fileName = fileName,
+        changelog = normalizeBody(release["body"]?.jsonPrimitive?.content.orEmpty()),
+        channel = channel,
+    )
+}
+
 /**
  * GitHub Releases API（匿名访问）。
- *
- * `name` 形如 `3.0.0-49 (3.0.0-c7a636a4)`，括号内为 versionName；
- * 解析失败时回退到 `tag_name`。APK 取 assets 中第一个 `.apk` 文件。
  */
 class GitHubReleaseSource(
     private val okHttpClient: OkHttpClient,
 ) : ReleaseSource {
     companion object {
         private const val API_URL = "https://api.github.com/repos/$REPO/releases/latest"
-        private val VERSION_IN_NAME = Regex("""\(([^)]+)\)""")
     }
 
     override suspend fun fetchLatest(): UpdateInfo? {
@@ -47,100 +83,46 @@ class GitHubReleaseSource(
         okHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("GitHub API returned ${response.code}")
             val body = response.body?.string() ?: throw IOException("Empty GitHub API response")
-            val release = json.parseToJsonElement(body).jsonObject
-
-            val name = release["name"]?.jsonPrimitive?.content.orEmpty()
-            val tag = release["tag_name"]?.jsonPrimitive?.content.orEmpty()
-            val versionName = VERSION_IN_NAME.find(name)?.groupValues?.get(1) ?: tag
-            if (versionName.isBlank()) return null
-
-            val apk = release["assets"]?.jsonArray?.firstOrNull { asset ->
-                (asset.jsonObject["name"]?.jsonPrimitive?.content ?: "").endsWith(".apk")
-            }?.jsonObject ?: return null
-
-            val downloadUrl = apk["browser_download_url"]?.jsonPrimitive?.content ?: return null
-            val fileName = apk["name"]?.jsonPrimitive?.content ?: "update.apk"
-
-            return UpdateInfo(
-                versionName = versionName,
-                tag = tag,
-                releaseUrl = release["html_url"]?.jsonPrimitive?.content ?: "https://github.com/$REPO/releases/latest",
-                downloadUrl = downloadUrl,
-                fileName = fileName,
-                changelog = release["body"]?.jsonPrimitive?.content.orEmpty(),
+            return parseReleaseJson(
+                payload = body,
                 channel = UpdateChannel.GITHUB,
+                fallbackReleaseUrl = "https://github.com/$REPO/releases/latest",
             )
         }
     }
 }
 
 /**
- * CNB 发布页（REST API 需鉴权，故解析网页）。
+ * CNB 发布接口（匿名 JSON，返回结构与 GitHub Releases 完全一致）。
  *
- * `/-/releases/latest` 会 307 重定向到 `/-/releases/tag/<tag>`，
- * OkHttp 自动跟随后从最终 URL 提取 tag；页面内嵌 JSON 中的
- * `jellyfin-android-v<versionName>-libre-release.apk` 文件名用于推导
- * versionName，下载地址按固定模板拼接。
+ * 同一个 `/-/releases/latest` 地址按 Accept 头区分响应：
+ * 浏览器默认返回 HTML 页面；带上 `Accept: application/json` 则直接返回 JSON。
+ *
+ * 唯一差异：CNB 的 body 用 `<br>` 而非换行，解析时统一转成换行符，
+ * 使后续 markdown 处理与 GitHub 渠道一致。
  */
 class CnbReleaseSource(
     private val okHttpClient: OkHttpClient,
 ) : ReleaseSource {
     companion object {
-        private const val BASE_URL = "https://cnb.cool/$REPO"
-        private const val LATEST_URL = "$BASE_URL/-/releases/latest"
-        private val APK_NAME = Regex("""jellyfin-android-v([0-9A-Za-z.\-]+?)-libre-release\.apk""")
+        private const val LATEST_URL = "https://cnb.cool/$REPO/-/releases/latest"
+        private val BR_TAG = Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE)
     }
 
     override suspend fun fetchLatest(): UpdateInfo? {
         val request = Request.Builder()
             .url(LATEST_URL)
-            .header("User-Agent", "Mozilla/5.0")
+            .header("Accept", "application/json")
             .build()
 
         okHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("CNB returned ${response.code}")
-            val html = response.body?.string() ?: throw IOException("Empty CNB response")
-
-            // 从最终重定向地址中提取 tag
-            val finalUrl = response.request.url.toString()
-            val tag = finalUrl.substringAfterLast("/tag/", "").ifBlank {
-                Regex("""/releases/tag/([^\s"'<>]+)""").find(html)?.groupValues?.get(1).orEmpty()
-            }
-            if (tag.isBlank()) return null
-
-            val match = APK_NAME.find(html) ?: return null
-            val versionName = match.groupValues[1]
-            val fileName = match.value
-
-            // 更新说明在 release 的 "body" 字段（页面内嵌 JSON），
-            // 注意不要误抓 "description"（那是 CNB 页面 AI 模型的描述文案）。
-            // body 内含 \u003c 等 JSON 转义，先整体解码再剥离标签。
-            val changelog = Regex("\"body\":\"((?:[^\"\\\\]|\\\\.)*)\"")
-                .find(html)
-                ?.groupValues
-                ?.get(1)
-                ?.let { escaped ->
-                    val decoded = try {
-                        json.parseToJsonElement("\"$escaped\"").jsonPrimitive.content
-                    } catch (_: Exception) {
-                        escaped
-                    }
-                    decoded
-                        .replace(Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE), "\n")
-                        .let { text -> Regex("""</?[^>]+>""").replace(text, "") }
-                        .replace("`", "")
-                        .trim()
-                }
-                .orEmpty()
-
-            return UpdateInfo(
-                versionName = versionName,
-                tag = tag,
-                releaseUrl = "$BASE_URL/-/releases/tag/$tag",
-                downloadUrl = "$BASE_URL/-/releases/download/$tag/$fileName",
-                fileName = fileName,
-                changelog = changelog,
+            val body = response.body?.string() ?: throw IOException("Empty CNB response")
+            return parseReleaseJson(
+                payload = body,
                 channel = UpdateChannel.CNB,
+                fallbackReleaseUrl = LATEST_URL,
+                normalizeBody = { BR_TAG.replace(it, "\n") },
             )
         }
     }
