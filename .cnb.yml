@@ -139,7 +139,12 @@
     # 相邻 Release 的更新内容因此雷同。改为按 Tag 创建时间倒序枚举，取第一个
     # 「指向 HEAD 祖先提交」且不指向 HEAD 自身的 Tag（用 peel 后的提交 SHA 判断，
     # 与 Tag 内部名字无关；同时兼容 tag_push / 失败重试场景）。
+    # 注意：CNB 的 script 用 /bin/sh（dash）执行，不能用进程替换 < <(...) 等 bash 语法；
+    # 用临时文件做 while 输入重定向（管道会使 while 在子 shell 中运行、PREV_TAG 丢失）。
     HEAD_SHA="$(git rev-parse HEAD)"
+    TAGS_LIST="$(mktemp)"
+    git for-each-ref --sort=-creatordate \
+      --format='%(refname:strip=2) %(objecttype)' refs/tags > "$TAGS_LIST"
     PREV_TAG=""
     while read -r name type; do
       case "$name" in
@@ -156,8 +161,8 @@
         PREV_TAG="$name"
         break
       fi
-    done < <(git for-each-ref --sort=-creatordate \
-             --format='%(refname:strip=2) %(objecttype)' refs/tags)
+    done < "$TAGS_LIST"
+    rm -f "$TAGS_LIST"
 
     # 不使用 --no-merges：GitHub 同步会产生 merge commit，过滤后可能整段区间为空。
     COMMITS=""
