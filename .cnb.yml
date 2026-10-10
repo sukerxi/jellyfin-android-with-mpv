@@ -15,7 +15,6 @@
 # Nightly 发版（对应 release.yml）:
 #   每次推送到 master：版本号 3.0.0-<提交短哈希>，自动创建唯一 tag
 #   3.0.0-<CNB 构建号> 与 CNB Release，并上传 libre release APK + version.txt 作为附件。
-#   与 GitHub 版差异：直接构建当前仓库（GitHub 版跨仓库 checkout sukerxi/jellyfin-android）。
 #
 # 正式发版（对应 app-publish.yaml）:
 #   推送 vX.Y.Z 形式的 tag 即自动构建全部 APK/AAB，创建同名 CNB Release 并上传附件。
