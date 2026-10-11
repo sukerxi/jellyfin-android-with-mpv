@@ -231,6 +231,32 @@ dependencies {
     detektPlugins(libs.detekt.formatting)
 }
 
+// OkHttp 5.x 与 kotlin-logging 7.x 以 Kotlin 多平台（KMP）方式发布，同时提供
+// `-jvm`（JVM JAR）与 `-android`（Android AAR）两套制品，两者类名完全相同。
+//
+// Jellyfin SDK 1.8.x 新增的 `jellyfin-api-okhttp` 只有 JVM 变体（无 Android 变体），
+// 其变体属性为 `org.gradle.jvm.environment=standard-jvm`，因此从它传递下来的
+// `com.squareup.okhttp3:okhttp` 与 `io.github.oshai:kotlin-logging` 会解析到 `-jvm` 制品；
+// 而 coil / media3 / 其他依赖走 Android 变体解析到对应的 `-android` AAR。
+// 两者同时进入 APK 后，AGP 的 checkDuplicateClasses 任务会因 `okhttp3.*` 与
+// `io.github.oshai.kotlinlogging.*` 重复类而失败（见构建 cnb-c3u-1k4l8td40）。
+//
+// 处理：把 `-jvm` 依赖请求改写成其基础模块（在 Android 上会解析到 `-android` 变体），
+// 并显式排除 `-jvm` 制品，确保 APK 中只保留 Android AAR。
+// 注意：`jellyfin-api-okhttp-jvm-*.jar` 本身没有 Android 替代品，仍需保留，不在排除之列。
+configurations.configureEach {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "com.squareup.okhttp3" && requested.name == "okhttp-jvm") {
+            useTarget("${requested.group}:okhttp:${requested.version}")
+        }
+        if (requested.group == "io.github.oshai" && requested.name == "kotlin-logging-jvm") {
+            useTarget("${requested.group}:kotlin-logging:${requested.version}")
+        }
+    }
+    exclude(group = "com.squareup.okhttp3", module = "okhttp-jvm")
+    exclude(group = "io.github.oshai", module = "kotlin-logging-jvm")
+}
+
 tasks {
     withType<Detekt> {
         reports {
