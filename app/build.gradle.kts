@@ -244,6 +244,17 @@ dependencies {
 // 处理：把 `-jvm` 依赖请求改写成其基础模块（在 Android 上会解析到 `-android` 变体），
 // 并显式排除 `-jvm` 制品，确保 APK 中只保留 Android AAR。
 // 注意：`jellyfin-api-okhttp-jvm-*.jar` 本身没有 Android 替代品，仍需保留，不在排除之列。
+//
+// 【重要】排除必须只作用于「打包进 APK 的依赖类路径」，不能对所有 configuration 生效。
+// 曾经写成 `configurations.configureEach { exclude(...) }`，把 `okhttp-jvm` 从 KSP 的
+// 处理类路径里也一并剔除，导致 KSP 解析不到 `jellyfin-api-okhttp` 依赖的 okhttp 类型，
+// 报 `[ksp] [MissingType]: Element 'org.jellyfin.mobile.data.JellyfinDatabase' references
+// a type that is not present` 并中断构建（见构建 cnb-8ic-1k4lc3nu6）。
+// KSP 的处理类路径必须保留完整依赖图，因此排除只作用于依赖类路径，
+// 显式放过注解处理器与构建工具类路径（ksp / kapt / detekt）。
+val toolClasspathPrefixes = listOf("ksp", "kapt", "detekt")
+
+// 请求改写是「换名字」而非「删制品」，对 KSP 类路径无害，保持全局生效。
 configurations.configureEach {
     resolutionStrategy.eachDependency {
         if (requested.group == "com.squareup.okhttp3" && requested.name == "okhttp-jvm") {
@@ -253,9 +264,16 @@ configurations.configureEach {
             useTarget("${requested.group}:kotlin-logging:${requested.version}")
         }
     }
-    exclude(group = "com.squareup.okhttp3", module = "okhttp-jvm")
-    exclude(group = "io.github.oshai", module = "kotlin-logging-jvm")
 }
+
+// 排除 `-jvm` 制品：exclude 会沿 extendsFrom 链传递到真正可解析的编译/运行时类路径
+// （如 libreReleaseCompileClasspath），从而只清理打进 APK 的产物，不影响 KSP。
+configurations
+    .matching { cfg -> toolClasspathPrefixes.none { cfg.name.startsWith(it) } }
+    .configureEach {
+        exclude(group = "com.squareup.okhttp3", module = "okhttp-jvm")
+        exclude(group = "io.github.oshai", module = "kotlin-logging-jvm")
+    }
 
 tasks {
     withType<Detekt> {
