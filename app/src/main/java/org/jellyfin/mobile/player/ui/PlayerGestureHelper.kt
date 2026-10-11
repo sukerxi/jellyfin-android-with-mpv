@@ -27,6 +27,7 @@ import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.min
 
 class PlayerGestureHelper(
     private val fragment: PlayerFragment,
@@ -140,15 +141,26 @@ class PlayerGestureHelper(
             override fun onDoubleTap(e: MotionEvent): Boolean {
                 val viewWidth = playerView.measuredWidth
                 val viewHeight = playerView.measuredHeight
-                val viewCenterX = viewWidth / 2
                 val viewCenterY = viewHeight / 2
-                val isFastForward = e.x.toInt() > viewCenterX
 
                 // Show ripple effect
                 playerBinding.seekRippleOverlay.foreground?.apply {
-                    val left = if (isFastForward) viewCenterX else 0
-                    val right = if (isFastForward) viewWidth else viewCenterX
-                    setBounds(left, viewCenterY - viewCenterX / 2, right, viewCenterY + viewCenterX / 2)
+                    if (appPreferences.exoPlayerDoubleTapPause) {
+                        // Center the ripple on the tap location for the pause action
+                        val radius = minOf(viewWidth, viewHeight) / 4
+                        setBounds(
+                            (e.x - radius).toInt(),
+                            (e.y - radius).toInt(),
+                            (e.x + radius).toInt(),
+                            (e.y + radius).toInt(),
+                        )
+                    } else {
+                        val viewCenterX = viewWidth / 2
+                        val isFastForward = e.x.toInt() > viewCenterX
+                        val left = if (isFastForward) viewCenterX else 0
+                        val right = if (isFastForward) viewWidth else viewCenterX
+                        setBounds(left, viewCenterY - viewCenterX / 2, right, viewCenterY + viewCenterX / 2)
+                    }
                     setHotspot(e.x, e.y)
                     state = intArrayOf(android.R.attr.state_enabled, android.R.attr.state_pressed)
                     playerView.postDelayed(Constants.DOUBLE_TAP_RIPPLE_DURATION_MS) {
@@ -156,8 +168,15 @@ class PlayerGestureHelper(
                     }
                 }
 
-                // Fast-forward/rewind
-                with(fragment) { if (isFastForward) onFastForward() else onRewind() }
+                if (appPreferences.exoPlayerDoubleTapPause) {
+                    // Toggle play/pause instead of seeking
+                    with(fragment) { onTogglePlayPause() }
+                } else {
+                    // Fast-forward/rewind
+                    val viewCenterX = viewWidth / 2
+                    val isFastForward = e.x.toInt() > viewCenterX
+                    with(fragment) { if (isFastForward) onFastForward() else onRewind() }
+                }
 
                 // Cancel previous runnable to not hide controller while seeking
                 playerView.removeCallbacks(hidePlayerViewControllerAction)

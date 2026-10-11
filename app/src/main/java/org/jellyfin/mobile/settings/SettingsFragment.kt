@@ -67,6 +67,7 @@ class SettingsFragment : Fragment(), BackPressInterceptor {
     private lateinit var startLandscapeVideoInLandscapePreference: CheckBoxPreference
     private lateinit var swipeGesturesPreference: CheckBoxPreference
     private lateinit var pressSpeedUpPreference: CheckBoxPreference
+    private lateinit var doubleTapPausePreference: CheckBoxPreference
     private lateinit var rememberBrightnessPreference: Preference
     private lateinit var backgroundAudioPreference: Preference
     private lateinit var horizontalGesturePreference: Preference
@@ -164,6 +165,7 @@ class SettingsFragment : Fragment(), BackPressInterceptor {
                 swipeGesturesPreference.enabled = selection == VideoPlayerType.EXO_PLAYER
                 rememberBrightnessPreference.enabled = selection == VideoPlayerType.EXO_PLAYER && swipeGesturesPreference.checked
                 pressSpeedUpPreference.enabled = selection == VideoPlayerType.EXO_PLAYER
+                doubleTapPausePreference.enabled = selection == VideoPlayerType.EXO_PLAYER
                 backgroundAudioPreference.enabled = selection == VideoPlayerType.EXO_PLAYER
                 horizontalGesturePreference.enabled = selection == VideoPlayerType.EXO_PLAYER
                 directPlayAssPreference.enabled = selection == VideoPlayerType.EXO_PLAYER
@@ -207,6 +209,11 @@ class SettingsFragment : Fragment(), BackPressInterceptor {
             summaryRes = R.string.pref_exoplayer_allow_horizontal_gesture_summary
             enabled = appPreferences.videoPlayerType == VideoPlayerType.EXO_PLAYER
             defaultValue = true
+        }
+        doubleTapPausePreference = checkBox(Constants.PREF_EXOPLAYER_DOUBLE_TAP_PAUSE) {
+            titleRes = R.string.pref_exoplayer_double_tap_pause
+            summaryRes = R.string.pref_exoplayer_double_tap_pause_summary
+            enabled = appPreferences.videoPlayerType == VideoPlayerType.EXO_PLAYER
         }
         directPlayAssPreference = checkBox(Constants.PREF_EXOPLAYER_DIRECT_PLAY_ASS) {
             titleRes = R.string.pref_exoplayer_direct_play_ass

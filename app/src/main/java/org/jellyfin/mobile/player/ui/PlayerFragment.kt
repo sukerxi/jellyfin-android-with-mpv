@@ -314,6 +314,12 @@ class PlayerFragment : Fragment(), BackPressInterceptor {
 
     fun onFastForward() = viewModel.fastForward()
 
+    fun onTogglePlayPause() {
+        viewModel.playerOrNull?.let { player ->
+            if (player.isPlaying) player.pause() else player.play()
+        }
+    }
+
     fun onSeekTo(positionMs: Long) = viewModel.seekTo(positionMs)
 
     fun onPreviousChapter() = viewModel.previousChapter()

@@ -198,6 +198,8 @@
     <string name="download_incomplete">下载未完成</string>
     <string name="pref_exoplayer_allow_horizontal_gesture">水平手势</string>
     <string name="pref_exoplayer_allow_horizontal_gesture_summary">允许使用水平手势控制视频跳转</string>
+    <string name="pref_exoplayer_double_tap_pause">双击暂停</string>
+    <string name="pref_exoplayer_double_tap_pause_summary">双击屏幕任意位置切换播放/暂停，而不是快进/快退</string>
     <string name="downloads_empty">暂无下载</string>
     <string name="downloads_empty_description">您可以下载电影和电视剧以便离线观看。在项目详情页面上寻找下载图标即可。</string>
     <plurals name="download_remove_title">
