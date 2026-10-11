@@ -8,9 +8,6 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Surface
 import dev.jdtech.mpv.MPVLib
-import dev.jdtech.mpv.MPVLib.MPV_FORMAT_DOUBLE
-import dev.jdtech.mpv.MPVLib.MPV_FORMAT_FLAG
-import dev.jdtech.mpv.MPVLib.MPV_FORMAT_NONE
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -181,6 +178,12 @@ object MpvAssetInstaller {
 class MpvCore private constructor(context: Application) {
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    /**
+     * Native mpv instance. libmpv-android 1.0.0 replaced the static MPVLib API with
+     * multi-instance support, so every call goes through this handle.
+     */
+    private val mpv: MPVLib
+
     private fun postEvent(event: MpvEvent) {
         mainHandler.post {
             for (listener in eventListeners) listener(event)
@@ -214,11 +217,11 @@ class MpvCore private constructor(context: Application) {
 
         override fun event(eventId: Int) {
             val event = when (eventId) {
-                MPVLib.MPV_EVENT_START_FILE -> MpvEvent.StartFile
-                MPVLib.MPV_EVENT_FILE_LOADED -> MpvEvent.FileLoaded
-                MPVLib.MPV_EVENT_END_FILE -> MpvEvent.EndFile
-                MPVLib.MPV_EVENT_PLAYBACK_RESTART -> MpvEvent.PlaybackRestart
-                MPVLib.MPV_EVENT_SEEK -> MpvEvent.Seek
+                MPVLib.MpvEvent.MPV_EVENT_START_FILE -> MpvEvent.StartFile
+                MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> MpvEvent.FileLoaded
+                MPVLib.MpvEvent.MPV_EVENT_END_FILE -> MpvEvent.EndFile
+                MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> MpvEvent.PlaybackRestart
+                MPVLib.MpvEvent.MPV_EVENT_SEEK -> MpvEvent.Seek
                 else -> return
             }
             postEvent(event)
@@ -238,34 +241,45 @@ class MpvCore private constructor(context: Application) {
             }
         }
 
+        /**
+         * Since libmpv-android 1.0.0 [MPVLib] is a multi-instance class. The singleton
+         * [MpvCore] owns the only instance, which these static-style helpers delegate to,
+         * keeping the call sites unchanged.
+         */
+        @PublishedApi
+        internal val mpvLib: MPVLib
+            get() = INSTANCE?.mpv ?: error("MpvCore is not initialized")
+
         inline fun <reified T> getProperty(name: String): T? {
+            val mpv = mpvLib
             return when (T::class) {
-                String::class -> MPVLib.getPropertyString(name) as T?
-                Int::class -> MPVLib.getPropertyInt(name) as T?
-                Long::class -> MPVLib.getPropertyInt(name)?.toLong() as T?
-                Float::class -> MPVLib.getPropertyDouble(name)?.toFloat() as T?
-                Double::class -> MPVLib.getPropertyDouble(name) as T?
-                Boolean::class -> MPVLib.getPropertyBoolean(name) as T?
+                String::class -> mpv.getPropertyString(name) as T?
+                Int::class -> mpv.getPropertyInt(name) as T?
+                Long::class -> mpv.getPropertyInt(name)?.toLong() as T?
+                Float::class -> mpv.getPropertyDouble(name)?.toFloat() as T?
+                Double::class -> mpv.getPropertyDouble(name) as T?
+                Boolean::class -> mpv.getPropertyBoolean(name) as T?
                 else -> throw IllegalArgumentException("Unsupported property type: ${T::class}")
             }
         }
 
         fun command(cmd: Array<String>) {
-            MPVLib.command(cmd)
+            mpvLib.command(cmd)
         }
 
         fun setOptions(name: String, value: String) {
-            MPVLib.setOptionString(name, value)
+            mpvLib.setOptionString(name, value)
         }
 
         fun setProperty(name: String, value: Any) {
+            val mpv = mpvLib
             when (value) {
-                is String -> MPVLib.setPropertyString(name, value)
-                is Int -> MPVLib.setPropertyInt(name, value)
-                is Double -> MPVLib.setPropertyDouble(name, value)
-                is Boolean -> MPVLib.setPropertyBoolean(name, value)
-                is Float -> MPVLib.setPropertyDouble(name, value.toDouble())
-                is Long -> MPVLib.setPropertyInt(name, value.toInt())
+                is String -> mpv.setPropertyString(name, value)
+                is Int -> mpv.setPropertyInt(name, value)
+                is Double -> mpv.setPropertyDouble(name, value)
+                is Boolean -> mpv.setPropertyBoolean(name, value)
+                is Float -> mpv.setPropertyDouble(name, value.toDouble())
+                is Long -> mpv.setPropertyInt(name, value.toInt())
                 else -> throw IllegalArgumentException("Unsupported property type: ${value::class}")
             }
         }
@@ -279,11 +293,11 @@ class MpvCore private constructor(context: Application) {
         }
 
         fun attachSurface(surface: Surface) {
-            MPVLib.attachSurface(surface)
+            mpvLib.attachSurface(surface)
         }
 
         fun detachSurface() {
-            MPVLib.detachSurface()
+            mpvLib.detachSurface()
         }
 
         fun getTracks(): List<MediaTrack> {
@@ -297,7 +311,7 @@ class MpvCore private constructor(context: Application) {
         MpvAssetInstaller.awaitInstalled(context)
         // Publish the user-provided mpv.conf so that mpv picks it up during init().
         MpvConfigManager.syncConfigFile(context, AppPreferences(context).mpvCustomConfig)
-        MPVLib.create(context)
+        mpv = MPVLib.create(context) ?: error("Failed to create native mpv instance")
         // Limit demuxer cache since the defaults are too high for mobile devices
         val cacheMegs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) 64 else 32
         val cacheBytes = "${cacheMegs * 1024 * 1024}"
@@ -322,43 +336,43 @@ class MpvCore private constructor(context: Application) {
             // to (or past) the end unloads the file and playback can no longer be revived by
             // seeking back, and natural EOF is indistinguishable from an overshooting seek.
             "keep-open" to "yes",
-        ).forEach { (name, value) -> MPVLib.setOptionString(name, value) }
-        MPVLib.init()
+        ).forEach { (name, value) -> mpv.setOptionString(name, value) }
+        mpv.init()
 
-//        MPVLib.setOptionString("idle", "once")
-        // MPVLib.setOptionString("force-window", "yes")
+//        mpv.setOptionString("idle", "once")
+        // mpv.setOptionString("force-window", "yes")
         observeProperties()
-        MPVLib.addObserver(mpvLibEventObserver)
+        mpv.addObserver(mpvLibEventObserver)
     }
 
     private fun observeProperties() {
         // This observes all properties needed by MpvPlayer or other classes
-        data class Property(val name: String, val format: Int = MPV_FORMAT_NONE)
+        data class Property(val name: String, val format: Int = MPVLib.MpvFormat.MPV_FORMAT_NONE)
         val properties = arrayOf(
-            Property("paused-for-cache", MPV_FORMAT_FLAG),
+            Property("paused-for-cache", MPVLib.MpvFormat.MPV_FORMAT_FLAG),
             Property("hwdec-current"),
-            Property("eof-reached", MPV_FORMAT_FLAG),
-            Property("duration", MPV_FORMAT_DOUBLE),
-            // Property("time-pos/full", MPV_FORMAT_INT64),
-            // Property("duration/full", MPV_FORMAT_INT64),
-            // Property("pause", MPV_FORMAT_FLAG),
-            // Property("speed", MPV_FORMAT_STRING),
+            Property("eof-reached", MPVLib.MpvFormat.MPV_FORMAT_FLAG),
+            Property("duration", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE),
+            // Property("time-pos/full", MPVLib.MpvFormat.MPV_FORMAT_INT64),
+            // Property("duration/full", MPVLib.MpvFormat.MPV_FORMAT_INT64),
+            // Property("pause", MPVLib.MpvFormat.MPV_FORMAT_FLAG),
+            // Property("speed", MPVLib.MpvFormat.MPV_FORMAT_STRING),
             Property("track-list"),
-            // Property("video-params/aspect", MPV_FORMAT_DOUBLE),
-            // Property("video-params/rotate", MPV_FORMAT_DOUBLE),
-            // Property("playlist-pos", MPV_FORMAT_INT64),
-            // Property("playlist-count", MPV_FORMAT_INT64),
+            // Property("video-params/aspect", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE),
+            // Property("video-params/rotate", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE),
+            // Property("playlist-pos", MPVLib.MpvFormat.MPV_FORMAT_INT64),
+            // Property("playlist-count", MPVLib.MpvFormat.MPV_FORMAT_INT64),
             // Property("current-tracks/video/image"),
-            // Property("media-title", MPV_FORMAT_STRING),
+            // Property("media-title", MPVLib.MpvFormat.MPV_FORMAT_STRING),
             // Property("metadata"),
             // Property("loop-playlist"),
             // Property("loop-file"),
-            // Property("shuffle", MPV_FORMAT_FLAG),
-            // Property("mute", MPV_FORMAT_FLAG),
+            // Property("shuffle", MPVLib.MpvFormat.MPV_FORMAT_FLAG),
+            // Property("mute", MPVLib.MpvFormat.MPV_FORMAT_FLAG),
             // Property("current-tracks/audio/selected"),
         )
         for ((name, format) in properties) {
-            MPVLib.observeProperty(name, format)
+            mpv.observeProperty(name, format)
         }
     }
 

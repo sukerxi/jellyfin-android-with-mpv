@@ -116,6 +116,26 @@
                 tools:progress="30" />
         </LinearLayout>
 
+        <FrameLayout
+            android:id="@+id/double_tap_toggle_overlay"
+            android:layout_width="96dp"
+            android:layout_height="96dp"
+            android:background="@drawable/double_tap_toggle_background"
+            android:clickable="false"
+            android:focusable="false"
+            android:importantForAccessibility="no"
+            android:visibility="gone"
+            tools:visibility="visible">
+
+            <androidx.appcompat.widget.AppCompatImageView
+                android:id="@+id/double_tap_toggle_icon"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:layout_gravity="center"
+                app:tint="@android:color/white"
+                tools:srcCompat="@drawable/ic_play_black_42dp" />
+        </FrameLayout>
+
         <ProgressBar
             android:id="@+id/loading_indicator"
             android:layout_width="64dp"

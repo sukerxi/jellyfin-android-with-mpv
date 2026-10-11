@@ -11,6 +11,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.RecyclerView
 import de.Maxr1998.modernpreferences.Preference
 import de.Maxr1998.modernpreferences.PreferencesAdapter
 import de.Maxr1998.modernpreferences.helpers.categoryHeader
@@ -63,17 +64,8 @@ class SettingsFragment : Fragment(), BackPressInterceptor {
         }
     }
 
-    private val settingsAdapter: PreferencesAdapter by lazy { PreferencesAdapter(buildSettingsScreen()) }
-    private lateinit var startLandscapeVideoInLandscapePreference: CheckBoxPreference
-    private lateinit var swipeGesturesPreference: CheckBoxPreference
-    private lateinit var pressSpeedUpPreference: CheckBoxPreference
-    private lateinit var doubleTapPausePreference: CheckBoxPreference
-    private lateinit var rememberBrightnessPreference: Preference
-    private lateinit var backgroundAudioPreference: Preference
-    private lateinit var horizontalGesturePreference: Preference
-    private lateinit var directPlayAssPreference: Preference
-    private lateinit var networkBufferPreference: Preference
-    private lateinit var externalPlayerChoicePreference: Preference
+    private lateinit var settingsAdapter: PreferencesAdapter
+    private var settingsRecyclerView: RecyclerView? = null
     private lateinit var downloadLocationPreference: Preference
     private lateinit var mpvConfigPreference: Preference
 
@@ -103,12 +95,27 @@ class SettingsFragment : Fragment(), BackPressInterceptor {
             setSupportActionBar(binding.toolbar)
             supportActionBar?.setDisplayHomeAsUpEnabled(true)
         }
-        binding.recyclerView.adapter = settingsAdapter
+        binding.recyclerView.adapter = PreferencesAdapter(buildSettingsScreen()).also { settingsAdapter = it }
+        settingsRecyclerView = binding.recyclerView
         return binding.root
     }
 
     override fun onInterceptBackPressed(): Boolean {
         return settingsAdapter.goBack()
+    }
+
+    /**
+     * Rebuilds the whole settings screen so that only options applicable to the currently
+     * selected video player are shown. The preference library only supports enabled/disabled
+     * states, so visibility is realized by rebuilding the root screen.
+     */
+    private fun rebuildForPlayerTypeChange() {
+        settingsAdapter.setRootScreen(buildSettingsScreen())
+        // Keep the player type selector in view instead of jumping back to the top
+        val playerTypeIndex = settingsAdapter.currentScreen.indexOf(Constants.PREF_VIDEO_PLAYER_TYPE)
+        settingsRecyclerView?.post {
+            if (playerTypeIndex >= 0) settingsRecyclerView?.scrollToPosition(playerTypeIndex)
+        }
     }
 
     private fun mpvConfigSummary(): String {
@@ -122,6 +129,7 @@ class SettingsFragment : Fragment(), BackPressInterceptor {
 
     override fun onDestroyView() {
         super.onDestroyView()
+        settingsRecyclerView = null
         requireMainActivity().setSupportActionBar(null)
     }
 
@@ -160,96 +168,96 @@ class SettingsFragment : Fragment(), BackPressInterceptor {
         singleChoice(Constants.PREF_VIDEO_PLAYER_TYPE, videoPlayerOptions) {
             titleRes = R.string.pref_video_player_type_title
             initialSelection = VideoPlayerType.EXO_PLAYER
-            defaultOnSelectionChange { selection ->
-                startLandscapeVideoInLandscapePreference.enabled = selection == VideoPlayerType.EXO_PLAYER
-                swipeGesturesPreference.enabled = selection == VideoPlayerType.EXO_PLAYER
-                rememberBrightnessPreference.enabled = selection == VideoPlayerType.EXO_PLAYER && swipeGesturesPreference.checked
-                pressSpeedUpPreference.enabled = selection == VideoPlayerType.EXO_PLAYER
-                doubleTapPausePreference.enabled = selection == VideoPlayerType.EXO_PLAYER
-                backgroundAudioPreference.enabled = selection == VideoPlayerType.EXO_PLAYER
-                horizontalGesturePreference.enabled = selection == VideoPlayerType.EXO_PLAYER
-                directPlayAssPreference.enabled = selection == VideoPlayerType.EXO_PLAYER
-                networkBufferPreference.enabled = selection == VideoPlayerType.EXO_PLAYER
-                externalPlayerChoicePreference.enabled = selection == VideoPlayerType.EXTERNAL_PLAYER
-                mpvConfigPreference.enabled = selection == VideoPlayerType.MPV_PLAYER
+            defaultOnSelectionChange {
+                // The new selection is persisted right after this callback returns,
+                // so defer the screen rebuild until after the value was saved
+                settingsRecyclerView?.post { rebuildForPlayerTypeChange() }
             }
-        }
-        startLandscapeVideoInLandscapePreference = checkBox(Constants.PREF_EXOPLAYER_START_LANDSCAPE_VIDEO_IN_LANDSCAPE) {
-            titleRes = R.string.pref_exoplayer_start_landscape_video_in_landscape
-            enabled = appPreferences.videoPlayerType == VideoPlayerType.EXO_PLAYER
-        }
-        swipeGesturesPreference = checkBox(Constants.PREF_EXOPLAYER_ALLOW_SWIPE_GESTURES) {
-            titleRes = R.string.pref_exoplayer_allow_brightness_volume_gesture
-            enabled = appPreferences.videoPlayerType == VideoPlayerType.EXO_PLAYER
-            defaultValue = true
-            defaultOnCheckedChange { checked ->
-                rememberBrightnessPreference.enabled = checked
-            }
-        }
-        rememberBrightnessPreference = checkBox(Constants.PREF_EXOPLAYER_REMEMBER_BRIGHTNESS) {
-            titleRes = R.string.pref_exoplayer_remember_brightness
-            enabled = appPreferences.videoPlayerType == VideoPlayerType.EXO_PLAYER && appPreferences.exoPlayerAllowSwipeGestures
-            defaultOnCheckedChange { checked ->
-                if (!checked) appPreferences.exoPlayerBrightness = BRIGHTNESS_OVERRIDE_NONE
-            }
-        }
-        pressSpeedUpPreference = checkBox(Constants.PREF_EXOPLAYER_ALLOW_PRESS_SPEED_UP) {
-            titleRes = R.string.pref_exoplayer_allow_press_speed_up
-            summaryRes = R.string.pref_exoplayer_allow_press_speed_up_summary
-            enabled = appPreferences.videoPlayerType == VideoPlayerType.EXO_PLAYER
-            defaultValue = true
-        }
-        backgroundAudioPreference = checkBox(Constants.PREF_EXOPLAYER_ALLOW_BACKGROUND_AUDIO) {
-            titleRes = R.string.pref_exoplayer_allow_background_audio
-            summaryRes = R.string.pref_exoplayer_allow_background_audio_summary
-            enabled = appPreferences.videoPlayerType == VideoPlayerType.EXO_PLAYER
-        }
-        horizontalGesturePreference = checkBox(Constants.PREF_EXOPLAYER_ALLOW_HORIZONTAL_GESTURE) {
-            titleRes = R.string.pref_exoplayer_allow_horizontal_gesture
-            summaryRes = R.string.pref_exoplayer_allow_horizontal_gesture_summary
-            enabled = appPreferences.videoPlayerType == VideoPlayerType.EXO_PLAYER
-            defaultValue = true
-        }
-        doubleTapPausePreference = checkBox(Constants.PREF_EXOPLAYER_DOUBLE_TAP_PAUSE) {
-            titleRes = R.string.pref_exoplayer_double_tap_pause
-            summaryRes = R.string.pref_exoplayer_double_tap_pause_summary
-            enabled = appPreferences.videoPlayerType == VideoPlayerType.EXO_PLAYER
-        }
-        directPlayAssPreference = checkBox(Constants.PREF_EXOPLAYER_DIRECT_PLAY_ASS) {
-            titleRes = R.string.pref_exoplayer_direct_play_ass
-            summaryRes = R.string.pref_exoplayer_direct_play_ass_description
-            enabled = appPreferences.videoPlayerType == VideoPlayerType.EXO_PLAYER
-        }
-        val networkBufferOptions = listOf(
-            SelectionItem(
-                Constants.NETWORK_BUFFER_AUTO,
-                R.string.network_buffer_auto,
-                R.string.network_buffer_auto_description,
-            ),
-            SelectionItem(
-                Constants.NETWORK_BUFFER_LARGE,
-                R.string.network_buffer_large,
-                R.string.network_buffer_large_description,
-            ),
-            SelectionItem(
-                Constants.NETWORK_BUFFER_EXTRA_LARGE,
-                R.string.network_buffer_extra_large,
-                R.string.network_buffer_extra_large_description,
-            ),
-        )
-        networkBufferPreference = singleChoice(Constants.PREF_EXOPLAYER_NETWORK_BUFFER, networkBufferOptions) {
-            titleRes = R.string.pref_exoplayer_network_buffer
-            initialSelection = Constants.NETWORK_BUFFER_AUTO
-            enabled = appPreferences.videoPlayerType == VideoPlayerType.EXO_PLAYER
         }
 
-        mpvConfigPreference = pref(Constants.PREF_MPV_CUSTOM_CONFIG) {
-            titleRes = R.string.pref_mpv_custom_config
-            summary = mpvConfigSummary()
-            enabled = appPreferences.videoPlayerType == VideoPlayerType.MPV_PLAYER
-            defaultOnClick {
-                parentFragmentManager.addFragment<MpvConfigEditorFragment>()
+        val playerType = appPreferences.videoPlayerType
+        val isIntegratedPlayer = playerType == VideoPlayerType.EXO_PLAYER || playerType == VideoPlayerType.MPV_PLAYER
+
+        // Gestures, background audio and orientation handling run against the shared media3
+        // Player interface, so these options apply to both integrated players
+        if (isIntegratedPlayer) {
+            checkBox(Constants.PREF_EXOPLAYER_START_LANDSCAPE_VIDEO_IN_LANDSCAPE) {
+                titleRes = R.string.pref_exoplayer_start_landscape_video_in_landscape
             }
+            var rememberBrightnessPreference: CheckBoxPreference? = null
+            checkBox(Constants.PREF_EXOPLAYER_ALLOW_SWIPE_GESTURES) {
+                titleRes = R.string.pref_exoplayer_allow_brightness_volume_gesture
+                defaultValue = true
+                defaultOnCheckedChange { checked ->
+                    rememberBrightnessPreference?.enabled = checked
+                }
+            }
+            rememberBrightnessPreference = checkBox(Constants.PREF_EXOPLAYER_REMEMBER_BRIGHTNESS) {
+                titleRes = R.string.pref_exoplayer_remember_brightness
+                enabled = appPreferences.exoPlayerAllowSwipeGestures
+                defaultOnCheckedChange { checked ->
+                    if (!checked) appPreferences.exoPlayerBrightness = BRIGHTNESS_OVERRIDE_NONE
+                }
+            }
+            checkBox(Constants.PREF_EXOPLAYER_ALLOW_PRESS_SPEED_UP) {
+                titleRes = R.string.pref_exoplayer_allow_press_speed_up
+                summaryRes = R.string.pref_exoplayer_allow_press_speed_up_summary
+                defaultValue = true
+            }
+            checkBox(Constants.PREF_EXOPLAYER_ALLOW_BACKGROUND_AUDIO) {
+                titleRes = R.string.pref_exoplayer_allow_background_audio
+                summaryRes = R.string.pref_exoplayer_allow_background_audio_summary
+            }
+            checkBox(Constants.PREF_EXOPLAYER_ALLOW_HORIZONTAL_GESTURE) {
+                titleRes = R.string.pref_exoplayer_allow_horizontal_gesture
+                summaryRes = R.string.pref_exoplayer_allow_horizontal_gesture_summary
+                defaultValue = true
+            }
+            checkBox(Constants.PREF_EXOPLAYER_DOUBLE_TAP_PAUSE) {
+                titleRes = R.string.pref_exoplayer_double_tap_pause
+                summaryRes = R.string.pref_exoplayer_double_tap_pause_summary
+            }
+        }
+
+        // Options that are specific to the selected video player
+        when (playerType) {
+            VideoPlayerType.EXO_PLAYER -> {
+                checkBox(Constants.PREF_EXOPLAYER_DIRECT_PLAY_ASS) {
+                    titleRes = R.string.pref_exoplayer_direct_play_ass
+                    summaryRes = R.string.pref_exoplayer_direct_play_ass_description
+                }
+                val networkBufferOptions = listOf(
+                    SelectionItem(
+                        Constants.NETWORK_BUFFER_AUTO,
+                        R.string.network_buffer_auto,
+                        R.string.network_buffer_auto_description,
+                    ),
+                    SelectionItem(
+                        Constants.NETWORK_BUFFER_LARGE,
+                        R.string.network_buffer_large,
+                        R.string.network_buffer_large_description,
+                    ),
+                    SelectionItem(
+                        Constants.NETWORK_BUFFER_EXTRA_LARGE,
+                        R.string.network_buffer_extra_large,
+                        R.string.network_buffer_extra_large_description,
+                    ),
+                )
+                singleChoice(Constants.PREF_EXOPLAYER_NETWORK_BUFFER, networkBufferOptions) {
+                    titleRes = R.string.pref_exoplayer_network_buffer
+                    initialSelection = Constants.NETWORK_BUFFER_AUTO
+                }
+            }
+            VideoPlayerType.MPV_PLAYER -> {
+                mpvConfigPreference = pref(Constants.PREF_MPV_CUSTOM_CONFIG) {
+                    titleRes = R.string.pref_mpv_custom_config
+                    summary = mpvConfigSummary()
+                    defaultOnClick {
+                        parentFragmentManager.addFragment<MpvConfigEditorFragment>()
+                    }
+                }
+            }
+            else -> Unit
         }
 
         // Generate available external player options
@@ -294,9 +302,10 @@ class SettingsFragment : Fragment(), BackPressInterceptor {
             appPreferences.externalPlayerApp = ExternalPlayerPackage.SYSTEM_DEFAULT
         }
 
-        externalPlayerChoicePreference = singleChoice(Constants.PREF_EXTERNAL_PLAYER_APP, externalPlayerOptions) {
-            titleRes = R.string.external_player_app
-            enabled = appPreferences.videoPlayerType == VideoPlayerType.EXTERNAL_PLAYER
+        if (playerType == VideoPlayerType.EXTERNAL_PLAYER) {
+            singleChoice(Constants.PREF_EXTERNAL_PLAYER_APP, externalPlayerOptions) {
+                titleRes = R.string.external_player_app
+            }
         }
         val subtitleSettingsIntent = Intent(Settings.ACTION_CAPTIONING_SETTINGS)
         if (subtitleSettingsIntent.resolveActivity(requireContext().packageManager) != null) {

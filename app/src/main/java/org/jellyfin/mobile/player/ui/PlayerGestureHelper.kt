@@ -6,6 +6,8 @@ import android.provider.Settings
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
+import android.view.animation.DecelerateInterpolator
+import android.widget.FrameLayout
 import android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_FULL
 import android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_OFF
 import android.widget.ImageView
@@ -27,7 +29,8 @@ import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import java.util.Locale
 import kotlin.math.abs
-import kotlin.math.min
+
+private const val TOGGLE_OVERLAY_START_SCALE = 0.7f
 
 class PlayerGestureHelper(
     private val fragment: PlayerFragment,
@@ -46,6 +49,8 @@ class PlayerGestureHelper(
     private val seekOverlayText: TextView by playerBinding::seekOverlayText
     private val seekPositionText: TextView by playerBinding::seekPositionText
     private val seekOverlayProgress: ProgressBar by playerBinding::seekOverlayProgress
+    private val doubleTapToggleOverlay: FrameLayout by playerBinding::doubleTapToggleOverlay
+    private val doubleTapToggleIcon: ImageView by playerBinding::doubleTapToggleIcon
     private var isOnPressingSpeedUp = false
 
     init {
@@ -143,35 +148,26 @@ class PlayerGestureHelper(
                 val viewHeight = playerView.measuredHeight
                 val viewCenterY = viewHeight / 2
 
-                // Show ripple effect
-                playerBinding.seekRippleOverlay.foreground?.apply {
-                    if (appPreferences.exoPlayerDoubleTapPause) {
-                        // Center the ripple on the tap location for the pause action
-                        val radius = minOf(viewWidth, viewHeight) / 4
-                        setBounds(
-                            (e.x - radius).toInt(),
-                            (e.y - radius).toInt(),
-                            (e.x + radius).toInt(),
-                            (e.y + radius).toInt(),
-                        )
-                    } else {
+                if (appPreferences.exoPlayerDoubleTapPause) {
+                    // Toggle play/pause and show the resulting state as a brief icon overlay
+                    val willPause = playerView.player?.isPlaying == true
+                    with(fragment) { onTogglePlayPause() }
+                    showPlayPauseToggle(e.x, e.y, willPause)
+                } else {
+                    // Show ripple effect
+                    playerBinding.seekRippleOverlay.foreground?.apply {
                         val viewCenterX = viewWidth / 2
                         val isFastForward = e.x.toInt() > viewCenterX
                         val left = if (isFastForward) viewCenterX else 0
                         val right = if (isFastForward) viewWidth else viewCenterX
                         setBounds(left, viewCenterY - viewCenterX / 2, right, viewCenterY + viewCenterX / 2)
+                        setHotspot(e.x, e.y)
+                        state = intArrayOf(android.R.attr.state_enabled, android.R.attr.state_pressed)
+                        playerView.postDelayed(Constants.DOUBLE_TAP_RIPPLE_DURATION_MS) {
+                            state = IntArray(0)
+                        }
                     }
-                    setHotspot(e.x, e.y)
-                    state = intArrayOf(android.R.attr.state_enabled, android.R.attr.state_pressed)
-                    playerView.postDelayed(Constants.DOUBLE_TAP_RIPPLE_DURATION_MS) {
-                        state = IntArray(0)
-                    }
-                }
 
-                if (appPreferences.exoPlayerDoubleTapPause) {
-                    // Toggle play/pause instead of seeking
-                    with(fragment) { onTogglePlayPause() }
-                } else {
                     // Fast-forward/rewind
                     val viewCenterX = viewWidth / 2
                     val isFastForward = e.x.toInt() > viewCenterX
@@ -484,6 +480,52 @@ class PlayerGestureHelper(
 
     private fun updateZoomMode(enabled: Boolean) {
         playerView.resizeMode = if (enabled) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
+    }
+
+    /**
+     * Briefly shows a play/pause icon at [x], [y] with a quick pop-and-fade animation
+     * to acknowledge a double-tap play/pause toggle.
+     *
+     * @param willPause true when playback is being paused (pause icon is shown),
+     * false when playback is being resumed (play icon is shown)
+     */
+    private fun showPlayPauseToggle(x: Float, y: Float, willPause: Boolean) {
+        doubleTapToggleIcon.setImageResource(
+            if (willPause) R.drawable.ic_pause_black_42dp else R.drawable.ic_play_black_42dp,
+        )
+
+        // Position the overlay centered on the tap location, clamped to the view bounds
+        val overlaySize = playerView.resources.dip(Constants.DOUBLE_TAP_TOGGLE_OVERLAY_SIZE_DP)
+        val maxX = (playerView.width - overlaySize).coerceAtLeast(0)
+        val maxY = (playerView.height - overlaySize).coerceAtLeast(0)
+        (doubleTapToggleOverlay.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
+            params.leftMargin = (x - overlaySize / 2f).toInt().coerceIn(0, maxX)
+            params.topMargin = (y - overlaySize / 2f).toInt().coerceIn(0, maxY)
+            doubleTapToggleOverlay.layoutParams = params
+        }
+
+        doubleTapToggleOverlay.apply {
+            animate().cancel()
+            isVisible = true
+            alpha = 0f
+            scaleX = TOGGLE_OVERLAY_START_SCALE
+            scaleY = TOGGLE_OVERLAY_START_SCALE
+            animate()
+                .alpha(1f)
+                .scaleX(1f)
+                .scaleY(1f)
+                .setDuration(Constants.DOUBLE_TAP_TOGGLE_POP_DURATION_MS)
+                .setInterpolator(DecelerateInterpolator())
+                .withEndAction {
+                    animate()
+                        .alpha(0f)
+                        .setStartDelay(Constants.DOUBLE_TAP_TOGGLE_VISIBLE_DURATION_MS)
+                        .setDuration(Constants.DOUBLE_TAP_TOGGLE_FADE_DURATION_MS)
+                        .withEndAction { isVisible = false }
+                        .start()
+                }
+                .start()
+        }
     }
 
     /**

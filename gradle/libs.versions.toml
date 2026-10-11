@@ -54,8 +54,8 @@ jellyfin-androidx-media = "1.9.0+1"
 playservices = "22.3.1"
 libass-media = "0.5.1"
 
-#libmpv-android
-libmpv-android="0.5.1"
+# libmpv-android
+libmpv-android = "1.0.0"
 
 # Room
 androidx-room = "2.8.5"
@@ -144,8 +144,8 @@ playservices-castframework = { group = "com.google.android.gms", name = "play-se
 jellyfin-androidx-media3-ffmpeg-decoder = { module = "org.jellyfin.media3:media3-ffmpeg-decoder", version.ref = "jellyfin-androidx-media" }
 libass-media = { module = "io.github.peerless2012:ass-media", version.ref = "libass-media" }
 
-#libmpv-android
-libmpv-android= { group = "dev.jdtech.mpv", name = "libmpv", version.ref = "libmpv-android" }
+# libmpv-android
+libmpv-android = { group = "dev.jdtech.mpv", name = "libmpv", version.ref = "libmpv-android" }
 
 
 # Room
