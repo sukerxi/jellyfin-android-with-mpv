@@ -7,11 +7,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
-import androidx.compose.material.ButtonDefaults
-import androidx.compose.material.MaterialTheme
-import androidx.compose.material.Surface
-import androidx.compose.material.Text
-import androidx.compose.material.TextButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.ui.Modifier
@@ -31,7 +30,7 @@ fun ConnectScreen(
     showExternalConnectionError: Boolean,
     activityEventHandler: ActivityEventHandler = koinInject(),
 ) {
-    Surface(color = MaterialTheme.colors.background) {
+    Surface(color = MaterialTheme.colorScheme.background) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -81,7 +80,6 @@ fun StyledTextButton(
             .fillMaxWidth()
             .padding(vertical = 4.dp),
         enabled = enabled,
-        colors = ButtonDefaults.buttonColors(),
     ) {
         Text(text = text)
     }

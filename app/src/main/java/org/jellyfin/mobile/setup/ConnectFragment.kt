@@ -10,7 +10,7 @@ import androidx.fragment.app.Fragment
 import org.jellyfin.mobile.MainViewModel
 import org.jellyfin.mobile.databinding.FragmentComposeBinding
 import org.jellyfin.mobile.ui.screens.connect.ConnectScreen
-import org.jellyfin.mobile.ui.utils.AppTheme
+import org.jellyfin.mobile.ui.theme.JellyfinTheme
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.applyWindowInsetsAsMargins
 import org.koin.androidx.viewmodel.ext.android.activityViewModel
@@ -35,7 +35,7 @@ class ConnectFragment : Fragment() {
         val encounteredConnectionError = arguments?.getBoolean(Constants.FRAGMENT_CONNECT_EXTRA_ERROR) == true
 
         composeView.setContent {
-            AppTheme {
+            JellyfinTheme {
                 ConnectScreen(
                     mainViewModel = mainViewModel,
                     showExternalConnectionError = encounteredConnectionError,

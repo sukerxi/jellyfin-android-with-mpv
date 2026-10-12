@@ -3,10 +3,10 @@ package org.jellyfin.mobile.ui.screens.downloads
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.AlertDialog
-import androidx.compose.material.Checkbox
-import androidx.compose.material.Text
-import androidx.compose.material.TextButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,7 +48,7 @@ fun DownloadRemoveDialog(
                         downloads.size,
                         downloads.size,
                         name,
-                    )
+                    ),
                 )
 
                 Row(

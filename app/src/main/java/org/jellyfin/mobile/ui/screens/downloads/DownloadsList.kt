@@ -9,15 +9,15 @@ import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.Checkbox
-import androidx.compose.material.ExperimentalMaterialApi
-import androidx.compose.material.LinearProgressIndicator
-import androidx.compose.material.ListItem
-import androidx.compose.material.Text
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
@@ -29,7 +29,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
@@ -74,7 +73,6 @@ fun DownloadsList(
     }
 }
 
-@OptIn(ExperimentalMaterialApi::class)
 @Composable
 fun DownloadItem(
     downloadFiles: DownloadFiles,
@@ -107,15 +105,15 @@ fun DownloadItem(
                 },
                 onLongClick = { onToggleSelection() },
             ),
-        text = {
+        headlineContent = {
             val name = remember(download, context) { download.getDisplayName(context).orEmpty() }
             Text(
                 text = name,
-                overflow = TextOverflow.Ellipsis,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 maxLines = 2,
             )
         },
-        icon = {
+        leadingContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 AnimatedVisibility(
                     visible = selectionMode,
@@ -125,7 +123,7 @@ fun DownloadItem(
                     Checkbox(
                         checked = isSelected,
                         onCheckedChange = null,
-                        modifier = Modifier.padding(end = 8.dp)
+                        modifier = Modifier.padding(end = 8.dp),
                     )
                 }
 
@@ -142,28 +140,27 @@ fun DownloadItem(
                     modifier = Modifier.size(
                         width = 64.dp,
                         height = 64.dp,
-                    )
+                    ),
                 )
             }
         },
-        secondaryText = {
+        supportingContent = {
             if (download.status == DownloadStatus.DOWNLOADING || download.status == DownloadStatus.QUEUED) {
-                LinearProgressIndicator()
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             } else if (isVerified) {
                 Text(
                     text = Formatter.formatShortFileSize(context, files.sumOf { it.size }),
-                    overflow = TextOverflow.Ellipsis,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     maxLines = 1,
                 )
             } else {
                 Text(
                     text = stringResource(R.string.download_incomplete),
                     color = Color.Yellow,
-                    overflow = TextOverflow.Ellipsis,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     maxLines = 1,
                 )
             }
         },
-        singleLineSecondaryText = true,
     )
 }

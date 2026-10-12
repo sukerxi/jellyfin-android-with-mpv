@@ -10,10 +10,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.Button
-import androidx.compose.material.MaterialTheme
-import androidx.compose.material.Surface
-import androidx.compose.material.Text
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.app.StorageManager
+import org.jellyfin.mobile.ui.theme.JellyfinTheme
 import org.koin.android.ext.android.get
 import org.koin.compose.koinInject
 import kotlin.coroutines.resume
@@ -46,8 +47,8 @@ fun DownloadSettingsDialogContent(onClose: () -> Unit) {
 
     Surface(
         shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colors.surface,
-        contentColor = MaterialTheme.colors.onSurface,
+        color = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
         Column(
             modifier = Modifier
@@ -58,12 +59,12 @@ fun DownloadSettingsDialogContent(onClose: () -> Unit) {
         ) {
             Text(
                 text = stringResource(R.string.download_settings_dialog_title),
-                style = MaterialTheme.typography.h6,
+                style = MaterialTheme.typography.titleLarge,
             )
 
             Text(
                 text = stringResource(R.string.download_settings_dialog_message),
-                style = MaterialTheme.typography.body2,
+                style = MaterialTheme.typography.bodyMedium,
             )
 
             Button(
@@ -89,7 +90,7 @@ suspend fun ComponentActivity.showDownloadSettingsDialog() {
             setContentView(
                 ComposeView(this@showDownloadSettingsDialog).apply {
                     setContent {
-                        AppTheme {
+                        JellyfinTheme {
                             DownloadSettingsDialogContent(
                                 onClose = { dismiss() },
                             )

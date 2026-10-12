@@ -2,14 +2,14 @@ package org.jellyfin.mobile.ui
 
 import android.os.Bundle
 import android.view.View
-import androidx.compose.material.MaterialTheme
-import androidx.compose.material.Surface
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.fragment.app.Fragment
 import org.jellyfin.mobile.R
-import org.jellyfin.mobile.ui.utils.AppTheme
+import org.jellyfin.mobile.ui.theme.JellyfinTheme
 
 abstract class ComposeFragment : Fragment(R.layout.fragment_compose) {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
@@ -19,8 +19,8 @@ abstract class ComposeFragment : Fragment(R.layout.fragment_compose) {
         composeView.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
 
         composeView.setContent {
-            AppTheme {
-                Surface(color = MaterialTheme.colors.background) {
+            JellyfinTheme {
+                Surface(color = MaterialTheme.colorScheme.background) {
                     Content()
                 }
             }

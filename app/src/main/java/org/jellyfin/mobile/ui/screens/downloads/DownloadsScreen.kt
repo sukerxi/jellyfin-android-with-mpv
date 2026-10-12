@@ -21,16 +21,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
-import androidx.compose.material.Card
-import androidx.compose.material.DropdownMenu
-import androidx.compose.material.DropdownMenuItem
-import androidx.compose.material.Icon
-import androidx.compose.material.IconButton
-import androidx.compose.material.MaterialTheme
-import androidx.compose.material.Scaffold
-import androidx.compose.material.Text
-import androidx.compose.material.TextButton
-import androidx.compose.material.TopAppBar
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Close
@@ -54,6 +57,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.downloads.DownloadsViewModel
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DownloadsScreen(
     viewModel: DownloadsViewModel = viewModel(),
@@ -176,24 +180,22 @@ fun DownloadsScreen(
                                     ) {
                                         if (selection.size < downloads.size) {
                                             DropdownMenuItem(
+                                                text = { Text(text = stringResource(R.string.select_all)) },
                                                 onClick = {
                                                     selection.addAll(downloads.map { it.download.id })
                                                     showMenu = false
                                                 },
-                                            ) {
-                                                Text(text = stringResource(R.string.select_all))
-                                            }
+                                            )
                                         }
 
                                         if (selection.isNotEmpty()) {
                                             DropdownMenuItem(
+                                                text = { Text(text = stringResource(R.string.deselect_all)) },
                                                 onClick = {
                                                     selection.clear()
                                                     showMenu = false
                                                 },
-                                            ) {
-                                                Text(text = stringResource(R.string.deselect_all))
-                                            }
+                                            )
                                         }
                                     }
                                 }
@@ -201,7 +203,7 @@ fun DownloadsScreen(
                         }
                     }
                 },
-                backgroundColor = Color.Transparent,
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
             )
         },
         content = { innerPadding ->
@@ -248,20 +250,22 @@ fun StorageLocationNotSetCard(
     modifier: Modifier = Modifier,
 ) = Card(
     modifier = modifier.fillMaxWidth(),
-    elevation = 4.dp,
-    backgroundColor = MaterialTheme.colors.error.copy(alpha = 0.2f),
+    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+    colors = CardDefaults.cardColors(
+        containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.2f),
+    ),
 ) {
     Column(modifier = Modifier.padding(16.dp)) {
         Text(
             text = stringResource(R.string.download_location_not_set),
-            style = MaterialTheme.typography.subtitle1,
+            style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
         )
         Spacer(modifier = Modifier.height(4.dp))
 
         Text(
             text = stringResource(R.string.download_location_not_set_description),
-            style = MaterialTheme.typography.body2,
+            style = MaterialTheme.typography.bodyMedium,
         )
         Spacer(modifier = Modifier.height(8.dp))
 
@@ -280,20 +284,22 @@ fun StorageLocationInaccessibleCard(
     modifier: Modifier = Modifier,
 ) = Card(
     modifier = modifier.fillMaxWidth(),
-    elevation = 4.dp,
-    backgroundColor = MaterialTheme.colors.error.copy(alpha = 0.2f),
+    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+    colors = CardDefaults.cardColors(
+        containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.2f),
+    ),
 ) {
     Column(modifier = Modifier.padding(16.dp)) {
         Text(
             text = stringResource(R.string.download_location_inaccessible),
-            style = MaterialTheme.typography.subtitle1,
+            style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
         )
         Spacer(modifier = Modifier.height(4.dp))
 
         Text(
             text = stringResource(R.string.download_location_inaccessible_description),
-            style = MaterialTheme.typography.body2,
+            style = MaterialTheme.typography.bodyMedium,
         )
         Spacer(modifier = Modifier.height(8.dp))
 
@@ -322,13 +328,13 @@ fun DownloadsEmpty(
     ) {
         Text(
             text = stringResource(R.string.downloads_empty),
-            style = MaterialTheme.typography.h6,
+            style = MaterialTheme.typography.titleLarge,
             textAlign = TextAlign.Center,
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = stringResource(R.string.downloads_empty_description),
-            style = MaterialTheme.typography.body2,
+            style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
         )
     }
