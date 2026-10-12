@@ -1,13 +1,16 @@
 package org.jellyfin.mobile.utils
 
 import android.Manifest.permission.BLUETOOTH_CONNECT
-import android.app.AlertDialog
 import android.content.pm.PackageManager
 import android.content.pm.PackageManager.PERMISSION_GRANTED
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.jellyfin.mobile.MainActivity
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.app.AppPreferences
+import kotlin.coroutines.Continuation
 import kotlin.coroutines.resume
 
 class BluetoothPermissionHelper(
@@ -19,6 +22,14 @@ class BluetoothPermissionHelper(
      * Otherwise, the package manager and permission would need to be queried on every media event.
      */
     private var wasDialogShowThisSession = false
+
+    /**
+     * Compose 宿主观察：true 时渲染蓝牙权限说明对话框。
+     */
+    var requestVisible by mutableStateOf(false)
+        private set
+
+    private var pendingContinuation: Continuation<Boolean>? = null
 
     @Suppress("ComplexCondition")
     suspend fun requestBluetoothPermissionIfNecessary() {
@@ -36,21 +47,12 @@ class BluetoothPermissionHelper(
         wasDialogShowThisSession = true
 
         val shouldRequestPermission = suspendCancellableCoroutine { continuation ->
-            AlertDialog.Builder(activity)
-                .setTitle(R.string.bluetooth_permission_title)
-                .setMessage(R.string.bluetooth_permission_message)
-                .setNegativeButton(android.R.string.cancel) { dialog, _ ->
-                    dialog.dismiss()
-                    continuation.resume(false)
-                }
-                .setPositiveButton(R.string.bluetooth_permission_continue) { dialog, _ ->
-                    dialog.dismiss()
-                    continuation.resume(true)
-                }
-                .setOnCancelListener {
-                    continuation.resume(false)
-                }
-                .show()
+            pendingContinuation = continuation
+            continuation.invokeOnCancellation {
+                pendingContinuation = null
+                requestVisible = false
+            }
+            requestVisible = true
         }
 
         if (!shouldRequestPermission) {
@@ -63,5 +65,14 @@ class BluetoothPermissionHelper(
                 activity.toast(R.string.bluetooth_permission_granted)
             }
         }
+    }
+
+    /**
+     * Compose 对话框按钮回调。[shouldContinue] 为 true 时继续请求运行时权限，否则记住"忽略"。
+     */
+    fun onUserDecision(shouldContinue: Boolean) {
+        requestVisible = false
+        pendingContinuation?.resume(shouldContinue)
+        pendingContinuation = null
     }
 }

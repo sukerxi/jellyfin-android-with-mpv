@@ -45,7 +45,9 @@ import org.jellyfin.mobile.setup.ConnectionHelper
 import org.jellyfin.mobile.update.CnbReleaseSource
 import org.jellyfin.mobile.update.GitHubReleaseSource
 import org.jellyfin.mobile.update.UpdateChecker
+import org.jellyfin.mobile.update.UpdateDialogStateHolder
 import org.jellyfin.mobile.update.UpdateManager
+import org.jellyfin.mobile.ui.dialog.WebViewDialogState
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.PermissionRequestHelper
 import org.jellyfin.mobile.utils.extractId
@@ -195,5 +197,7 @@ val applicationModule = module {
     single { GitHubReleaseSource(get()) }
     single { CnbReleaseSource(get()) }
     single { UpdateChecker(get(), get(), get()) }
-    single { UpdateManager(get()) }
+    single { UpdateManager() }
+    single { UpdateDialogStateHolder(get()) }
+    single { WebViewDialogState() }
 }

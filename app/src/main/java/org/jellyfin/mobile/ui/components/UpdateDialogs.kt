@@ -1,0 +1,262 @@
+package org.jellyfin.mobile.ui.components
+
+import android.widget.Toast
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import org.jellyfin.mobile.BuildConfig
+import org.jellyfin.mobile.R
+import org.jellyfin.mobile.update.DownloadProgress
+import org.jellyfin.mobile.update.UpdateDialogStateHolder
+import org.jellyfin.mobile.update.UpdateDownloadWorker
+import org.jellyfin.mobile.update.UpdateInfo
+import org.jellyfin.mobile.update.UpdateManager
+import org.koin.compose.koinInject
+
+/**
+ * 挂在根 Compose 宿主上的更新对话框集合：
+ * 更新提示 / 下载进度 / 安装权限引导。状态来自 [UpdateDialogStateHolder]。
+ */
+@Composable
+fun UpdateDialogHost(
+    holder: UpdateDialogStateHolder = koinInject(),
+    updateManager: UpdateManager = koinInject(),
+) {
+    val context = LocalContext.current
+
+    holder.prompt?.let { prompt ->
+        UpdateAvailableDialog(
+            prompt = prompt,
+            updateManager = updateManager,
+            onDownloadNow = {
+                if (!updateManager.hasInstallPermission(context)) {
+                    holder.showInstallPermission()
+                }
+                updateManager.enqueueDownload(context, prompt.info)
+                holder.showProgress(prompt.info)
+            },
+            onDownloadInBackground = {
+                updateManager.enqueueDownload(context, prompt.info)
+                Toast.makeText(context, R.string.update_download_started, Toast.LENGTH_SHORT).show()
+                holder.dismissPrompt()
+            },
+            onIgnore = { holder.ignoreVersion(prompt.info.versionName) },
+            onDismiss = holder::dismissPrompt,
+        )
+    }
+
+    holder.progressInfo?.let { info ->
+        UpdateProgressDialog(
+            info = info,
+            onCancel = {
+                updateManager.cancelDownload(context)
+                holder.hideProgress()
+            },
+            onSuccess = {
+                holder.hideProgress()
+                updateManager.launchInstall(context, info)
+            },
+            onFailed = {
+                holder.hideProgress()
+                Toast.makeText(context, R.string.update_download_failed, Toast.LENGTH_SHORT).show()
+            },
+        )
+    }
+
+    if (holder.installPermissionVisible) {
+        InstallPermissionDialog(
+            onOpenSettings = {
+                updateManager.openInstallPermissionSettings(context)
+                holder.hideInstallPermission()
+            },
+            onDismiss = holder::hideInstallPermission,
+        )
+    }
+}
+
+@Composable
+private fun UpdateAvailableDialog(
+    prompt: UpdateDialogStateHolder.UpdatePrompt,
+    updateManager: UpdateManager,
+    onDownloadNow: () -> Unit,
+    onDownloadInBackground: () -> Unit,
+    onIgnore: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val info = prompt.info
+    val context = LocalContext.current
+    val changelog = remember(info.changelog) { updateManager.formatChangelog(info.changelog) }
+
+    AlertDialog(
+        onDismissRequest = {
+            if (prompt.allowDismiss) onDismiss()
+        },
+        title = { Text(stringResource(R.string.update_available_title)) },
+        text = {
+            SelectionContainer {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 340.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    Text(stringResource(R.string.update_current_version, BuildConfig.VERSION_NAME))
+                    Text(stringResource(R.string.update_new_version, info.versionName))
+                    Text(
+                        stringResource(
+                            R.string.update_channel_label,
+                            updateManager.channelLabel(context, info.channel),
+                        ),
+                    )
+                    if (changelog.isNotBlank()) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = stringResource(R.string.update_changelog_label),
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(changelog)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDownloadNow) {
+                Text(stringResource(R.string.update_download_now))
+            }
+        },
+        dismissButton = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (prompt.allowDismiss) {
+                    TextButton(onClick = onIgnore) {
+                        Text(stringResource(R.string.update_ignore))
+                    }
+                }
+                TextButton(onClick = onDownloadInBackground) {
+                    Text(stringResource(R.string.update_download_background))
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun UpdateProgressDialog(
+    info: UpdateInfo,
+    onCancel: () -> Unit,
+    onSuccess: () -> Unit,
+    onFailed: () -> Unit,
+) {
+    val context = LocalContext.current
+    var state by remember { mutableStateOf<DownloadProgress>(DownloadProgress.Idle) }
+    var finished by remember { mutableStateOf(false) }
+
+    LaunchedEffect(info) {
+        UpdateDownloadWorker.observeProgress(context).collect { progress ->
+            when (progress) {
+                is DownloadProgress.Running -> state = progress
+                DownloadProgress.Success -> if (!finished) {
+                    finished = true
+                    onSuccess()
+                }
+                DownloadProgress.Failed -> if (!finished) {
+                    finished = true
+                    onFailed()
+                }
+                DownloadProgress.Idle -> Unit
+            }
+        }
+    }
+
+    fun formatSize(bytes: Long): String =
+        if (bytes <= 0) "?" else android.text.format.Formatter.formatShortFileSize(context, bytes)
+
+    val running = state as? DownloadProgress.Running
+
+    AlertDialog(
+        onDismissRequest = {},
+        title = { Text(stringResource(R.string.update_downloading_title, info.versionName)) },
+        text = {
+            Column {
+                if (running != null && running.percent >= 0) {
+                    LinearProgressIndicator(
+                        progress = { running.percent / 100f },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = when (val s = state) {
+                        is DownloadProgress.Running -> {
+                            if (s.percent >= 0) {
+                                stringResource(
+                                    R.string.update_download_progress,
+                                    s.percent,
+                                    formatSize(s.downloaded),
+                                    formatSize(s.total),
+                                )
+                            } else {
+                                stringResource(
+                                    R.string.update_download_progress_indeterminate,
+                                    formatSize(s.downloaded),
+                                )
+                            }
+                        }
+                        else -> ""
+                    },
+                )
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onCancel) {
+                Text(stringResource(R.string.download_cancel))
+            }
+        },
+    )
+}
+
+@Composable
+private fun InstallPermissionDialog(
+    onOpenSettings: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.update_install_permission_title)) },
+        text = { Text(stringResource(R.string.update_install_permission_message)) },
+        confirmButton = {
+            TextButton(onClick = onOpenSettings) {
+                Text(stringResource(R.string.dialog_button_open_settings))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(android.R.string.cancel))
+            }
+        },
+    )
+}

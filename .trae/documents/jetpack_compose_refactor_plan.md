@@ -158,6 +158,14 @@
 
 * 验证：自动检查弹窗、三按钮、前台进度对话框、后台静默、安装权限引导
 
+  **实现记录（已提交）**：
+  - `UpdateManager` 瘦身为纯逻辑（enqueue/cancel/launchInstall/权限判断/channelLabel/formatChangelog）；新增 `update/UpdateDialogStateHolder`（Koin single，snapshot state：prompt/progressInfo/installPermissionVisible，ignoreVersion 写 DataStore）
+  - `ui/components/UpdateDialogs.kt`：`UpdateDialogHost` + `UpdateAvailableDialog`（可滚动 SelectionContainer Text，替代 HtmlCompat）/`UpdateProgressDialog`（M3 LinearProgressIndicator + observeProgress）/`InstallPermissionDialog`
+  - `ui/components/AppDialogHost.kt` 挂在 `activity_main.xml` 新增的 `dialog_host` ComposeView；`ui/dialog/WebViewDialogState` 桥接 WebView 过旧框；`BluetoothPermissionHelper` 改 `mutableStateOf` + 保留原 suspendCancellableCoroutine
+  - 关键坑：**空的全屏 ComposeView 会拦截下层 Fragment 触摸**；无对话框时宿主须 `View.GONE`（`onDialogPresenceChanged` 驱动，XML 默认 gone），阶段 4 整树 setContent 后移除该机制
+  - 全工程 appcompat/platform AlertDialog 引用归零
+  - 模拟器 API34 验证：三按钮对话框/版本与 changelog 渲染、后台下载（任务入队+对话框关闭）、立即下载（权限引导框+进度框+Cancel 取消任务）、Ignore 写 DataStore、back dismiss、触摸穿透与 fragment 导航正常；蓝牙/WebView 两类框当前环境无法触发，仅代码走查
+
 ### 阶段 4 —— 单 Activity + navigation-compose（除播放器外的 Fragment 全删）
 
 * `MainActivity`：`AppCompatActivity` → `ComponentActivity`；删除 `setContentView(R.layout.activity_main)` 与 Fragment 事务逻辑，`setContent { AppTheme { JellyfinNavHost() } }`；保留 splash、edgeToEdge、服务绑定、方向监听、权限回调（改 `rememberLauncherForActivityResult`）、Chromecast 初始化、自动更新检查

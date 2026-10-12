@@ -7,14 +7,16 @@ import android.content.ServiceConnection
 import android.graphics.Color
 import android.os.Bundle
 import android.os.IBinder
-import android.provider.Settings
 import android.view.OrientationEventListener
-import android.widget.Toast
+import android.view.View
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.SystemBarStyle
 import androidx.activity.addCallback
 import androidx.activity.enableEdgeToEdge
-import androidx.appcompat.app.AlertDialog
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.ComposeView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.fragment.app.Fragment
@@ -28,11 +30,12 @@ import org.jellyfin.mobile.player.cast.Chromecast
 import org.jellyfin.mobile.player.cast.IChromecast
 import org.jellyfin.mobile.player.ui.PlayerFragment
 import org.jellyfin.mobile.setup.ConnectFragment
+import org.jellyfin.mobile.ui.components.AppDialogHost
+import org.jellyfin.mobile.ui.theme.JellyfinTheme
 import org.jellyfin.mobile.update.UpdateCheckResult
 import org.jellyfin.mobile.update.UpdateChecker
+import org.jellyfin.mobile.update.UpdateDialogStateHolder
 import org.jellyfin.mobile.update.UpdateDownloadWorker
-import org.jellyfin.mobile.update.UpdateManager
-import org.jellyfin.mobile.utils.AndroidVersion
 import org.jellyfin.mobile.utils.BackPressInterceptor
 import org.jellyfin.mobile.utils.BluetoothPermissionHelper
 import org.jellyfin.mobile.utils.Constants
@@ -55,7 +58,12 @@ class MainActivity : AppCompatActivity() {
     private val permissionRequestHelper: PermissionRequestHelper by inject()
     private val appPreferences: AppPreferences by inject()
     private val updateChecker: UpdateChecker by inject()
-    private val updateManager: UpdateManager by inject()
+    private val updateDialogState: UpdateDialogStateHolder by inject()
+
+    /**
+     * 当前设备不支持 WebView 时置位，由根 Compose 宿主渲染不可取消的提示框。
+     */
+    private var webViewUnsupported by mutableStateOf(false)
 
     var serviceBinder: RemotePlayerService.ServiceBinder? = null
         private set
@@ -112,23 +120,24 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // 全局 Compose 对话框宿主（更新/蓝牙权限/WebView 提示）
+        val dialogHost = findViewById<ComposeView>(R.id.dialog_host)
+        dialogHost.setContent {
+            JellyfinTheme {
+                AppDialogHost(
+                    bluetoothHelper = bluetoothPermissionHelper,
+                    isWebViewUnsupported = { webViewUnsupported },
+                    onCloseApp = { finishAfterTransition() },
+                    onDialogPresenceChanged = { visible ->
+                        dialogHost.visibility = if (visible) View.VISIBLE else View.GONE
+                    },
+                )
+            }
+        }
+
         // Check WebView support
         if (!isWebViewSupported()) {
-            AlertDialog.Builder(this).apply {
-                setTitle(R.string.dialog_web_view_not_supported)
-                setMessage(R.string.dialog_web_view_not_supported_message)
-                setCancelable(false)
-                if (AndroidVersion.isAtLeastN) {
-                    setNeutralButton(R.string.dialog_button_open_settings) { _, _ ->
-                        startActivity(Intent(Settings.ACTION_WEBVIEW_SETTINGS))
-                        Toast.makeText(context, R.string.toast_reopen_after_change, Toast.LENGTH_LONG).show()
-                        finishAfterTransition()
-                    }
-                }
-                setNegativeButton(R.string.dialog_button_close_app) { _, _ ->
-                    finishAfterTransition()
-                }
-            }.show()
+            webViewUnsupported = true
             return
         }
 
@@ -169,8 +178,7 @@ class MainActivity : AppCompatActivity() {
                     if (appPreferences.silentUpdateDownload) {
                         UpdateDownloadWorker.enqueue(this@MainActivity, result.info)
                     } else if (!isFinishing && !isDestroyed) {
-                        updateManager.showUpdateDialog(
-                            this@MainActivity,
+                        updateDialogState.requestUpdate(
                             result.info,
                             allowDismiss = true,
                         )

@@ -4,17 +4,14 @@ import android.content.Intent
 import android.graphics.Rect
 import android.net.Uri
 import android.os.Bundle
-import android.provider.Settings
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient.FileChooserParams
 import android.webkit.WebView
-import android.widget.Toast
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.core.view.doOnNextLayout
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
@@ -24,7 +21,6 @@ import androidx.webkit.WebViewAssetLoader.AssetsPathHandler
 import androidx.webkit.WebViewCompat
 import kotlinx.coroutines.launch
 import org.jellyfin.mobile.MainViewModel
-import org.jellyfin.mobile.R
 import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.bridge.ExternalPlayer
 import org.jellyfin.mobile.bridge.MediaSegments
@@ -33,6 +29,7 @@ import org.jellyfin.mobile.bridge.NativePlayer
 import org.jellyfin.mobile.data.entity.ServerEntity
 import org.jellyfin.mobile.databinding.FragmentWebviewBinding
 import org.jellyfin.mobile.setup.ConnectFragment
+import org.jellyfin.mobile.ui.dialog.WebViewDialogState
 import org.jellyfin.mobile.utils.AndroidVersion
 import org.jellyfin.mobile.utils.BackPressInterceptor
 import org.jellyfin.mobile.utils.Constants
@@ -53,6 +50,7 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
     val appPreferences: AppPreferences by inject()
     private val mainViewModel: MainViewModel by activityViewModel()
     private val webappFunctionChannel: WebappFunctionChannel by inject()
+    private val webViewDialogState: WebViewDialogState by inject()
     private lateinit var assetsPathHandler: AssetsPathHandler
     private lateinit var jellyfinWebViewClient: JellyfinWebViewClient
     private val nativePlayer: NativePlayer by inject()
@@ -174,12 +172,20 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
 
     override fun onDestroyView() {
         super.onDestroyView()
+        webViewDialogState.dismiss()
         webViewBinding = null
     }
 
     private fun WebView.initialize() {
         if (!appPreferences.ignoreWebViewChecks && isOutdated()) { // Check WebView version
-            showOutdatedWebViewDialog(this)
+            // 由根 Compose 宿主渲染 M3 对话框
+            val webView = this
+            val webViewPackageName = WebViewCompat.getCurrentWebViewPackage(context)?.packageName
+            webViewDialogState.showOutdatedWebViewDialog(webViewPackageName) {
+                appPreferences.ignoreWebViewChecks = true
+                // Re-initialize
+                webView.initialize()
+            }
             return
         }
         webViewClient = jellyfinWebViewClient
@@ -193,52 +199,6 @@ class WebViewFragment : Fragment(), BackPressInterceptor, JellyfinWebChromeClien
         loadUrl("${server.hostname.trimEnd('/')}/")
         postDelayed(timeoutRunnable, Constants.INITIAL_CONNECTION_TIMEOUT)
         postDelayed(showLoadingContainerRunnable, Constants.SHOW_PROGRESS_BAR_DELAY)
-    }
-
-    private fun showOutdatedWebViewDialog(webView: WebView) {
-        AlertDialog.Builder(requireContext()).apply {
-            setTitle(R.string.dialog_web_view_outdated)
-            setMessage(R.string.dialog_web_view_outdated_message)
-            setCancelable(false)
-
-            val webViewPackage = WebViewCompat.getCurrentWebViewPackage(context)
-            if (webViewPackage != null) {
-                val marketUri = Uri.Builder().apply {
-                    scheme("market")
-                    authority("details")
-                    appendQueryParameter("id", webViewPackage.packageName)
-                }.build()
-                val referrerUri = Uri.Builder().apply {
-                    scheme("android-app")
-                    authority(context.packageName)
-                }.build()
-
-                val marketIntent = Intent(Intent.ACTION_VIEW).apply {
-                    data = marketUri
-                    putExtra(Intent.EXTRA_REFERRER, referrerUri)
-                }
-
-                // Only show button if the intent can be resolved
-                if (marketIntent.resolveActivity(context.packageManager) != null) {
-                    setNegativeButton(R.string.dialog_button_check_for_updates) { _, _ ->
-                        startActivity(marketIntent)
-                        requireActivity().finishAfterTransition()
-                    }
-                }
-            }
-            if (AndroidVersion.isAtLeastN) {
-                setPositiveButton(R.string.dialog_button_open_settings) { _, _ ->
-                    startActivity(Intent(Settings.ACTION_WEBVIEW_SETTINGS))
-                    Toast.makeText(context, R.string.toast_reopen_after_change, Toast.LENGTH_LONG).show()
-                    requireActivity().finishAfterTransition()
-                }
-            }
-            setNeutralButton(R.string.dialog_button_ignore) { _, _ ->
-                appPreferences.ignoreWebViewChecks = true
-                // Re-initialize
-                webView.initialize()
-            }
-        }.show()
     }
 
     private fun onSelectServer(error: Boolean = false) = runOnUiThread {

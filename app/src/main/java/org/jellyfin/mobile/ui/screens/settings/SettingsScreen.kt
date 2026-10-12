@@ -55,7 +55,7 @@ import org.jellyfin.mobile.settings.VideoPlayerType
 import org.jellyfin.mobile.update.UpdateCheckResult
 import org.jellyfin.mobile.update.UpdateChannel
 import org.jellyfin.mobile.update.UpdateChecker
-import org.jellyfin.mobile.update.UpdateManager
+import org.jellyfin.mobile.update.UpdateDialogStateHolder
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.isPackageInstalled
 import org.koin.compose.koinInject
@@ -68,7 +68,7 @@ fun SettingsScreen(
     appPreferences: AppPreferences = koinInject(),
     storageManager: StorageManager = koinInject(),
     updateChecker: UpdateChecker = koinInject(),
-    updateManager: UpdateManager = koinInject(),
+    updateDialogState: UpdateDialogStateHolder = koinInject(),
 ) {
     val context = LocalContext.current
     val scope = androidx.compose.runtime.rememberCoroutineScope()
@@ -132,7 +132,7 @@ fun SettingsScreen(
                 is UpdateCheckResult.UpToDate ->
                     Toast.makeText(context, R.string.update_up_to_date, Toast.LENGTH_SHORT).show()
                 is UpdateCheckResult.UpdateAvailable ->
-                    updateManager.showUpdateDialog(context, result.info, allowDismiss = false)
+                    updateDialogState.requestUpdate(result.info, allowDismiss = false)
                 is UpdateCheckResult.Error ->
                     Toast.makeText(context, R.string.update_check_failed, Toast.LENGTH_SHORT).show()
             }

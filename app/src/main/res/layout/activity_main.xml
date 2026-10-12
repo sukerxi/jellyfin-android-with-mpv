@@ -1,8 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.fragment.app.FragmentContainerView xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
-    android:id="@+id/fragment_container"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    tools:layout="@layout/fragment_connect"
-    tools:viewBindingIgnore="true" />
+    android:layout_height="match_parent">
+
+    <androidx.fragment.app.FragmentContainerView
+        android:id="@+id/fragment_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        tools:layout="@layout/fragment_connect"
+        tools:viewBindingIgnore="true" />
+
+    <!-- 全局 Compose 对话框宿主（更新/蓝牙/WebView 提示），无对话框时 GONE 以放行触摸事件 -->
+    <androidx.compose.ui.platform.ComposeView
+        android:id="@+id/dialog_host"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+</FrameLayout>
