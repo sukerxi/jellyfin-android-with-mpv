@@ -13,7 +13,8 @@
 # 手动按钮定义见 .cnb/web_trigger.yml（在 master 分支详情页显示）。
 #
 # Nightly 发版（对应 release.yml）:
-#   每次推送到 master：版本号 3.0.0-<提交短哈希>，自动创建唯一 tag
+#   触发分支：master 与 refactor/jetpack-compose（push 自动 + 分支详情页手动按钮）。
+#   每次推送：版本号 3.0.0-<提交短哈希>，自动创建唯一 tag
 #   3.0.0-<CNB 构建号> 与 CNB Release，并上传 libre release APK + version.txt 作为附件。
 #
 # Release 定时清理（prune-releases 流水线）:
@@ -562,6 +563,16 @@ master:
   # 执行身份为最后修改本 crontab 配置并推送的用户，CNB_TOKEN 限本仓库。
   "crontab: 0 4 * * *":
     - *prune-pipeline
+
+# refactor/jetpack-compose 分支同样支持 Nightly 发版：
+#   push 自动发一个 Nightly Release；分支详情页「发布 Nightly」按钮手动触发。
+# 与 master 共用 nightly-release 锁，两分支并发推送时串行发版；
+# Tag 形如 3.0.0-<CNB 构建号> 全局唯一，不受分支影响，prune-releases 也能正常清理。
+"refactor/jetpack-compose":
+  push:
+    - *nightly-pipeline
+  web_trigger_release:
+    - *nightly-pipeline
 
 # 推送 v* tag 触发正式发版（对应 app-publish.yaml）
 "v*":
