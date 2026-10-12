@@ -8,49 +8,50 @@ import android.graphics.Color
 import android.os.Bundle
 import android.os.IBinder
 import android.view.OrientationEventListener
-import android.view.View
-import androidx.activity.OnBackPressedCallback
 import androidx.activity.SystemBarStyle
-import androidx.activity.addCallback
+import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.ComposeView
-import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
-import androidx.fragment.app.Fragment
+import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.withStarted
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import org.jellyfin.mobile.events.ActivityEventHandler
 import org.jellyfin.mobile.app.AppPreferences
+import org.jellyfin.mobile.events.ActivityEventHandler
 import org.jellyfin.mobile.player.cast.Chromecast
 import org.jellyfin.mobile.player.cast.IChromecast
 import org.jellyfin.mobile.player.ui.PlayerFragment
-import org.jellyfin.mobile.setup.ConnectFragment
 import org.jellyfin.mobile.ui.components.AppDialogHost
+import org.jellyfin.mobile.ui.navigation.JellyfinNavHost
 import org.jellyfin.mobile.ui.theme.JellyfinTheme
 import org.jellyfin.mobile.update.UpdateCheckResult
 import org.jellyfin.mobile.update.UpdateChecker
 import org.jellyfin.mobile.update.UpdateDialogStateHolder
 import org.jellyfin.mobile.update.UpdateDownloadWorker
-import org.jellyfin.mobile.utils.BackPressInterceptor
 import org.jellyfin.mobile.utils.BluetoothPermissionHelper
-import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.PermissionRequestHelper
 import org.jellyfin.mobile.utils.SmartOrientationListener
-import org.jellyfin.mobile.utils.extensions.replaceFragment
 import org.jellyfin.mobile.utils.isWebViewSupported
 import org.jellyfin.mobile.webapp.RemotePlayerService
-import org.jellyfin.mobile.webapp.WebViewFragment
 import org.koin.android.ext.android.get
 import org.koin.android.ext.android.inject
-import org.koin.androidx.fragment.android.setupKoinFragmentFactory
 import org.koin.androidx.viewmodel.ext.android.viewModel
 
-class MainActivity : AppCompatActivity() {
+/**
+ * 阶段 4：单 Activity 化，全部界面由 navigation-compose 承载。
+ *
+ * 暂时仍继承 [FragmentActivity]：播放器 PlayerFragment 在阶段 5 才 Compose 化，
+ * 这之前由 player 路由的 FragmentContainerView 临时宿主承载；阶段 5 将下沉为
+ * ComponentActivity。
+ */
+class MainActivity : FragmentActivity() {
     private val activityEventHandler: ActivityEventHandler = get()
     val mainViewModel: MainViewModel by viewModel()
     val bluetoothPermissionHelper: BluetoothPermissionHelper = BluetoothPermissionHelper(this, get())
@@ -79,59 +80,31 @@ class MainActivity : AppCompatActivity() {
 
     private val orientationListener: OrientationEventListener by lazy { SmartOrientationListener(this) }
 
-    /**
-     * Passes back press events onto the currently visible [Fragment] if it implements the [BackPressInterceptor] interface.
-     *
-     * If the current fragment does not implement [BackPressInterceptor] or has decided not to intercept the event
-     * (see result of [BackPressInterceptor.onInterceptBackPressed]), the topmost backstack entry will be popped.
-     *
-     * If there is no topmost backstack entry, the event will be passed onto the dispatcher's fallback handler.
-     */
-    private val onBackPressedCallback: OnBackPressedCallback.() -> Unit = callback@{
-        val currentFragment = supportFragmentManager.findFragmentById(R.id.fragment_container)
-        if (currentFragment is BackPressInterceptor && currentFragment.onInterceptBackPressed()) {
-            // Top fragment handled back press
-            return@callback
-        }
-
-        // This is the same default action as in Activity.onBackPressed
-        if (!supportFragmentManager.isStateSaved && supportFragmentManager.popBackStackImmediate()) {
-            // Removed fragment from back stack
-            return@callback
-        }
-
-        // Let the system handle the back press
-        isEnabled = false
-        // Make sure that we *really* call the fallback handler
-        assert(!onBackPressedDispatcher.hasEnabledCallbacks()) {
-            "MainActivity should be the lowest onBackPressCallback"
-        }
-        onBackPressedDispatcher.onBackPressed()
-        isEnabled = true // re-enable callback in case activity isn't finished
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
-        setupKoinFragmentFactory()
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
         )
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
 
-        // 全局 Compose 对话框宿主（更新/蓝牙权限/WebView 提示）
-        val dialogHost = findViewById<ComposeView>(R.id.dialog_host)
-        dialogHost.setContent {
+        setContent {
             JellyfinTheme {
-                AppDialogHost(
-                    bluetoothHelper = bluetoothPermissionHelper,
-                    isWebViewUnsupported = { webViewUnsupported },
-                    onCloseApp = { finishAfterTransition() },
-                    onDialogPresenceChanged = { visible ->
-                        dialogHost.visibility = if (visible) View.VISIBLE else View.GONE
-                    },
-                )
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background,
+                ) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        JellyfinNavHost(mainViewModel = mainViewModel)
+
+                        // 全局 Compose 对话框宿主（更新/蓝牙权限/WebView 提示）
+                        AppDialogHost(
+                            bluetoothHelper = bluetoothPermissionHelper,
+                            isWebViewUnsupported = { webViewUnsupported },
+                            onCloseApp = { finishAfterTransition() },
+                        )
+                    }
+                }
             }
         }
 
@@ -145,19 +118,7 @@ class MainActivity : AppCompatActivity() {
         bindService(Intent(this, RemotePlayerService::class.java), serviceConnection, Service.BIND_AUTO_CREATE)
 
         // Subscribe to activity events
-        with(activityEventHandler) { subscribe() }
-
-        // Load UI
-        lifecycleScope.launch {
-            mainViewModel.serverState.collectLatest { state ->
-                lifecycle.withStarted {
-                    handleServerState(state)
-                }
-            }
-        }
-
-        // Handle back presses
-        onBackPressedDispatcher.addCallback(this, onBackPressed = onBackPressedCallback)
+        with(activityEventHandler) { subscribe(mainViewModel) }
 
         // Setup Chromecast
         chromecast.initializePlugin(this)
@@ -198,31 +159,7 @@ class MainActivity : AppCompatActivity() {
         orientationListener.enable()
     }
 
-    private fun handleServerState(state: ServerState) {
-        with(supportFragmentManager) {
-            val currentFragment = findFragmentById(R.id.fragment_container)
-            when (state) {
-                ServerState.Pending -> {
-                    // TODO add loading indicator
-                }
-                is ServerState.Unset -> {
-                    if (currentFragment !is ConnectFragment) {
-                        replaceFragment<ConnectFragment>()
-                    }
-                }
-                is ServerState.Available -> {
-                    if (currentFragment !is WebViewFragment || currentFragment.server != state.server) {
-                        replaceFragment<WebViewFragment>(
-                            Bundle().apply {
-                                putParcelable(Constants.FRAGMENT_WEB_VIEW_EXTRA_SERVER, state.server)
-                            },
-                        )
-                    }
-                }
-            }
-        }
-    }
-
+    @Deprecated("Deprecated in Java")
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<out String>,
@@ -231,11 +168,6 @@ class MainActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
 
         permissionRequestHelper.handleRequestPermissionsResult(requestCode, permissions, grantResults)
-    }
-
-    override fun onSupportNavigateUp(): Boolean {
-        onBackPressedDispatcher.onBackPressed()
-        return true
     }
 
     override fun onUserLeaveHint() {

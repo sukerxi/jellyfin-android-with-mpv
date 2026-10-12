@@ -36,11 +36,11 @@ import org.jellyfin.mobile.downloads.DownloadsViewModel
 import org.jellyfin.mobile.downloads.FileDownloader
 import org.jellyfin.mobile.events.ActivityEventHandler
 import org.jellyfin.mobile.player.deviceprofile.DeviceProfileBuilder
+import org.jellyfin.mobile.player.interaction.PlaybackLauncher
 import org.jellyfin.mobile.player.interaction.PlayerEvent
 import org.jellyfin.mobile.player.mediasegments.MediaSegmentRepository
 import org.jellyfin.mobile.player.qualityoptions.QualityOptionsProvider
 import org.jellyfin.mobile.player.source.MediaSourceResolver
-import org.jellyfin.mobile.player.ui.PlayerFragment
 import org.jellyfin.mobile.setup.ConnectionHelper
 import org.jellyfin.mobile.update.CnbReleaseSource
 import org.jellyfin.mobile.update.GitHubReleaseSource
@@ -53,12 +53,10 @@ import org.jellyfin.mobile.utils.PermissionRequestHelper
 import org.jellyfin.mobile.utils.extractId
 import org.jellyfin.mobile.utils.isLowRamDevice
 import org.jellyfin.mobile.webapp.RemoteVolumeProvider
-import org.jellyfin.mobile.webapp.WebViewFragment
 import org.jellyfin.mobile.webapp.WebappFunctionChannel
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.util.AuthorizationHeaderBuilder
 import org.koin.android.ext.koin.androidApplication
-import org.koin.androidx.fragment.dsl.fragment
 import org.koin.core.module.dsl.viewModel
 import org.koin.core.qualifier.named
 import org.koin.dsl.module
@@ -81,7 +79,8 @@ val applicationModule = module {
     single { ApiClientController(get(), get(), get(), get(), get()) }
 
     // Event handlers and channels
-    single { ActivityEventHandler(get()) }
+    single { PlaybackLauncher() }
+    single { ActivityEventHandler(get(), get()) }
     single { WebappFunctionChannel() }
 
     // Bridge interfaces
@@ -91,10 +90,6 @@ val applicationModule = module {
     // ViewModels
     viewModel { MainViewModel(get(), get()) }
     viewModel { DownloadsViewModel() }
-
-    // Fragments
-    fragment { WebViewFragment() }
-    fragment { PlayerFragment() }
 
     // Connection helper
     single { ConnectionHelper(get(), get()) }

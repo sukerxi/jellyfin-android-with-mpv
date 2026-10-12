@@ -10,7 +10,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -22,33 +21,21 @@ import org.jellyfin.mobile.utils.BluetoothPermissionHelper
 import org.koin.compose.koinInject
 
 /**
- * 挂在 MainActivity 根布局 ComposeView 上的全局对话框宿主：
- * 更新流程、蓝牙权限、WebView 不可用/过旧。阶段 4 单 Activity 化后会并入 setContent 根树。
+ * MainActivity setContent 根树中的全局对话框宿主：
+ * 更新流程、蓝牙权限、WebView 不可用/过旧。
  *
- * 无对话框时 ComposeView 会被置为 GONE（[onDialogPresenceChanged]），
- * 避免空的全屏 Compose 层拦截下方 Fragment 的触摸事件。
+ * Compose Dialog 本身是独立窗口，无对话框时不会拦截下层触摸，
+ * 因此不再需要可见性切换。
  */
 @Composable
 fun AppDialogHost(
     bluetoothHelper: BluetoothPermissionHelper,
     isWebViewUnsupported: () -> Boolean,
     onCloseApp: () -> Unit,
-    onDialogPresenceChanged: (Boolean) -> Unit,
     updateDialogState: UpdateDialogStateHolder = koinInject(),
     webViewDialogState: WebViewDialogState = koinInject(),
 ) {
     val context = LocalContext.current
-
-    val hasDialog = bluetoothHelper.requestVisible ||
-        isWebViewUnsupported() ||
-        webViewDialogState.outdatedRequest != null ||
-        updateDialogState.prompt != null ||
-        updateDialogState.progressInfo != null ||
-        updateDialogState.installPermissionVisible
-
-    LaunchedEffect(hasDialog) {
-        onDialogPresenceChanged(hasDialog)
-    }
 
     // 更新可用 / 下载进度 / 安装权限
     UpdateDialogHost(updateDialogState)
@@ -73,7 +60,7 @@ fun AppDialogHost(
         )
     }
 
-    // WebView 版本过旧（WebViewFragment 检查）
+    // WebView 版本过旧（WebViewScreen 检查）
     webViewDialogState.outdatedRequest?.let { request ->
         WebViewOutdatedDialog(
             request = request,

@@ -188,6 +188,22 @@
 
 * 验证：全量真机走查：冷启动选服→Web 首页→JS 桥打开设置/下载/播放器（临时宿主）→返回栈与各 BackHandler；旋转（configChanges 已声明，Activity 不重建）
 
+#### 阶段 4 实现笔记（已完成，模拟器 API34 验证）
+
+* 实际与计划的偏差：
+  * `MainActivity` 暂时保留为 **`FragmentActivity` 而非 `ComponentActivity`**：PlayerFragment 大量使用 `requireActivity()`/window/PiP/orientation，阶段 5 播放器 Compose 化后再下沉
+  * **未引入** `koin-androidx-compose-navigation`：导航改为 `ActivityEventHandler.navigationEvents: SharedFlow<NavigationEvent>`（sealed interface：OpenSettings/OpenDownloads/LaunchPlayer），根 composable `LaunchedEffect` collect，腾讯镜像缺 aar 的坑因此未触发
+  * **`styles.xml` 未改**（仍 Theme.AppCompat.NoActionBar）：PlayerFragment 的 appcompat Toolbar、fragment_player.xml、exo_player_control_view.xml、item_episode_picker.xml 仍在；fragment/appcompat/constraintlayout/google-material 依赖与 viewBinding 一并保留到阶段 5
+  * `BackPressInterceptor` 未删：重写为简短接口，PlayerFragment 仍实现，阶段 5 删
+* 新增组件：
+  * `player/interaction/PlaybackLauncher.kt`（Koin single）：`pending: PlaybackRequest?` + `launch()`/`consume()`，替代 Parcelable NavType
+  * `events/NavigationEvent.kt`、`ui/navigation/JellyfinNavHost.kt`（Routes 常量 + serverState 驱动 connect↔web 的 popUpTo 跳转 + connectExternalError rememberSaveable）
+  * `ui/navigation/PlayerFragmentHost.kt`：FragmentContainerView 临时宿主；fragment addToBackStack(tag)，`OnBackStackChangedListener` 监听 fragment 消失 → `onClose()` pop Compose 路由；onDispose 在非自关时 `popBackStackImmediate(tag, INCLUSIVE)`，实现 Fragment/Compose 返回栈**双向同步**
+  * `ui/screens/web/WebViewScreen.kt`：WebView 引用用 `remember { arrayOfNulls<WebView>(1) }`（factory 内不能写 snapshot state）；scope 传 JellyfinWebViewClient 第一参；external player 用 `lateinit var launcher` + `remember { ExternalPlayer { launcher.launch(it) } }` 解决前向引用；电池优化 Snackbar 用 SnackbarHostState 替代 CoordinatorLayout
+* 配套改造：`ExternalPlayer` 构造改 `(Context, (Intent)->Unit)` + `onActivityResult()`，删 ActivityResultRegistry.register；`SystemUtils.requestDownload` 改顶层 `suspend (ComponentActivity, MainViewModel, itemIds)`，Koin 取依赖用 `object : KoinComponent {}`（`GlobalContext.getKoin()` 在 Koin 4 已 Unresolved）；`AppModule` 删两个 fragment{} 注册加 PlaybackLauncher
+* 验证（模拟器 Jellyfin_API34，临时 smoke_route intent 钩子已在提交前移除）：connect 冷启动 ✓、downloads/settings/mpv 编辑器直达+返回 ✓、player 宿主加载+BACK 双向同步 ✓、不可达服务器错误标记回选服页 ✓
+* 注意：播放器类型为 External player 时启动原生 PlayerFragment 会让 PlayerViewModel 构造抛 `IllegalArgumentException: Invalid video player type`——真实链路外置播放器不走 LaunchPlayer 路由，无需处理，但阶段 5 重写播放器入口时可考虑加防御
+
 ### 阶段 5 —— 播放器控制层 Compose 化（最重阶段）
 
 * 新建 `ui/screens/player/`：

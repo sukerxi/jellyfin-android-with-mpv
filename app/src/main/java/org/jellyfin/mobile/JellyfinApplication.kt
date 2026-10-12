@@ -11,7 +11,6 @@ import org.jellyfin.mobile.player.mpv.MpvAssetInstaller
 import org.jellyfin.mobile.utils.JellyTree
 import org.jellyfin.mobile.utils.isWebViewSupported
 import org.koin.android.ext.koin.androidContext
-import org.koin.androidx.fragment.koin.fragmentFactory
 import org.koin.core.context.startKoin
 import timber.log.Timber
 
@@ -35,7 +34,6 @@ class JellyfinApplication : Application() {
         MpvAssetInstaller.start(this)
         startKoin {
             androidContext(this@JellyfinApplication)
-            fragmentFactory()
 
             modules(
                 applicationModule,

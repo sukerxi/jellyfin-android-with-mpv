@@ -3,47 +3,56 @@ package org.jellyfin.mobile.events
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.ActivityInfo
-import android.os.Bundle
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import org.jellyfin.mobile.MainActivity
+import org.jellyfin.mobile.MainViewModel
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.bridge.JavascriptCallback
-import org.jellyfin.mobile.downloads.DownloadsFragment
-import org.jellyfin.mobile.player.ui.PlayerFragment
+import org.jellyfin.mobile.player.interaction.PlaybackLauncher
 import org.jellyfin.mobile.player.ui.PlayerFullscreenHelper
-import org.jellyfin.mobile.settings.SettingsFragment
-import org.jellyfin.mobile.utils.Constants
-import org.jellyfin.mobile.utils.extensions.addFragment
 import org.jellyfin.mobile.utils.requestDownload
 import org.jellyfin.mobile.webapp.WebappFunctionChannel
 import timber.log.Timber
 
 class ActivityEventHandler(
     private val webappFunctionChannel: WebappFunctionChannel,
+    private val playbackLauncher: PlaybackLauncher,
 ) {
     private val eventsFlow = MutableSharedFlow<ActivityEvent>(
         extraBufferCapacity = 10,
         onBufferOverflow = BufferOverflow.SUSPEND,
     )
 
-    fun MainActivity.subscribe() {
+    private val _navigationEvents = MutableSharedFlow<NavigationEvent>(
+        extraBufferCapacity = 10,
+        onBufferOverflow = BufferOverflow.SUSPEND,
+    )
+
+    /**
+     * 导航命令流，由根 NavHost 在组合中 collect。
+     */
+    val navigationEvents: SharedFlow<NavigationEvent> = _navigationEvents.asSharedFlow()
+
+    fun MainActivity.subscribe(mainViewModel: MainViewModel) {
         lifecycleScope.launch {
             lifecycle.repeatOnLifecycle(Lifecycle.State.CREATED) {
                 eventsFlow.collect { event ->
-                    handleEvent(event)
+                    handleEvent(event, mainViewModel)
                 }
             }
         }
     }
 
     @Suppress("CyclomaticComplexMethod", "LongMethod")
-    private fun MainActivity.handleEvent(event: ActivityEvent) {
+    private fun MainActivity.handleEvent(event: ActivityEvent, mainViewModel: MainViewModel) {
         when (event) {
             is ActivityEvent.ChangeFullscreen -> {
                 val fullscreenHelper = PlayerFullscreenHelper(window)
@@ -60,11 +69,8 @@ class ActivityEventHandler(
                 }
             }
             is ActivityEvent.LaunchNativePlayer -> {
-                val args = Bundle().apply {
-                    putParcelable(Constants.EXTRA_MEDIA_PLAY_OPTIONS, event.playOptions)
-                    putParcelable(Constants.EXTRA_WEB_PREFERENCES, event.preferences)
-                }
-                supportFragmentManager.addFragment<PlayerFragment>(args)
+                playbackLauncher.launch(event.playOptions, event.preferences)
+                _navigationEvents.tryEmit(NavigationEvent.LaunchPlayer)
             }
             is ActivityEvent.OpenUrl -> {
                 try {
@@ -77,11 +83,11 @@ class ActivityEventHandler(
             }
             is ActivityEvent.DownloadItems -> {
                 lifecycleScope.launch {
-                    with(event) { requestDownload(itemIds) }
+                    requestDownload(this@handleEvent, mainViewModel, itemIds = event.itemIds)
                 }
             }
             ActivityEvent.OpenDownloads -> {
-                supportFragmentManager.addFragment<DownloadsFragment>()
+                _navigationEvents.tryEmit(NavigationEvent.OpenDownloads)
             }
             is ActivityEvent.CastMessage -> {
                 val action = event.action
@@ -103,7 +109,7 @@ class ActivityEventHandler(
                 }
             }
             ActivityEvent.OpenSettings -> {
-                supportFragmentManager.addFragment<SettingsFragment>()
+                _navigationEvents.tryEmit(NavigationEvent.OpenSettings)
             }
             ActivityEvent.SelectServer -> {
                 mainViewModel.resetServer()

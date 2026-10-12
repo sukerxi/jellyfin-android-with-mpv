@@ -6,11 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.webkit.JavascriptInterface
 import android.widget.Toast
-import androidx.activity.result.ActivityResultRegistry
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.net.toUri
 import androidx.core.text.isDigitsOnly
-import androidx.lifecycle.LifecycleOwner
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
 import org.jellyfin.mobile.R
@@ -39,8 +36,7 @@ import timber.log.Timber
 
 class ExternalPlayer(
     private val context: Context,
-    lifecycleOwner: LifecycleOwner,
-    registry: ActivityResultRegistry,
+    private val launchPlayerIntent: (Intent) -> Unit,
 ) : KoinComponent {
     private val coroutinesScope = MainScope()
 
@@ -52,13 +48,10 @@ class ExternalPlayer(
     private val apiClient: ApiClient = get()
     private val videosApi: VideosApi = apiClient.videosApi
 
-    private val playerContract = registry.register(
-        "externalplayer",
-        lifecycleOwner,
-        ActivityResultContracts.StartActivityForResult(),
-    ) { result ->
-        val resultCode = result.resultCode
-        val intent = result.data
+    /**
+     * 由 Compose 层的 rememberLauncherForActivityResult 回调转发。
+     */
+    fun onActivityResult(resultCode: Int, intent: Intent?) {
         when (val action = intent?.action) {
             Constants.MPV_PLAYER_RESULT_ACTION -> handleMPVPlayer(resultCode, intent)
             Constants.MX_PLAYER_RESULT_ACTION -> handleMXPlayer(resultCode, intent)
@@ -164,7 +157,7 @@ class ExternalPlayer(
             // VLC
             if (enabledSubUrl != null) putExtra("subtitles_location", enabledSubUrl)
         }
-        playerContract.launch(playerIntent)
+        launchPlayerIntent(playerIntent)
         Timber.d(
             "Starting playback [id=${source.itemId}, title=${source.getName(context)}, " +
                 "playMethod=${source.playMethod}, startTime=${source.startTime}]",
