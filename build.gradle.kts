@@ -28,6 +28,17 @@ fun RepositoryHandler.publicMirror(url: String) = maven {
 
 allprojects {
     repositories {
+        // KMP 布局的库（coil3 3.6+ 根制品是几 KB 的空壳 jar，真实 Android 实现在
+        // coil-compose-android 等变体中）必须读 Gradle Module Metadata 才能完成
+        // 变体重定向。为避免与下面「全局关 GMM」的镜像兜底策略冲突，这里为 coil3
+        // 单独声明限定 group 的仓库并开启 GMM（阿里云 public 镜像制品完整）。
+        maven("https://maven.aliyun.com/repository/public/") {
+            content { includeGroup("io.coil-kt.coil3") }
+            metadataSources { mavenPom(); gradleMetadata(); artifact() }
+        }
+        mavenCentral {
+            content { includeGroup("io.coil-kt.coil3") }
+        }
         // 公共镜像：聚合 Maven Central / Google 等。多个镜像并列用于互补缺口
         // （各镜像同步进度与缓存状态不同，单点存在 artifact 缺失风险）。
         publicMirror("https://mirrors.cloud.tencent.com/nexus/repository/maven-public/")

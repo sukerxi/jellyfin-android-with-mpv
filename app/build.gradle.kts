@@ -187,7 +187,11 @@ dependencies {
     implementation(libs.modernandroidpreferences)
 
     // Jetpack Compose
+    implementation(platform(libs.compose.bom))
     implementation(libs.bundles.compose)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.datastore.preferences)
 
     // Network
     val sdkVersion = findProperty("sdk.version")?.toString()

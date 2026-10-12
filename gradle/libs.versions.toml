@@ -37,10 +37,12 @@ androidx-webkit = "1.15.0"
 modernandroidpreferences = "2.4.0-beta2"
 
 # Compose
-compose = "1.12.1"
-compose-foundation = "1.12.1"
-compose-material = "1.12.1"
+compose-bom = "2026.09.00"
 compose-material-icons = "1.7.8"
+
+# Navigation & preferences
+androidx-navigation = "2.10.2"
+androidx-datastore = "1.2.1"
 
 # Network
 jellyfin-sdk = "1.8.12"
@@ -91,11 +93,13 @@ kotlin-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-s
 # Core
 koin = { group = "io.insert-koin", name = "koin-android", version.ref = "koin" }
 koin-compose = { group = "io.insert-koin", name = "koin-androidx-compose", version.ref = "koin-compose" }
+koin-compose-navigation = { group = "io.insert-koin", name = "koin-androidx-compose-navigation", version.ref = "koin-compose" }
 android-gradle = { module = "com.android.tools.build:gradle", version.ref = "android-plugin" }
 androidx-core = { group = "androidx.core", name = "core", version.ref = "androidx-core" }
 androidx-core-splashscreen = { group = "androidx.core", name = "core-splashscreen", version.ref = "androidx-core-splashscreen" }
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "androidx-appcompat" }
 androidx-activity = { group = "androidx.activity", name = "activity", version.ref = "androidx-activity" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "androidx-activity" }
 androidx-documentfile = { module = "androidx.documentfile:documentfile", version.ref = "androidx-documentfile" }
 androidx-fragment = { group = "androidx.fragment", name = "fragment", version.ref = "androidx-fragment" }
 androidx-work-runtime = { module = "androidx.work:work-runtime", version.ref = "androidx-work" }
@@ -107,6 +111,8 @@ androidx-lifecycle-livedata = { group = "androidx.lifecycle", name = "lifecycle-
 androidx-lifecycle-runtime = { group = "androidx.lifecycle", name = "lifecycle-runtime", version.ref = "androidx-lifecycle" }
 androidx-lifecycle-common = { group = "androidx.lifecycle", name = "lifecycle-common", version.ref = "androidx-lifecycle" }
 androidx-lifecycle-process = { group = "androidx.lifecycle", name = "lifecycle-process", version.ref = "androidx-lifecycle" }
+androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "androidx-lifecycle" }
+androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "androidx-lifecycle" }
 
 # UI
 google-material = { group = "com.google.android.material", name = "material", version.ref = "google-material" }
@@ -114,14 +120,20 @@ androidx-constraintlayout = { group = "androidx.constraintlayout", name = "const
 androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "androidx-webkit" }
 modernandroidpreferences = { group = "de.maxr1998", name = "modernandroidpreferences", version.ref = "modernandroidpreferences" }
 
-# Compose
-compose-runtime = { group = "androidx.compose.runtime", name = "runtime", version.ref = "compose" }
-compose-ui = { group = "androidx.compose.ui", name = "ui", version.ref = "compose" }
-compose-animation = { group = "androidx.compose.animation", name = "animation", version.ref = "compose" }
-compose-foundation = { group = "androidx.compose.foundation", name = "foundation", version.ref = "compose-foundation" }
-compose-material = { group = "androidx.compose.material", name = "material", version.ref = "compose-material" }
+# Compose (versions managed by the Compose BOM, except icons)
+compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "compose-bom" }
+compose-runtime = { group = "androidx.compose.runtime", name = "runtime" }
+compose-ui = { group = "androidx.compose.ui", name = "ui" }
+compose-animation = { group = "androidx.compose.animation", name = "animation" }
+compose-foundation = { group = "androidx.compose.foundation", name = "foundation" }
+compose-material = { group = "androidx.compose.material", name = "material" }
+compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 compose-material-icons = { group = "androidx.compose.material", name = "material-icons-core", version.ref = "compose-material-icons" }
 compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended", version.ref = "compose-material-icons" }
+
+# Navigation & preferences
+androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "androidx-navigation" }
+androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "androidx-datastore" }
 
 # Network
 jellyfin-sdk = { group = "org.jellyfin.sdk", name = "jellyfin-core", version.ref = "jellyfin-sdk" }
@@ -179,6 +191,8 @@ androidx-lifecycle = [
     "androidx-lifecycle-runtime",
     "androidx-lifecycle-common",
     "androidx-lifecycle-process",
+    "androidx-lifecycle-viewmodel-compose",
+    "androidx-lifecycle-runtime-compose",
 ]
 compose = [
     "compose-runtime",
@@ -186,6 +200,7 @@ compose = [
     "compose-foundation",
     "compose-animation",
     "compose-material",
+    "compose-material3",
     "compose-material-icons",
     "compose-material-icons-extended",
 ]
