@@ -184,7 +184,6 @@ dependencies {
     implementation(libs.google.material)
     implementation(libs.androidx.constraintlayout)
     implementation(libs.androidx.webkit)
-    implementation(libs.modernandroidpreferences)
 
     // Jetpack Compose
     implementation(platform(libs.compose.bom))

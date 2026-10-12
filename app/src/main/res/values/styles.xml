@@ -16,9 +16,6 @@
         <item name="postSplashScreenTheme">@style/AppTheme</item>
     </style>
 
-    <!-- Settings theme -->
-    <style name="AppTheme.Settings" />
-
     <!-- Theme Overlays -->
     <style name="ThemeOverlay.App.BackButton" parent="">
         <item name="colorControlNormal">?android:textColorPrimary</item>

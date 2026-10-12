@@ -34,7 +34,6 @@ androidx-lifecycle = "2.11.0"
 androidx-constraintlayout = "2.2.2"
 google-material = "1.14.0"
 androidx-webkit = "1.15.0"
-modernandroidpreferences = "2.4.0-beta2"
 
 # Compose
 compose-bom = "2026.09.00"
@@ -118,7 +117,6 @@ androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lif
 google-material = { group = "com.google.android.material", name = "material", version.ref = "google-material" }
 androidx-constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "androidx-constraintlayout" }
 androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "androidx-webkit" }
-modernandroidpreferences = { group = "de.maxr1998", name = "modernandroidpreferences", version.ref = "modernandroidpreferences" }
 
 # Compose (versions managed by the Compose BOM, except icons)
 compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "compose-bom" }

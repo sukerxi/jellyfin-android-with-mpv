@@ -238,13 +238,21 @@
 
 ## 七、验证方式
 
-- 每阶段：`gradle.bat :app:assembleProprietaryDebug`（必要时先在线同步一次）+ detekt/lint
-- 每阶段冒烟平台：**安卓模拟器（不用真机）**
-  - emulator 程序：`D:\AndroidSDK\emulator\emulator.exe`（36.2.12，可执行；沙箱禁止向 D:\AndroidSDK 写入）
-  - 系统镜像：经 cmdline-tools 安装 `system-images;android-34;default;x86_64`（AOSP 镜像 rev 4，无 Play 服务，API 34 / Android 14）
-  - 由于沙箱拦截对 `D:\AndroidSDK` 的写操作，附加 SDK 根放在 `C:\Users\Admin\.local\share\android-sdk`，cmdline-tools 在 `C:\Users\Admin\.local\share\android-cmdline-tools\latest`；启动模拟器时以 `ANDROID_SDK_ROOT` 指向附加根（emulator 二进制仍从 D 盘 SDK 运行）
-  - 旧的 API 30 TestAVD 与 emulator 36.2.12 不兼容（卡 offline），弃用；新建 API 34 AVD
-  - 每阶段：`adb install -r` debug APK（applicationId `org.jellyfin.mobile.debug`），走查核心路径
-- 阶段 0 额外验证：全新安装 + 用 adb 向 `<pkg>_preferences` 预置旧偏好后启动，验证 DataStore 迁移结果
-- 阶段 5 按"双内核 × 手势/菜单/PiP/字幕"矩阵回归
+* 每阶段：`gradle.bat :app:assembleProprietaryDebug`（必要时先在线同步一次）+ detekt/lint
+
+* 每阶段冒烟平台：**安卓模拟器（不用真机）**
+
+  * emulator 程序：`D:\AndroidSDK\emulator\emulator.exe`（36.2.12，可执行；沙箱禁止向 D:\AndroidSDK 写入）
+
+  * 系统镜像：经 cmdline-tools 安装 `system-images;android-34;default;x86_64`（AOSP 镜像 rev 4，无 Play 服务，API 34 / Android 14）
+
+  * 由于沙箱拦截对 `D:\AndroidSDK` 的写操作，附加 SDK 根放在 `C:\Users\Admin\.local\share\android-sdk`，cmdline-tools 在 `C:\Users\Admin\.local\share\android-cmdline-tools\latest`；启动模拟器时以 `ANDROID_SDK_ROOT` 指向附加根（emulator 二进制仍从 D 盘 SDK 运行）
+
+  * 旧的 API 30 TestAVD 与 emulator 36.2.12 不兼容（卡 offline），弃用；新建 API 34 AVD
+
+  * 每阶段：`adb install -r` debug APK（applicationId `org.jellyfin.mobile.debug`），走查核心路径
+
+* 阶段 0 额外验证：全新安装 + 用 adb 向 `<pkg>_preferences` 预置旧偏好后启动，验证 DataStore 迁移结果
+
+* 阶段 5 按"双内核 × 手势/菜单/PiP/字幕"矩阵回归
 

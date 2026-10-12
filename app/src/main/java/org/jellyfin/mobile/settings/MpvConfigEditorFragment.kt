@@ -1,19 +1,13 @@
 package org.jellyfin.mobile.settings
 
 import android.os.Bundle
-import android.view.LayoutInflater
 import android.view.View
-import android.view.ViewGroup
-import android.widget.Toast
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.fragment.app.Fragment
 import org.jellyfin.mobile.R
-import org.jellyfin.mobile.app.AppPreferences
-import org.jellyfin.mobile.databinding.FragmentMpvConfigEditorBinding
-import org.jellyfin.mobile.player.mpv.MpvConfigManager
-import org.jellyfin.mobile.utils.applyWindowInsetsAsMargins
-import org.jellyfin.mobile.utils.extensions.requireMainActivity
-import org.jellyfin.mobile.utils.withThemedContext
-import org.koin.android.ext.android.inject
+import org.jellyfin.mobile.ui.screens.settings.MpvConfigEditorScreen
+import org.jellyfin.mobile.ui.theme.JellyfinTheme
 
 /**
  * Full-screen editor for the user-provided mpv configuration.
@@ -22,59 +16,24 @@ import org.koin.android.ext.android.inject
  * syntax (one `option=value` per line, `#` comments and `[profile]` sections). It is stored in
  * preferences and synchronized into mpv's config directory, where mpv parses it natively.
  */
-class MpvConfigEditorFragment : Fragment() {
+class MpvConfigEditorFragment : Fragment(R.layout.fragment_compose) {
 
-    private val appPreferences: AppPreferences by inject()
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
 
-    private var _binding: FragmentMpvConfigEditorBinding? = null
-    private val binding get() = _binding!!
+        val composeView: ComposeView = view.findViewById(R.id.compose_view)
+        composeView.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
 
-    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
-        val localInflater = inflater.withThemedContext(requireContext(), R.style.AppTheme_Settings)
-        _binding = FragmentMpvConfigEditorBinding.inflate(localInflater, container, false)
-        binding.root.applyWindowInsetsAsMargins()
-        binding.toolbar.setTitle(R.string.mpv_config_editor_title)
-        requireMainActivity().apply {
-            setSupportActionBar(binding.toolbar)
-            supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        composeView.setContent {
+            JellyfinTheme {
+                MpvConfigEditorScreen(
+                    onBack = {
+                        if (isAdded && !parentFragmentManager.isStateSaved) {
+                            parentFragmentManager.popBackStackImmediate()
+                        }
+                    },
+                )
+            }
         }
-
-        binding.configEditText.setText(appPreferences.mpvCustomConfig)
-        binding.resetButton.setOnClickListener {
-            binding.configEditText.setText("")
-        }
-        binding.saveButton.setOnClickListener {
-            saveConfig()
-        }
-        return binding.root
-    }
-
-    private fun saveConfig() {
-        val config = binding.configEditText.text?.toString().orEmpty().trim()
-        val invalidLine = MpvConfigManager.findInvalidLine(config)
-        if (invalidLine != null) {
-            Toast.makeText(
-                requireContext(),
-                getString(R.string.mpv_config_editor_invalid_line, invalidLine),
-                Toast.LENGTH_LONG,
-            ).show()
-            return
-        }
-
-        appPreferences.mpvCustomConfig = config
-        MpvConfigManager.syncConfigFile(requireContext().applicationContext, config)
-        Toast.makeText(requireContext(), R.string.mpv_config_editor_saved, Toast.LENGTH_SHORT).show()
-        parentFragmentManager.setFragmentResult(RESULT_CONFIG_SAVED, Bundle.EMPTY)
-        parentFragmentManager.popBackStack()
-    }
-
-    override fun onDestroyView() {
-        super.onDestroyView()
-        requireMainActivity().setSupportActionBar(null)
-        _binding = null
-    }
-
-    companion object {
-        const val RESULT_CONFIG_SAVED = "mpv_config_saved"
     }
 }
