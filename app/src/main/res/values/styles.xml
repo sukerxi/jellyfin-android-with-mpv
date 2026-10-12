@@ -1,9 +1,7 @@
 <resources>
     <!-- Application theme -->
-    <style name="AppTheme.V21" parent="Theme.AppCompat.NoActionBar">
-        <item name="colorPrimary">@color/jellyfin_primary</item>
-        <item name="colorPrimaryDark">@color/jellyfin_primary_dark</item>
-        <item name="colorAccent">@color/jellyfin_accent</item>
+    <!-- 阶段 5：Fragment/appcompat 全部移除，主题下沉为平台主题（仅作 splash 后兜底） -->
+    <style name="AppTheme.V21" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/theme_background</item>
         <item name="android:navigationBarColor">@color/theme_background</item>
     </style>
@@ -14,10 +12,5 @@
         <item name="windowSplashScreenBackground">@color/theme_background</item>
         <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash</item>
         <item name="postSplashScreenTheme">@style/AppTheme</item>
-    </style>
-
-    <!-- Theme Overlays -->
-    <style name="ThemeOverlay.App.BackButton" parent="">
-        <item name="colorControlNormal">?android:textColorPrimary</item>
     </style>
 </resources>

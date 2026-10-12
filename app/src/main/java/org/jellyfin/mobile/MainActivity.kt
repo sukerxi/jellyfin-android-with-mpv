@@ -8,6 +8,7 @@ import android.graphics.Color
 import android.os.Bundle
 import android.os.IBinder
 import android.view.OrientationEventListener
+import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -20,14 +21,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
-import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.events.ActivityEventHandler
 import org.jellyfin.mobile.player.cast.Chromecast
 import org.jellyfin.mobile.player.cast.IChromecast
-import org.jellyfin.mobile.player.ui.PlayerFragment
+import org.jellyfin.mobile.player.interaction.PlaybackController
 import org.jellyfin.mobile.ui.components.AppDialogHost
 import org.jellyfin.mobile.ui.navigation.JellyfinNavHost
 import org.jellyfin.mobile.ui.theme.JellyfinTheme
@@ -45,13 +45,10 @@ import org.koin.android.ext.android.inject
 import org.koin.androidx.viewmodel.ext.android.viewModel
 
 /**
- * 阶段 4：单 Activity 化，全部界面由 navigation-compose 承载。
- *
- * 暂时仍继承 [FragmentActivity]：播放器 PlayerFragment 在阶段 5 才 Compose 化，
- * 这之前由 player 路由的 FragmentContainerView 临时宿主承载；阶段 5 将下沉为
- * ComponentActivity。
+ * 阶段 5：单 Activity（ComponentActivity），全部界面由 navigation-compose 承载，
+ * 播放器控制层也已 Compose 化（见 ui/screens/player/PlayerScreen.kt）。
  */
-class MainActivity : FragmentActivity() {
+class MainActivity : ComponentActivity() {
     private val activityEventHandler: ActivityEventHandler = get()
     val mainViewModel: MainViewModel by viewModel()
     val bluetoothPermissionHelper: BluetoothPermissionHelper = BluetoothPermissionHelper(this, get())
@@ -60,6 +57,7 @@ class MainActivity : FragmentActivity() {
     private val appPreferences: AppPreferences by inject()
     private val updateChecker: UpdateChecker by inject()
     private val updateDialogState: UpdateDialogStateHolder by inject()
+    private val playbackController: PlaybackController by inject()
 
     /**
      * 当前设备不支持 WebView 时置位，由根 Compose 宿主渲染不可取消的提示框。
@@ -162,9 +160,10 @@ class MainActivity : FragmentActivity() {
     @Deprecated("Deprecated in Java")
     override fun onRequestPermissionsResult(
         requestCode: Int,
-        permissions: Array<out String>,
+        permissions: Array<String>,
         grantResults: IntArray,
     ) {
+        @Suppress("DEPRECATION")
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
 
         permissionRequestHelper.handleRequestPermissionsResult(requestCode, permissions, grantResults)
@@ -172,11 +171,8 @@ class MainActivity : FragmentActivity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        for (fragment in supportFragmentManager.fragments) {
-            if (fragment is PlayerFragment && fragment.isVisible) {
-                fragment.onUserLeaveHint()
-            }
-        }
+        // 阶段 5：播放器已 Compose 化，PiP 入口经 PlaybackController 桥接
+        playbackController.notifyUserLeaveHint()
     }
 
     override fun onStop() {

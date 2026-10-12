@@ -166,10 +166,6 @@ object Constants {
     const val TICKS_PER_MILLISECOND = 10_000L
     const val TRICKPLAY_TILE_REFRESH_WINDOW_MS = 100L
 
-    // Video player intent extras
-    const val EXTRA_MEDIA_PLAY_OPTIONS = "org.jellyfin.mobile.MEDIA_PLAY_OPTIONS"
-    const val EXTRA_WEB_PREFERENCES = "org.jellyfin.mobile.WEB_PREFERENCES"
-
     // External player result actions
     const val MPV_PLAYER_RESULT_ACTION = "is.xyz.mpv.MPVActivity.result"
     const val MX_PLAYER_RESULT_ACTION = "com.mxtech.intent.result.VIEW"

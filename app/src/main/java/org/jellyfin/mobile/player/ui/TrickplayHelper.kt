@@ -1,15 +1,15 @@
 package org.jellyfin.mobile.player.ui
 
+import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.text.format.DateUtils
-import android.view.View
-import android.view.ViewGroup
-import androidx.appcompat.widget.AppCompatImageView
-import androidx.appcompat.widget.AppCompatTextView
-import androidx.core.view.isVisible
-import androidx.core.view.updateLayoutParams
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import coil3.ImageLoader
 import coil3.network.NetworkHeaders
 import coil3.network.httpHeaders
@@ -36,31 +36,37 @@ import java.util.UUID
 import kotlin.math.roundToInt
 import kotlin.time.Duration.Companion.milliseconds
 
+/**
+ * 阶段 5：Compose 化的 trickplay 控制器。
+ *
+ * 取图 URL / 瓦片换算 / 节流逻辑与原实现完全一致，但输出改为 Compose 快照状态
+ * [state]（由 TrickplayPreview 渲染），不再直接操作 View。
+ * 水平位置由 Compose 层依据进度条测量结果与 [TrickplayState.fraction] 计算。
+ */
 class TrickplayHelper(
-    private val thumbnailContainer: View,
-    private val thumbnailView: AppCompatImageView,
-    private val seekBarContainer: View,
-    private val chapterNameView: AppCompatTextView,
-    private val timeView: AppCompatTextView,
+    private val context: Context,
 ) : KoinComponent {
     private val api: ApiClient by inject()
     private val imageLoader: ImageLoader by inject()
-    private val context = thumbnailView.context
+
     private val handler = Handler(Looper.getMainLooper())
     private val thumbnailDisplayHeight = context.resources.getDimensionPixelSize(R.dimen.trickplay_thumbnail_height)
-    private var thumbnailDisplayWidth = 0
 
     private var trickPlayInfo: TrickplayInfoDto? = null
     private var itemId: UUID? = null
     private var mediaSourceId: UUID? = null
     private var durationMs: Long = 0L
-    private var currentRequest: Disposable? = null
     private var pendingRequest: Runnable? = null
     private var pendingTile = -1
     private var lastDispatchedTile = -1
     private var isScrubbing = false
     private var nextDispatchAt = 0L
     private var chapters: List<ChapterInfo>? = null
+    private var currentRequest: Disposable? = null
+
+    /** Compose 渲染用的 trickplay 状态。 */
+    var state: TrickplayState by mutableStateOf(TrickplayState())
+        private set
 
     fun onMediaSourceChanged(source: JellyfinMediaSource?) {
         trickPlayInfo = null
@@ -72,7 +78,9 @@ class TrickplayHelper(
         pendingRequest?.let { handler.removeCallbacks(it) }
         pendingRequest = null
         chapters = null
-        thumbnailContainer.visibility = View.GONE
+        currentRequest?.dispose()
+        currentRequest = null
+        state = TrickplayState()
 
         val item = source?.item
         val resolvedSourceId = source?.id
@@ -85,18 +93,19 @@ class TrickplayHelper(
         mediaSourceId = resolvedMediaSourceId
         durationMs = source.runTime.inWholeMilliseconds
         chapters = item.chapters
-        thumbnailDisplayWidth = (thumbnailDisplayHeight * resolvedTrickPlayInfo.width.toFloat() / resolvedTrickPlayInfo.height).roundToInt()
-        thumbnailView.updateLayoutParams<ViewGroup.LayoutParams> { width = thumbnailDisplayWidth }
+        val width = (thumbnailDisplayHeight * resolvedTrickPlayInfo.width.toFloat() / resolvedTrickPlayInfo.height).roundToInt()
+        state = state.copy(thumbnailWidthPx = width)
     }
 
+    /**
+     * @param position 当前 scrub 位置（毫秒）
+     */
     fun onScrubMove(position: Long) {
         isScrubbing = true
-        if (trickPlayInfo == null || itemId == null || mediaSourceId == null) return
+        val resolvedTrickPlayInfo = trickPlayInfo ?: return
+        val resolvedItemId = itemId ?: return
+        val resolvedMediaSourceId = mediaSourceId ?: return
         if (durationMs <= 0) return
-
-        val resolvedTrickPlayInfo = trickPlayInfo!!
-        val resolvedItemId = itemId!!
-        val resolvedMediaSourceId = mediaSourceId!!
 
         // Calculate trickplay tile position and offset based on scrubberposition
         val currentTile = position.floorDiv(resolvedTrickPlayInfo.interval).toInt()
@@ -108,18 +117,17 @@ class TrickplayHelper(
         val offsetX = tileOffsetX * resolvedTrickPlayInfo.width
         val offsetY = tileOffsetY * resolvedTrickPlayInfo.height
 
-        // Always update horizontal position regardless of tile change, centered above scrubber
-        val fraction = position.toFloat() / durationMs.toFloat()
-        val scrubberX = seekBarContainer.x + fraction * seekBarContainer.width
-        val clampMin = seekBarContainer.x
-        val clampMax = (seekBarContainer.x + seekBarContainer.width - thumbnailDisplayWidth).coerceAtLeast(clampMin)
-        thumbnailContainer.x = (scrubberX - thumbnailDisplayWidth / 2f).coerceIn(clampMin, clampMax)
+        // Fraction of the media duration; the Compose layer maps it to the seek bar geometry
+        val fraction = (position.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
 
         // Update chapter name and timestamp on every move
         val chapterName = chapters?.lastOrNull { it.startPositionTicks <= position * Constants.TICKS_PER_MILLISECOND }?.name
-        chapterNameView.isVisible = !chapterName.isNullOrEmpty()
-        if (!chapterName.isNullOrEmpty()) chapterNameView.text = chapterName
-        timeView.text = formatPositionAsElapsedTime(position)
+        state = state.copy(
+            visible = true,
+            fraction = fraction,
+            chapterName = chapterName,
+            timeText = formatPositionAsElapsedTime(position),
+        )
 
         // Same tile already pending or already displayed - position updated above, nothing else to do
         if (currentTile == pendingTile || currentTile == lastDispatchedTile) return
@@ -184,8 +192,7 @@ class TrickplayHelper(
                 .target(
                     onSuccess = { image ->
                         if (isScrubbing) {
-                            thumbnailView.setImageBitmap(image.toBitmap())
-                            thumbnailContainer.visibility = View.VISIBLE
+                            state = state.copy(thumbnail = image.toBitmap().asImageBitmap())
                         }
                     },
                 )
@@ -202,7 +209,7 @@ class TrickplayHelper(
         nextDispatchAt = 0L
         currentRequest?.dispose()
         currentRequest = null
-        thumbnailContainer.visibility = View.GONE
+        state = TrickplayState(thumbnailWidthPx = state.thumbnailWidthPx)
     }
 
     private fun formatPositionAsElapsedTime(positionMs: Long): String {
@@ -211,3 +218,22 @@ class TrickplayHelper(
         return DateUtils.formatElapsedTime((positionMs + roundToNearestThresholdMs).milliseconds.inWholeSeconds)
     }
 }
+
+/**
+ * trickplay 预览状态（由 Compose 层渲染）。
+ *
+ * @param visible 是否展示（scrubbing 中）
+ * @param fraction 当前 scrub 位置占媒体时长的比例（0f..1f）
+ * @param thumbnailWidthPx 缩略图显示宽度（按显示高度与瓦片宽高比推算）
+ * @param thumbnail 已加载的缩略图；null 表示尚未取到（取图逻辑见 [TrickplayHelper]）
+ * @param chapterName 当前章节名（可为空）
+ * @param timeText 位置时间文本
+ */
+data class TrickplayState(
+    val visible: Boolean = false,
+    val fraction: Float = 0f,
+    val thumbnailWidthPx: Int = 0,
+    val thumbnail: ImageBitmap? = null,
+    val chapterName: String? = null,
+    val timeText: String = "",
+)

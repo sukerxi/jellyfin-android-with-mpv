@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  阶段 5：Compose 控件栏中的 DefaultTimeBar。
+  属性与原 exo_player_control_view.xml 中的 exo_progress 完全一致（颜色改用显式品牌色，
+  不再依赖主题 ?attr/colorAccent），以保证进度条/trickplay 行为与外观零回归。
+-->
+<androidx.media3.ui.DefaultTimeBar xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/player_time_bar"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    app:played_color="@color/jellyfin_accent"
+    app:scrubber_color="@color/jellyfin_accent"
+    app:scrubber_dragged_size="24dp"
+    app:scrubber_enabled_size="16dp"
+    app:unplayed_color="@color/playback_timebar_unplayed" />

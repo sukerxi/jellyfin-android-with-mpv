@@ -24,7 +24,6 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.view.KeyEvent
 import androidx.annotation.StringRes
-import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.IntentCompat
 import androidx.core.content.getSystemService
 import androidx.core.text.HtmlCompat
@@ -127,7 +126,7 @@ class RemotePlayerService : Service(), CoroutineScope {
         job = Job()
 
         // Create wakelock for the service
-        val powerManager: PowerManager = getSystemService(AppCompatActivity.POWER_SERVICE) as PowerManager
+        val powerManager: PowerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "jellyfin:WakeLock")
         wakeLock.setReferenceCounted(false)
 

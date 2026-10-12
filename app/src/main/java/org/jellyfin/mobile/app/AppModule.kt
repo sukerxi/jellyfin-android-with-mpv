@@ -36,6 +36,7 @@ import org.jellyfin.mobile.downloads.DownloadsViewModel
 import org.jellyfin.mobile.downloads.FileDownloader
 import org.jellyfin.mobile.events.ActivityEventHandler
 import org.jellyfin.mobile.player.deviceprofile.DeviceProfileBuilder
+import org.jellyfin.mobile.player.interaction.PlaybackController
 import org.jellyfin.mobile.player.interaction.PlaybackLauncher
 import org.jellyfin.mobile.player.interaction.PlayerEvent
 import org.jellyfin.mobile.player.mediasegments.MediaSegmentRepository
@@ -80,6 +81,7 @@ val applicationModule = module {
 
     // Event handlers and channels
     single { PlaybackLauncher() }
+    single { PlaybackController() }
     single { ActivityEventHandler(get(), get()) }
     single { WebappFunctionChannel() }
 

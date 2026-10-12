@@ -238,6 +238,32 @@
 
 * 验证（真机，重点回归区）：ExoPlayer 与 mpv 双内核各播一集；手势（亮度/音量/seek/双击/长按）、锁屏、横竖屏切换/全屏、PiP 进出、字幕开关/外挂/ASS 直放、音轨/清晰度/解码器菜单、倍速、章节、选集面板、跳过片头片尾按钮、trickplay 缩略图、上一集/下一集队列逻辑
 
+#### 阶段 5 实现笔记（已完成代码，待编译/装机验证）
+
+* 实际与计划的偏差：
+  * `PlayerViewModel` 作用域从 Fragment 改为 **NavBackStackEntry**（`viewModel()` 在 player 路由内），播放器随路由出栈销毁，与旧 Fragment 生命周期一致；`setupPlayer()` 仍由 `PlayerLifecycleObserver`（ProcessLifecycleOwner）在 VM 构造时触发
+  * **进度条**：新增 `res/layout/view_player_timebar.xml`（10 行，属性与旧 `exo_progress` 完全一致，仅颜色改为显式品牌色），以 `AndroidView` 嵌入控件栏；未使用无 `style` 的程序化构造，避免依赖主题默认样式
+  * **trickplay**：`TrickplayHelper` 重写为状态驱动（`state: TrickplayState` 快照），取图仍走 `imageLoader.enqueue + target(onSuccess)`（与旧代码同一 API，零新依赖风险），缩略图位图入状态后由 `TrickplayPreview` 的 `Image` 渲染；未引入 coil-compose 的 `AsyncImage`
+  * **手势**：`detectTapGestures`（onPress 内自实现长按检测 + `tryAwaitRelease` 释放倍速）+ `detectDragGestures` + `detectTransformGestures`（返回 false 不消费）；另加一个非消耗型 `awaitPointerEventScope` 指针计数观察者，捏合期间屏蔽单指拖拽（复刻旧代码按 `pointerCount` 分发的行为）
+  * **锁屏/面板/跳过按钮/加载圈**：均在 PlayerScreen 的“overlay 层”（始终按 systemBars  padding）内渲染，锁屏状态驱动手势层的 `isLocked`
+  * **全屏**：`PlayerFullscreenHelper` 原样保留；`isFullscreen` 由 decorView 的 `OnApplyWindowInsetsListener`（旧 fragment root 同款逻辑）同步到 Compose 状态；视频面/手势面在非全屏时按 systemBars padding，全屏时 edge-to-edge，控件栏按 max(cutout, systemBars) padding
+  * **入口防御**（采纳计划建议）：`JellyfinNavHost` 的 player 路由先校验 `videoPlayerType` 为 ExoPlayer/mpv 才进入 `PlayerScreen`，否则直接 pop，规避 `setupPlayer()` 对其它类型抛 `IllegalArgumentException`
+* 新增/修改：
+  * 新增 `ui/screens/player/`：`PlayerScreen.kt`（编排）、`PlayerControls.kt`（控件栏 + 章节标记 + trickplay 挂点）、`PlayerMenus.kt`（5 个 DropdownMenu + 菜单数据）、`PlaybackInfoPanel.kt`、`EpisodePickerPanel.kt`、`GestureOverlay.kt`、`PlayerGestureHandler.kt`（手势逻辑状态化）、`TrickplayPreview.kt`、`PlayerFormatters.kt`（格式化搬运）
+  * 新增 `player/interaction/PlaybackController.kt`（Koin single，桥接 MainActivity.onUserLeaveHint → PiP）；`player/ui/PlayerMenuState.kt`（`ChapterMarkingState`）
+  * `PlayerViewModel`：删除 `PlayerMenuHelper`/`setPlayerMenuHelper`，新增 `chapterMarkings`/`activeAskToSkipSegment` 两个 StateFlow 与 `refreshPlayerMenuState()`；章节标记改由 VM 计算（bias + watched），跳过按钮改为状态驱动
+  * `MainActivity`：`FragmentActivity` → `ComponentActivity`；`onUserLeaveHint` 走 `PlaybackController.notifyUserLeaveHint()`
+  * `TrickplayHelper`：重写为状态驱动（见上）
+  * 删除：`PlayerFragment`、`PlayerMenus`、`PlayerGestureHelper`、`PlayerLockScreenHelper`、`ChapterMarking`、`TrackSelectionCallback`、`playermenuhelper/`（3 文件）、`PlayerFragmentHost`、`BackPressInterceptor`、`utils/extensions/Fragment.kt`、`res/layout/{fragment_player,exo_player_control_view,item_episode_picker}.xml`、`res/color/episode_picker_item_text.xml`
+  * 构建：移除 `appcompat`/`fragment`/`constraintlayout`/`google-material` 依赖（含版本目录条目）与 `viewBinding = true`；`styles.xml` 的 AppTheme 父主题改 `android:Theme.Material.NoActionBar`（移除 AppCompat 专有 colorPrimary/colorAccent 与 ThemeOverlay.App.BackButton）；`RemotePlayerService` 的 `AppCompatActivity.POWER_SERVICE` 改 `Context.POWER_SERVICE`；`Constants` 移除两个 Fragment arguments 常量
+* 关键坑：
+  * **旧控件布局其实是 media3 控制器**：`exo_player_control_view.xml` 靠同名资源遮蔽成为 PlayerView 的内置控制器（播放/暂停、时间文本、进度都由 `PlayerControlView` 内部驱动），因此 Compose 化后需自实现播放/暂停图标、时间文本、进度轮询（200ms）与 scrub 监听；`PlayerView.useController = false` 后媒体3 自带的同名的控件布局改由库内版本提供并隐藏，无冲突
+  * `PlayerView` 在 Compose 中 factory 只创建一次、update 里绑 player；`onRelease` 里 `player = null` + `subtitleView.removeAllViews()`（AssSubtitleView 随 view 一起丢弃）
+  * 手势层的 z 序：控件栏（scrim 背景但无 pointer input）之下的手势层仍可收到点击——与旧实现"点 scrim 收起控件"行为一致；按钮/面板因自身可点击而正常消费
+  * 空的全屏 Compose `Box`（纯 background）不参与 hit test，触摸会穿透到下层手势层（阶段 3 的 ComposeView 坑在整树 setContent 后已不存在）
+  * `WindowInsets.systemBars` 在系统栏隐藏时约为 0，故"控件栏 padding = 非全屏 systemBars / 全屏 max(cutout, systemBars)"与旧逻辑等价
+* 待验证（本机无 Java/Gradle/Android SDK，未编译）：`:app:assembleProprietaryDebug` + detekt；模拟器 API34 按"双内核 × 手势/菜单/PiP/字幕"矩阵回归
+
 ## 五、涉及文件总览
 
 * 构建：`gradle/libs.versions.toml`、`app/build.gradle.kts`（依赖与 buildFeatures）、`res/values/styles.xml`

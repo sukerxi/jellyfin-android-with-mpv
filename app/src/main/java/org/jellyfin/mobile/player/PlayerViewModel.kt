@@ -37,10 +37,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jellyfin.mobile.BuildConfig
-import org.jellyfin.mobile.R
 import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.app.PLAYER_EVENT_CHANNEL
 import org.jellyfin.mobile.player.interaction.PlayerEvent
@@ -56,8 +58,8 @@ import org.jellyfin.mobile.player.source.JellyfinMediaSource
 import org.jellyfin.mobile.player.source.RemoteJellyfinMediaSource
 import org.jellyfin.mobile.player.ui.DecoderType
 import org.jellyfin.mobile.player.ui.DisplayPreferences
+import org.jellyfin.mobile.player.ui.ChapterMarkingState
 import org.jellyfin.mobile.player.ui.PlayState
-import org.jellyfin.mobile.player.ui.playermenuhelper.PlayerMenuHelper
 import org.jellyfin.mobile.settings.VideoPlayerType
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.Constants.SUPPORTED_VIDEO_PLAYER_PLAYBACK_ACTIONS
@@ -136,7 +138,16 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     val detectedDecoderType: LiveData<DecoderType> get() = _detectedDecoderType
 
     // Player Menus
-    private var playerMenuHelper: PlayerMenuHelper? = null
+    // 阶段 5：播放器控制层 Compose 化。章节标记与"跳过"按钮不再直接操作 View，
+    // 改为以状态流暴露，由 Compose 层（PlayerScreen）渲染。
+    private val _chapterMarkings = MutableStateFlow<List<ChapterMarkingState>>(emptyList())
+    private val _activeAskToSkipSegment = MutableStateFlow<MediaSegmentDto?>(null)
+
+    /** 章节标记（按 item.chapters 顺序）：bias 为在进度条上的相对位置，watched 为是否已播放过。 */
+    val chapterMarkings: StateFlow<List<ChapterMarkingState>> = _chapterMarkings.asStateFlow()
+
+    /** 当前处于可跳过的媒体分段内时非空（用于展示"跳过"按钮）。 */
+    val activeAskToSkipSegment: StateFlow<MediaSegmentDto?> = _activeAskToSkipSegment.asStateFlow()
 
     // Media Segments Ask to Skip
     private var askToSkipMediaSegments: List<MediaSegmentDto> = emptyList()
@@ -487,15 +498,32 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         }
     }
 
+    /**
+     * 队列项切换后由 Compose 层调用：按当前 mediaSource 重建章节标记与跳过按钮状态。
+     */
+    fun refreshPlayerMenuState() {
+        playerOrNull?.setWatchedChapterMarkings()
+        playerOrNull?.updateSkipMediaSegmentButton()
+    }
+
     private fun Player.setWatchedChapterMarkings() {
         val playbackPosition = currentPosition.milliseconds
-        val chapters = mediaSourceOrNull?.item?.chapters ?: return
+        val chapters = mediaSourceOrNull?.item?.chapters
+        if (chapters.isNullOrEmpty()) {
+            _chapterMarkings.value = emptyList()
+            return
+        }
         val startPositions = chapters.map { c -> c.startPositionTicks.ticks }
-        val chapterMarkings = playerMenuHelper?.chapterMarkings?.markings ?: emptyList()
-
-        startPositions.zip(chapterMarkings).forEach { (pos, marking) ->
-            val color = if (playbackPosition >= pos) R.color.jellyfin_accent else R.color.playback_timebar_unplayed
-            marking.setColor(color)
+        val runTimeTicks = mediaSourceOrNull?.item?.runTimeTicks
+        _chapterMarkings.value = chapters.mapIndexed { index, chapter ->
+            ChapterMarkingState(
+                bias = if (runTimeTicks != null && runTimeTicks > 0) {
+                    (chapter.startPositionTicks.toFloat() / runTimeTicks).coerceIn(0f, 1f)
+                } else {
+                    0f
+                },
+                watched = playbackPosition >= startPositions[index],
+            )
         }
     }
 
@@ -527,15 +555,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
 
     private fun Player.updateSkipMediaSegmentButton() {
         val mediaSegments = askToSkipMediaSegments
-        if (mediaSegments.isEmpty()) return
+        if (mediaSegments.isEmpty()) {
+            _activeAskToSkipSegment.value = null
+            return
+        }
 
         val playbackPosition = currentPosition.milliseconds
         val currentMediaSegment = mediaSegments.find { seg -> playbackPosition in seg.start..seg.end }
-        if (currentMediaSegment != null) {
-            playerMenuHelper?.skipMediaSegmentButton?.showSkipSegmentButton(currentMediaSegment)
-        } else {
-            playerMenuHelper?.skipMediaSegmentButton?.hideSkipSegmentButton()
-        }
+        _activeAskToSkipSegment.value = currentMediaSegment
     }
 
     private suspend fun Player.reportPlaybackState() {
@@ -629,6 +656,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         skippedAutoSegments.clear()
         lastAutoSkipPositionMs = -1L
         stopAutoSkipMediaSegmentUpdates()
+        _activeAskToSkipSegment.value = null
 
         viewModelScope.launch {
             if (jellyfinMediaSource.item != null) {
@@ -866,7 +894,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         // Setup or stop regular progress updates
         if (playbackState == Player.STATE_READY && playWhenReady) {
             startProgressUpdates()
-            if (!playerMenuHelper?.chapterMarkings?.markings.isNullOrEmpty()) {
+            if (!mediaSourceOrNull?.item?.chapters.isNullOrEmpty()) {
                 startChapterMarkingUpdates()
             }
             if (askToSkipMediaSegments.isNotEmpty()) {
@@ -946,9 +974,5 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         reportPlaybackStop()
         ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
         releasePlayer()
-    }
-
-    fun setPlayerMenuHelper(menuHelper: PlayerMenuHelper) {
-        playerMenuHelper = menuHelper
     }
 }

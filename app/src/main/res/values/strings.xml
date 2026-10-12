@@ -107,6 +107,20 @@
     <string name="playback_info_chip_default">Default</string>
     <string name="episode_picker_title">Episodes</string>
     <string name="episode_picker_count">%1$d / %2$d</string>
+    <!-- 阶段 5：Compose 播放器控件无障碍描述 -->
+    <string name="playback_previous">Previous</string>
+    <string name="playback_next">Next</string>
+    <string name="playback_previous_chapter">Previous chapter</string>
+    <string name="playback_next_chapter">Next chapter</string>
+    <string name="playback_play">Play</string>
+    <string name="playback_pause">Pause</string>
+    <string name="playback_lock_screen">Lock screen</string>
+    <string name="playback_audio_streams">Audio streams</string>
+    <string name="playback_subtitles">Subtitles</string>
+    <string name="playback_speed">Playback speed</string>
+    <string name="playback_quality">Quality</string>
+    <string name="playback_decoder">Decoder</string>
+    <string name="playback_fullscreen">Fullscreen</string>
     <string name="close">Close</string>
     <string name="menu_item_none">None</string>
     <string name="menu_item_auto">Auto</string>

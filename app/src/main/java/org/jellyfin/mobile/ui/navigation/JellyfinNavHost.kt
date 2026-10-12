@@ -14,10 +14,13 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import org.jellyfin.mobile.MainViewModel
 import org.jellyfin.mobile.ServerState
+import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.events.ActivityEventHandler
 import org.jellyfin.mobile.events.NavigationEvent
+import org.jellyfin.mobile.settings.VideoPlayerType
 import org.jellyfin.mobile.ui.screens.connect.ConnectScreen
 import org.jellyfin.mobile.ui.screens.downloads.DownloadsScreen
+import org.jellyfin.mobile.ui.screens.player.PlayerScreen
 import org.jellyfin.mobile.ui.screens.settings.MpvConfigEditorScreen
 import org.jellyfin.mobile.ui.screens.settings.SettingsScreen
 import org.jellyfin.mobile.ui.screens.web.WebViewScreen
@@ -119,13 +122,23 @@ fun JellyfinNavHost(
             )
         }
         composable(Routes.PLAYER) {
-            PlayerFragmentHost(
-                onClose = {
-                    if (navController.currentDestination?.route == Routes.PLAYER) {
-                        navController.popBackStack()
-                    }
-                },
-            )
+            // 阶段 5：播放器控制层 Compose 化，临时 FragmentHost 已移除。
+            // 防御：仅 ExoPlayer/mpv 两种内核会进入原生播放路由（PlayerViewModel 构造时
+            // setupPlayer() 对其他类型会抛 IllegalArgumentException；外置播放器不走此路由）。
+            val appPreferences: AppPreferences = koinInject()
+            val nativePlayerType = appPreferences.videoPlayerType == VideoPlayerType.EXO_PLAYER ||
+                appPreferences.videoPlayerType == VideoPlayerType.MPV_PLAYER
+            if (nativePlayerType) {
+                PlayerScreen(
+                    onClose = {
+                        if (navController.currentDestination?.route == Routes.PLAYER) {
+                            navController.popBackStack()
+                        }
+                    },
+                )
+            } else {
+                LaunchedEffect(Unit) { navController.popBackStack() }
+            }
         }
     }
 }

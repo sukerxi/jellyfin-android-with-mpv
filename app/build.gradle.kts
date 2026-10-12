@@ -135,7 +135,6 @@ android {
 
     buildFeatures {
         buildConfig = true
-        viewBinding = true
         compose = true
     }
 
@@ -170,9 +169,7 @@ dependencies {
     implementation(libs.bundles.koin)
     implementation(libs.androidx.core)
     implementation(libs.androidx.core.splashscreen)
-    implementation(libs.androidx.appcompat)
     implementation(libs.androidx.activity)
-    implementation(libs.androidx.fragment)
     implementation(libs.androidx.documentfile)
     implementation(libs.androidx.work.runtime)
     coreLibraryDesugaring(libs.androiddesugarlibs)
@@ -181,8 +178,6 @@ dependencies {
     implementation(libs.bundles.androidx.lifecycle)
 
     // UI
-    implementation(libs.google.material)
-    implementation(libs.androidx.constraintlayout)
     implementation(libs.androidx.webkit)
 
     // Jetpack Compose
