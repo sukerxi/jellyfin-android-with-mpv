@@ -31,13 +31,16 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -273,30 +276,45 @@ private fun BoxScope.GestureIndicators(
         }
     }
 
-    // Double tap seek ripple (circle covering the tapped half of the screen)
+    // Double tap seek ripple: a soft circle expanding from the tap point and fading out
+    // (mirrors the old RippleDrawable hotspot behavior; the previous flat full-half circle
+    // that only faded in was barely visible)
     handler.ripple?.let { ripple ->
         if (surfaceSize.width > 0) {
-            val density = LocalDensity.current
-            val centerX = surfaceSize.width / 2f
-            val centerY = surfaceSize.height / 2f
-            var appeared by remember(ripple.token) { mutableStateOf(false) }
-            LaunchedEffect(ripple.token) { appeared = true }
-            val alpha by animateFloatAsState(
-                targetValue = if (appeared) IndicatorRippleColor.alpha else 0f,
-                animationSpec = tween(durationMillis = Constants.DOUBLE_TAP_RIPPLE_DURATION_MS.toInt()),
-            )
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .offset {
-                        IntOffset(
-                            x = if (ripple.rightSide) centerX.roundToInt() else 0,
-                            y = (centerY - centerX / 2f).roundToInt(),
-                        )
-                    }
-                    .size(with(density) { centerX.toDp() })
-                    .background(IndicatorRippleColor.copy(alpha = alpha), CircleShape),
-            )
+            // Rebuild the animation state for every double tap (new token) so the ripple
+            // always expands from scratch instead of resuming the previous one
+            key(ripple.token) {
+                var appeared by remember { mutableStateOf(false) }
+                LaunchedEffect(Unit) { appeared = true }
+                val progress by animateFloatAsState(
+                    targetValue = if (appeared) 1f else 0f,
+                    animationSpec = tween(durationMillis = Constants.DOUBLE_TAP_RIPPLE_DURATION_MS.toInt()),
+                )
+                val maxRadiusPx = surfaceSize.width / 2f
+                val center = Offset(ripple.x, ripple.y)
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .fillMaxSize()
+                        .drawBehind {
+                            val radius = maxRadiusPx * progress
+                            val alpha = IndicatorRippleColor.alpha * (1f - progress)
+                            if (radius > 0f && alpha > 0f) {
+                                drawCircle(
+                                    brush = Brush.radialGradient(
+                                        0f to Color.Transparent,
+                                        0.55f to IndicatorRippleColor.copy(alpha = alpha),
+                                        1f to Color.Transparent,
+                                        center = center,
+                                        radius = radius,
+                                    ),
+                                    radius = radius,
+                                    center = center,
+                                )
+                            }
+                        },
+                )
+            }
         }
     }
 

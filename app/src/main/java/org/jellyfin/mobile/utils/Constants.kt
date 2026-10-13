@@ -139,6 +139,15 @@ object Constants {
      * to reach the end naturally.
      */
     const val SEEK_TO_END_SAFETY_MARGIN_MS = 1000L
+
+    /**
+     * Tolerance (in milliseconds) for considering the playback position to have settled on a
+     * seek target. mpv may report the pre-seek position for a while after a seek was issued
+     * (and can settle slightly off the requested position on network sources), so callers
+     * keep reporting the target until the real position is within this distance of it.
+     */
+    const val SEEK_POSITION_SETTLE_EPSILON_MS = 500L
+
     const val DOUBLE_TAP_RIPPLE_DURATION_MS = 100L
     const val DOUBLE_TAP_TOGGLE_OVERLAY_SIZE_DP = 96
     const val DOUBLE_TAP_TOGGLE_POP_DURATION_MS = 120L

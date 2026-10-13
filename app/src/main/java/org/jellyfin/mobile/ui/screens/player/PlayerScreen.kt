@@ -38,6 +38,7 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -66,8 +67,10 @@ import io.github.peerless2012.ass.media.AssHandler
 import io.github.peerless2012.ass.media.widget.AssSubtitleView
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.player.PlayerException
@@ -93,10 +96,14 @@ import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.MediaSegmentDto
 import org.koin.compose.koinInject
 import java.util.UUID
+import kotlin.math.abs
 import kotlin.math.max
 
 /** 播放位置轮询间隔（毫秒）。 */
 private const val POSITION_UPDATE_INTERVAL_MS = 200L
+
+/** seek 后进度条保持目标位置的最长时间（毫秒）；超时后交还给实时轮询位置。 */
+private const val SEEK_UI_SETTLE_TIMEOUT_MS = 1000L
 
 /**
  * 阶段 5：播放器界面（Compose 化）。
@@ -151,6 +158,8 @@ fun PlayerScreen(
     var bufferedMs by remember { mutableLongStateOf(0L) }
     var isPlaying by remember { mutableStateOf(false) }
     var scrubPositionMs by remember { mutableStateOf<Long?>(null) }
+    // 松手后正在生效的 seek 目标位置：轮询位置追上目标（或超时）后置空
+    var pendingSeekPositionMs by remember { mutableStateOf<Long?>(null) }
     var pipMode by remember { mutableStateOf(activity.isInPictureInPictureMode) }
     var subtitlesEnabled by remember { mutableStateOf(false) }
     var episodeItemMap by remember { mutableStateOf<Map<UUID, BaseItemDto>?>(null) }
@@ -407,6 +416,22 @@ fun PlayerScreen(
         }
     }
 
+    // Seek target hold-off: after a scrub-seek the progress bar keeps showing the target
+    // position until the polled player position reaches it. The poll runs every
+    // POSITION_UPDATE_INTERVAL_MS and still reports the pre-seek value until the seek is
+    // applied, so handing control back immediately made the bar snap back to the seek
+    // origin for up to one poll cycle before jumping to the target again. The timeout is
+    // a safety net so a seek that never settles cannot pin the bar forever.
+    LaunchedEffect(pendingSeekPositionMs) {
+        val target = pendingSeekPositionMs ?: return@LaunchedEffect
+        withTimeoutOrNull(SEEK_UI_SETTLE_TIMEOUT_MS) {
+            snapshotFlow { positionMs }.first { position ->
+                abs(position - target) <= Constants.SEEK_POSITION_SETTLE_EPSILON_MS
+            }
+        }
+        pendingSeekPositionMs = null
+    }
+
     // endregion
 
     // region derived state
@@ -435,7 +460,10 @@ fun PlayerScreen(
     val hardwareLabel = stringResource(R.string.menu_item_hardware_decoding)
     val softwareLabel = stringResource(R.string.menu_item_software_decoding)
 
-    val audioTracks = remember(mediaSource) {
+    // selectedAudioStream/selectedSubtitleStream 是 JellyfinMediaSource 上的普通 var（非快照状态），
+    // 切换轨后 mediaSource 引用不变，必须把当前选中轨作为 remember 的 key，才能在下次重组时
+    // 重建列表、刷新 RadioButton 的选中态（切换时 subtitlesEnabled 等状态变化会触发重组）。
+    val audioTracks = remember(mediaSource, mediaSource?.selectedAudioStream) {
         mediaSource?.let { source ->
             val selected = source.selectedAudioStream ?: source.audioStreams.firstOrNull()
             source.audioStreams.map { stream ->
@@ -448,7 +476,7 @@ fun PlayerScreen(
         }.orEmpty()
     }
 
-    val subtitleTracks = remember(mediaSource, noneLabel) {
+    val subtitleTracks = remember(mediaSource, noneLabel, mediaSource?.selectedSubtitleStream) {
         val source = mediaSource
         if (source == null) {
             emptyList()
@@ -778,6 +806,7 @@ fun PlayerScreen(
                     chapterMarkings = chapterMarkings,
                     trickplay = trickplayHelper.state,
                     scrubPositionMs = scrubPositionMs,
+                    pendingSeekPositionMs = pendingSeekPositionMs,
                 ),
                 menus = PlayerMenusState(
                     expanded = expandedMenu,
@@ -875,6 +904,9 @@ fun PlayerScreen(
                         // 松手后执行 seek（旧版仅展示 trickplay，遗漏了 seek）
                         viewModel.seekTo(position)
                         trickplayHelper.onScrubStop()
+                        // 进度条继续显示目标位置直到播放器轮询位置追上：轮询间隔内
+                        // 位置上仍是旧值，直接置空会让进度条先跳回 seek 起点、再跳到目标。
+                        pendingSeekPositionMs = position
                     },
                 ),
                 modifier = Modifier

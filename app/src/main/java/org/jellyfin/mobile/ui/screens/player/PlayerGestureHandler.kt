@@ -56,9 +56,14 @@ data class DoubleTapToggleIndicator(
     val token: Long,
 )
 
-/** 双击 seek 的半屏涟漪（[token] 用于重放动画）。 */
+/**
+ * 双击 seek 的涟漪反馈（[token] 用于重放动画）。
+ *
+ * [x]/[y] 为双击坐标，涟漪从此处扩散（对齐旧版 RippleDrawable 以 hotspot 为中心的 behavior）。
+ */
 data class RippleIndicator(
-    val rightSide: Boolean,
+    val x: Float,
+    val y: Float,
     val token: Long,
 )
 
@@ -142,7 +147,7 @@ class PlayerGestureHandler(
             )
         } else {
             // Show ripple effect and fast-forward/rewind
-            ripple = RippleIndicator(rightSide = position.x > viewCenterX, token = ++rippleToken)
+            ripple = RippleIndicator(x = position.x, y = position.y, token = ++rippleToken)
             scope.launch {
                 delay(Constants.DOUBLE_TAP_RIPPLE_DURATION_MS)
                 ripple = null

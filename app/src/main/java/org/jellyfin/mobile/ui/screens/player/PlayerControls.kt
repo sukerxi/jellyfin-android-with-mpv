@@ -75,6 +75,11 @@ data class PlayerControlsState(
     val trickplay: TrickplayState,
     /** 拖动进度条时的 scrub 位置（非 null 时覆盖 positionMs 显示）；松手后置空。 */
     val scrubPositionMs: Long? = null,
+    /**
+     * 松手后正在生效的 seek 目标位置。轮询位置在 seek 生效前仍是旧值，此期间进度条
+     * 继续显示目标位置，避免先跳回 seek 起点、再跳到目标位置的观感回跳。
+     */
+    val pendingSeekPositionMs: Long? = null,
 )
 
 /** 下拉菜单渲染所需的全部状态。 */
@@ -239,7 +244,7 @@ private fun ProgressRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = formatTime(state.scrubPositionMs ?: state.positionMs),
+            text = formatTime(state.effectivePositionMs()),
             color = ControlsText,
             fontSize = 14.sp,
         )
@@ -294,7 +299,7 @@ private fun PlayerTimeBar(
         },
         update = { timeBar ->
             // Don't fight the user's finger while scrubbing
-            if (!callbacks.isScrubbing) timeBar.setPosition(state.positionMs)
+            if (!callbacks.isScrubbing) timeBar.setPosition(state.effectivePositionMs())
             timeBar.setDuration(state.durationMs)
             timeBar.setBufferedPosition(state.bufferedMs)
             timeBar.isEnabled = durationKnown
@@ -461,6 +466,13 @@ private fun BottomBar(
         }
     }
 }
+
+/**
+ * 进度条与时间文本的生效位置：拖动 scrub 预览 > seek 目标保持 > 实时轮询位置。
+ * seek 生效前轮询位置仍是旧值，若此时不用目标位置，进度条会先跳回 seek 起点。
+ */
+private fun PlayerControlsState.effectivePositionMs(): Long =
+    scrubPositionMs ?: pendingSeekPositionMs ?: positionMs
 
 @Composable
 private fun PlayerIconButton(

@@ -66,6 +66,7 @@ import org.jellyfin.mobile.utils.isOutdated
 import org.jellyfin.mobile.webapp.JellyfinWebChromeClient
 import org.jellyfin.mobile.webapp.JellyfinWebViewClient
 import org.jellyfin.mobile.webapp.WebappFunctionChannel
+import org.jellyfin.mobile.webapp.WebViewRetainer
 import org.koin.compose.koinInject
 import android.os.PowerManager
 import androidx.core.content.getSystemService
@@ -82,11 +83,15 @@ fun WebViewScreen(
     webViewDialogState: WebViewDialogState = koinInject(),
     nativePlayer: NativePlayer = koinInject(),
     mediaSegments: MediaSegments = koinInject(),
+    webViewRetainer: WebViewRetainer = koinInject(),
 ) {
     val context = LocalContext.current
     val scope = androidx.compose.runtime.rememberCoroutineScope()
 
-    var connected by remember(server.id) { mutableStateOf(false) }
+    // Connection state lives in the retainer so it survives navigating away and back
+    // (e.g. to the player): the WebView is retained with its loaded page and must not
+    // fall back to "not connected", which would break the webapp back-press handling.
+    val connected = webViewRetainer.connected
     var showLoading by remember(server.id) { mutableStateOf(false) }
     var showBatterySnackbar by remember(server.id) { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -115,10 +120,12 @@ fun WebViewScreen(
 
     // Plain holder: written from AndroidView factory (must not touch snapshot state there)
     val webViewHolder = remember { arrayOfNulls<WebView>(1) }
+    // Whether the factory reused a retained WebView (plain flag, synced into state below)
+    val webViewReused = remember(server.id) { booleanArrayOf(false) }
 
     val timeoutRunnable = remember(server.id) {
         Runnable {
-            connected = false
+            webViewRetainer.markDisconnected()
             onSelectServer(true)
         }
     }
@@ -141,7 +148,7 @@ fun WebViewScreen(
                 webView.post {
                     webView.removeCallbacks(timeoutRunnable)
                     webView.removeCallbacks(showLoadingRunnable)
-                    connected = true
+                    webViewRetainer.markConnected()
                     showLoading = false
                     webView.fadeIn()
                     showBatterySnackbar = true
@@ -149,24 +156,14 @@ fun WebViewScreen(
             }
 
             override fun onErrorReceived() {
-                connected = false
+                webViewRetainer.markDisconnected()
                 onSelectServer(true)
             }
         }
     }
 
-    fun WebView.initialize() {
-        if (!appPreferences.ignoreWebViewChecks && isOutdated()) { // Check WebView version
-            // 由根 Compose 宿主渲染 M3 对话框
-            val webView = this
-            val webViewPackageName = WebViewCompat.getCurrentWebViewPackage(context)?.packageName
-            webViewDialogState.showOutdatedWebViewDialog(webViewPackageName) {
-                appPreferences.ignoreWebViewChecks = true
-                // Re-initialize
-                webView.initialize()
-            }
-            return
-        }
+    // 绑定客户端与 JS 桥。客户端属于当前组合，复用保留的 WebView 时必须重新绑定。
+    fun WebView.setupClients() {
         webViewClient = jellyfinWebViewClient
         webChromeClient = JellyfinWebChromeClient(
             object : JellyfinWebChromeClient.FileChooserListener {
@@ -181,7 +178,21 @@ fun WebViewScreen(
         addJavascriptInterface(nativePlayer, "NativePlayer")
         addJavascriptInterface(externalPlayer, "ExternalPlayer")
         addJavascriptInterface(mediaSegments, "MediaSegments")
+    }
 
+    fun WebView.initialize() {
+        if (!appPreferences.ignoreWebViewChecks && isOutdated()) { // Check WebView version
+            // 由根 Compose 宿主渲染 M3 对话框
+            val webView = this
+            val webViewPackageName = WebViewCompat.getCurrentWebViewPackage(context)?.packageName
+            webViewDialogState.showOutdatedWebViewDialog(webViewPackageName) {
+                appPreferences.ignoreWebViewChecks = true
+                // Re-initialize
+                webView.initialize()
+            }
+            return
+        }
+        setupClients()
         loadUrl("${server.hostname.trimEnd('/')}/")
         postDelayed(timeoutRunnable, Constants.INITIAL_CONNECTION_TIMEOUT)
         postDelayed(showLoadingRunnable, Constants.SHOW_PROGRESS_BAR_DELAY)
@@ -193,47 +204,70 @@ fun WebViewScreen(
                 .fillMaxSize()
                 .systemBarsPadding(),
             factory = { ctx ->
-                WebView(ctx).apply {
-                    layoutParams = ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                    )
-                    visibility = View.INVISIBLE
-                    webViewHolder[0] = this
-
-                    // Setup exclusion rects for gestures
-                    if (AndroidVersion.isAtLeastQ) {
-                        @Suppress("MagicNumber")
-                        doOnNextLayout {
-                            // Maximum allowed exclusion rect height is 200dp,
-                            // offsetting 100dp from the center in both directions
-                            // uses the maximum available space
-                            val verticalCenter = measuredHeight / 2
-                            val offset = resources.dip(100)
-
-                            // Arbitrary, currently 2x minimum touch target size
-                            val exclusionWidth = resources.dip(96)
-
-                            systemGestureExclusionRects = listOf(
-                                Rect(
-                                    0,
-                                    verticalCenter - offset,
-                                    exclusionWidth,
-                                    verticalCenter + offset,
-                                ),
-                            )
-                        }
+                // Reuse the WebView retained while navigating to another route (e.g. the
+                // player) so returning lands on the page the user left instead of reloading
+                // the server's start page. Clients belong to this composition and must be
+                // rebound; the loaded page itself is kept as-is.
+                val reused = webViewRetainer.obtain(server.id)
+                if (reused != null) {
+                    webViewReused[0] = true
+                    reused.apply {
+                        (parent as? ViewGroup)?.removeView(this)
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                        )
+                        // Visibility is kept as-is: a page that already faded in stays
+                        // visible, one that never connected stays hidden until it does.
+                        webViewHolder[0] = this
+                        setupClients()
                     }
+                } else {
+                    webViewReused[0] = false
+                    WebView(ctx).apply {
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                        )
+                        visibility = View.INVISIBLE
+                        webViewHolder[0] = this
 
-                    initialize()
+                        // Setup exclusion rects for gestures
+                        if (AndroidVersion.isAtLeastQ) {
+                            @Suppress("MagicNumber")
+                            doOnNextLayout {
+                                // Maximum allowed exclusion rect height is 200dp,
+                                // offsetting 100dp from the center in both directions
+                                // uses the maximum available space
+                                val verticalCenter = measuredHeight / 2
+                                val offset = resources.dip(100)
+
+                                // Arbitrary, currently 2x minimum touch target size
+                                val exclusionWidth = resources.dip(96)
+
+                                systemGestureExclusionRects = listOf(
+                                    Rect(
+                                        0,
+                                        verticalCenter - offset,
+                                        exclusionWidth,
+                                        verticalCenter + offset,
+                                    ),
+                                )
+                            }
+                        }
+
+                        initialize()
+                    }
                 }
             },
             onRelease = { webView ->
                 webView.removeCallbacks(timeoutRunnable)
                 webView.removeCallbacks(showLoadingRunnable)
-                webView.stopLoading()
-                webView.destroy()
                 webViewHolder[0] = null
+                // Retain instead of destroy: navigating to another route (player, settings,
+                // downloads) disposes this composition, and recreating the WebView would
+                // reload the start page. The retainer destroys it on server switch / app exit.
+                webViewRetainer.retain(server.id, webView)
             },
         )
 
@@ -265,6 +299,13 @@ fun WebViewScreen(
                 .align(Alignment.BottomCenter)
                 .systemBarsPadding(),
         )
+    }
+
+    // A freshly created WebView starts out disconnected. A reused (retained) one keeps
+    // the connection state it had when the user navigated away, so returning from e.g. the
+    // player still routes back presses into the webapp instead of popping the nav stack.
+    LaunchedEffect(server.id) {
+        if (!webViewReused[0]) webViewRetainer.markDisconnected()
     }
 
     // While connected let the webapp handle back presses (NavigationHelper.goBack)

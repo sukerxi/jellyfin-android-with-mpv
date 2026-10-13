@@ -22,6 +22,7 @@ import org.jellyfin.mobile.player.ui.DecoderType
 import org.jellyfin.mobile.utils.Constants
 import java.util.Locale
 import java.util.UUID
+import kotlin.math.abs
 
 /**
  * Media3  [SimpleBasePlayer]  backed by native mpv via [MpvCore].
@@ -73,9 +74,9 @@ class MpvPlayer(
     private var pendingFirstFrame = false
 
     /**
-     * Target position of the latest explicit seek, kept until playback actually restarts at
-     * that position. While a seek is in flight mpv keeps reporting the pre-seek [time-pos]
-     * (network seeks can take well over a second), whereas ExoPlayer exposes the seek target
+     * Target position of the latest explicit seek, kept until mpv's [time-pos] actually caught
+     * up with it. While a seek is in flight mpv keeps reporting the pre-seek time-pos (network
+     * seeks can take well over a second), whereas ExoPlayer exposes the seek target
      * immediately. The pending target is therefore reported from [currentPositionMs] during
      * the seek, matching ExoPlayer semantics — required e.g. by the upstream "press previous
      * twice to switch episodes" logic (see [org.jellyfin.mobile.player.PlayerViewModel]).
@@ -157,8 +158,11 @@ class MpvPlayer(
             }
             MpvEvent.PlaybackRestart -> {
                 playbackState = STATE_READY
-                // Seek completed: time-pos is authoritative again
-                pendingSeekTargetMs = null
+                // Note: the pending seek target is intentionally NOT cleared here. mpv emits
+                // PLAYBACK_RESTART before time-pos reflects the new position, so clearing it
+                // here made the position briefly fall back to the pre-seek value (the seek bar
+                // jumped to the target, snapped back, then jumped again). It is cleared in
+                // currentPositionMs() once time-pos has actually settled on the target.
                 if (!firstFrameRendered) {
                     firstFrameRendered = true
                     pendingFirstFrame = true
@@ -469,17 +473,22 @@ class MpvPlayer(
     }
 
     private fun currentPositionMs(): Long {
+        val timePosMs = (MpvCore.getProperty<Double>("time-pos/full") ?: 0.0).let { pos -> (pos * 1000).toLong() }
         // While a seek is in flight mpv keeps reporting the pre-seek time-pos (for network
-        // sources this can take more than a second). Return the seek target instead until
-        // playback restarts, matching ExoPlayer's immediate position update on seekTo().
+        // sources this can take more than a second). Return the seek target instead until mpv
+        // actually caught up to it, matching ExoPlayer's immediate position update on seekTo().
+        // Releasing the target as soon as playback "restarted" is not enough: PLAYBACK_RESTART
+        // can fire while time-pos is still the old value, which made the position snap back
+        // to the pre-seek point for a poll cycle before settling on the target.
         val pendingTarget = pendingSeekTargetMs
-        if (pendingTarget != null &&
-            (MpvCore.getProperty<Boolean>("seeking") == true || playbackState == STATE_BUFFERING)
-        ) {
-            return pendingTarget
+        if (pendingTarget != null) {
+            if (abs(timePosMs - pendingTarget) > Constants.SEEK_POSITION_SETTLE_EPSILON_MS) {
+                return pendingTarget
+            }
+            // mpv caught up (or the seek was smaller than the epsilon): time-pos is authoritative
+            pendingSeekTargetMs = null
         }
-        val timePos = MpvCore.getProperty<Double>("time-pos/full") ?: 0.0
-        return (timePos * 1000).toLong()
+        return timePosMs
     }
 
     private fun bufferedPositionMs(): Long {

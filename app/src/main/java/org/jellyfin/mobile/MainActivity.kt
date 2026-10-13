@@ -40,6 +40,7 @@ import org.jellyfin.mobile.utils.PermissionRequestHelper
 import org.jellyfin.mobile.utils.SmartOrientationListener
 import org.jellyfin.mobile.utils.isWebViewSupported
 import org.jellyfin.mobile.webapp.RemotePlayerService
+import org.jellyfin.mobile.webapp.WebViewRetainer
 import org.koin.android.ext.android.get
 import org.koin.android.ext.android.inject
 import org.koin.androidx.viewmodel.ext.android.viewModel
@@ -58,6 +59,7 @@ class MainActivity : ComponentActivity() {
     private val updateChecker: UpdateChecker by inject()
     private val updateDialogState: UpdateDialogStateHolder by inject()
     private val playbackController: PlaybackController by inject()
+    private val webViewRetainer: WebViewRetainer by inject()
 
     /**
      * 当前设备不支持 WebView 时置位，由根 Compose 宿主渲染不可取消的提示框。
@@ -183,6 +185,8 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         unbindService(serviceConnection)
         chromecast.destroy()
+        // Destroy the WebView retained while navigating to other routes (e.g. the player)
+        webViewRetainer.destroy()
         super.onDestroy()
     }
 }
