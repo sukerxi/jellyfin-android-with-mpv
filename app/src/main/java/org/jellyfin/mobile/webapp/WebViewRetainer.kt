@@ -4,7 +4,6 @@ import android.webkit.WebView
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import java.util.UUID
 
 /**
  * 在路由切换期间保留 [WebView] 实例。
@@ -18,7 +17,7 @@ import java.util.UUID
  */
 class WebViewRetainer {
     private var retainedWebView: WebView? = null
-    private var retainedServerId: UUID? = null
+    private var retainedServerId: Long? = null
 
     /**
      * web 应用是否已连接。随组合保留：复用 WebView 时（如从播放器返回）恢复该状态，
@@ -36,7 +35,7 @@ class WebViewRetainer {
     }
 
     /** 保留 [webView]；同一时间只保留一个，非同一实例的旧实例立即销毁。 */
-    fun retain(serverId: UUID, webView: WebView) {
+    fun retain(serverId: Long, webView: WebView) {
         if (retainedWebView !== webView) destroyRetained()
         retainedWebView = webView
         retainedServerId = serverId
@@ -46,7 +45,7 @@ class WebViewRetainer {
      * 取回属于 [serverId] 的保留实例（取出后引用即清空，由新的 onRelease 决定去留）。
      * 保留实例属于其它服务器（切换过服务器）时销毁并返回 null。
      */
-    fun obtain(serverId: UUID): WebView? {
+    fun obtain(serverId: Long): WebView? {
         val webView = retainedWebView ?: return null
         if (retainedServerId != serverId) {
             destroyRetained()
