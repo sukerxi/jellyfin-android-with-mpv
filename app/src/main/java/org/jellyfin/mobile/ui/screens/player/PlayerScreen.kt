@@ -150,6 +150,7 @@ fun PlayerScreen(
     var durationMs by remember { mutableLongStateOf(0L) }
     var bufferedMs by remember { mutableLongStateOf(0L) }
     var isPlaying by remember { mutableStateOf(false) }
+    var scrubPositionMs by remember { mutableStateOf<Long?>(null) }
     var pipMode by remember { mutableStateOf(activity.isInPictureInPictureMode) }
     var subtitlesEnabled by remember { mutableStateOf(false) }
     var episodeItemMap by remember { mutableStateOf<Map<UUID, BaseItemDto>?>(null) }
@@ -395,7 +396,10 @@ fun PlayerScreen(
     }
 
     // Controls auto-hide
-    val controlsSuppressed = expandedMenu != null || infoPanelVisible || episodePickerVisible
+    // 拖动进度条期间（scrubPositionMs != null）不自动隐藏：控件栏消失会中断 scrub，
+    // 导致 DefaultTimeBar 被释放、onScrubStop 丢失，松手后无法 seek。
+    val controlsSuppressed = expandedMenu != null || infoPanelVisible || episodePickerVisible ||
+        scrubPositionMs != null
     LaunchedEffect(controlsVisible, controlsSuppressed, controlsToken) {
         if (controlsVisible && !controlsSuppressed) {
             delay(Constants.DEFAULT_CONTROLS_TIMEOUT_MS.toLong())
@@ -773,6 +777,7 @@ fun PlayerScreen(
                     isPlaying = isPlaying,
                     chapterMarkings = chapterMarkings,
                     trickplay = trickplayHelper.state,
+                    scrubPositionMs = scrubPositionMs,
                 ),
                 menus = PlayerMenusState(
                     expanded = expandedMenu,
@@ -856,9 +861,21 @@ fun PlayerScreen(
                             updateFullscreenState(activity.resources.configuration)
                         }
                     },
-                    onScrubStart = { showControls() },
-                    onScrubMove = { position -> trickplayHelper.onScrubMove(position) },
-                    onScrubStop = { trickplayHelper.onScrubStop() },
+                    onScrubStart = {
+                        // 记录 scrub 起点，拖动期间位置文本显示 scrub 位置
+                        scrubPositionMs = positionMs
+                        showControls()
+                    },
+                    onScrubMove = { position ->
+                        scrubPositionMs = position
+                        trickplayHelper.onScrubMove(position)
+                    },
+                    onScrubStop = { position ->
+                        scrubPositionMs = null
+                        // 松手后执行 seek（旧版仅展示 trickplay，遗漏了 seek）
+                        viewModel.seekTo(position)
+                        trickplayHelper.onScrubStop()
+                    },
                 ),
                 modifier = Modifier
                     .matchParentSize()

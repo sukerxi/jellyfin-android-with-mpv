@@ -8,7 +8,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
@@ -35,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -99,19 +101,85 @@ fun GestureOverlay(
                     onDoubleTap = { offset -> handler.onDoubleTap(offset) },
                 )
             }
-            .pointerInput(handler) {
-                detectDragGestures(
-                    onDragStart = { offset -> handler.onDragStart(offset) },
-                    onDragEnd = { handler.onDragEnd() },
-                    onDragCancel = { handler.onDragCancel() },
-                ) { change, dragAmount ->
-                    handler.onDrag(change.position, dragAmount)
-                }
-            }
+            // Pinch zoom. Must stay OUTSIDE the single-pointer drag detector below:
+            // detectTransformGestures consumes every position change once the touch
+            // slop is reached, so the drag detector (innermost) claims single-pointer
+            // drags first and makes this one cancel itself for them. For a genuine
+            // two-pointer pinch the drag detector bails out without consuming, and
+            // this detector handles the zoom.
             .pointerInput(handler) {
                 detectTransformGestures { _, _, zoom, _ ->
                     handler.onZoom(zoom)
                     false
+                }
+            }
+            // Single-pointer drag (horizontal seek / vertical brightness & volume).
+            // Custom implementation: the stock detectDragGestures cannot be chained
+            // with detectTransformGestures on the same node, because the transform
+            // detector (innermost in the old ordering) consumed the drag movements
+            // before the drag detector could see them, cancelling its touch-slop
+            // detection and disabling all swipe gestures. Here the drag detector is
+            // the innermost pointerInput and therefore receives events first:
+            // - it claims single-pointer drags (consuming the movements so the tap
+            //   and transform detectors cancel themselves),
+            // - it releases multi-pointer gestures unconsumed so the transform
+            //   detector above can handle pinch zoom,
+            // - taps/double-taps (no movement past the slop) are never consumed and
+            //   keep working through detectTapGestures.
+            .pointerInput(handler) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val touchSlop = viewConfiguration.touchSlop
+                    var lastPosition = down.position
+                    var dragging = false
+                    // Phase 1: wait for the touch slop to be exceeded, a second
+                    // pointer (pinch), or the release (plain tap).
+                    while (!dragging) {
+                        val event = awaitPointerEvent()
+                        if (event.changes.count { change -> change.pressed } > 1) {
+                            // Multi-touch gesture: leave everything unconsumed so
+                            // detectTransformGestures can take over the zoom.
+                            return@awaitEachGesture
+                        }
+                        val change = event.changes.firstOrNull { it.id == down.id }
+                            ?: return@awaitEachGesture
+                        if (!change.pressed) return@awaitEachGesture
+                        val distance = (change.position - down.position).getDistance()
+                        if (distance > touchSlop) {
+                            dragging = true
+                            change.consume()
+                            handler.onDragStart(down.position)
+                            // Report only the portion beyond the slop, mirroring the
+                            // old GestureDetector.onScroll / stock detector behavior.
+                            val slopPosition = down.position +
+                                (change.position - down.position) * (touchSlop / distance)
+                            handler.onDrag(change.position, change.position - slopPosition)
+                            lastPosition = change.position
+                        }
+                    }
+                    // Phase 2: drag until the pointer is released or canceled.
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id }
+                        if (change == null) {
+                            handler.onDragCancel()
+                            return@awaitEachGesture
+                        }
+                        val dragAmount = change.position - lastPosition
+                        if (!change.pressed) {
+                            if (dragAmount != Offset.Zero) {
+                                handler.onDrag(change.position, dragAmount)
+                                lastPosition = change.position
+                            }
+                            handler.onDragEnd()
+                            return@awaitEachGesture
+                        }
+                        if (dragAmount != Offset.Zero) {
+                            handler.onDrag(change.position, dragAmount)
+                            lastPosition = change.position
+                            change.consume()
+                        }
+                    }
                 }
             },
     ) {

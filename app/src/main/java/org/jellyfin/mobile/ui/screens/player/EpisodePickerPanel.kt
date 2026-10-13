@@ -29,6 +29,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -199,6 +200,8 @@ private fun EpisodeCell(
         modifier = Modifier
             .height(44.dp)
             .background(background, RoundedCornerShape(CellCornerRadius))
+            // 已播放剧集 50% 透明度（与旧版 EpisodeAdapter 一致；选中项保持全不透明）
+            .alpha(if (item.played && !item.selected) 0.5f else 1f)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {

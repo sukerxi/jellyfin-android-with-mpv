@@ -135,12 +135,17 @@ fun WebViewScreen(
         ) {
             override fun onConnectedToWebapp() {
                 val webView = webViewHolder[0] ?: return
-                webView.removeCallbacks(timeoutRunnable)
-                webView.removeCallbacks(showLoadingRunnable)
-                connected = true
-                showLoading = false
-                webView.fadeIn()
-                showBatterySnackbar = true
+                // shouldInterceptRequest runs on a WebView background thread,
+                // so all WebView/View calls and Compose state writes must be
+                // dispatched to the main thread
+                webView.post {
+                    webView.removeCallbacks(timeoutRunnable)
+                    webView.removeCallbacks(showLoadingRunnable)
+                    connected = true
+                    showLoading = false
+                    webView.fadeIn()
+                    showBatterySnackbar = true
+                }
             }
 
             override fun onErrorReceived() {

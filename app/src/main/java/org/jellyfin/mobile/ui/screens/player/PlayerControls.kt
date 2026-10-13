@@ -73,6 +73,8 @@ data class PlayerControlsState(
     val isPlaying: Boolean,
     val chapterMarkings: List<ChapterMarkingState>,
     val trickplay: TrickplayState,
+    /** 拖动进度条时的 scrub 位置（非 null 时覆盖 positionMs 显示）；松手后置空。 */
+    val scrubPositionMs: Long? = null,
 )
 
 /** 下拉菜单渲染所需的全部状态。 */
@@ -106,14 +108,14 @@ class PlayerControlsActions(
     val onMenuExpand: (PlayerMenuType?) -> Unit,
     val onScrubStart: () -> Unit,
     val onScrubMove: (Long) -> Unit,
-    val onScrubStop: () -> Unit,
+    val onScrubStop: (Long) -> Unit,
 )
 
 /** DefaultTimeBar 的 scrub 监听转发（字段由 SideEffect 保持最新）。 */
 private class TimeBarCallbacks {
     var onScrubStart: () -> Unit = {}
     var onScrubMove: (Long) -> Unit = {}
-    var onScrubStop: () -> Unit = {}
+    var onScrubStop: (Long) -> Unit = {}
     var isScrubbing = false
 
     val listener = object : TimeBar.OnScrubListener {
@@ -128,7 +130,7 @@ private class TimeBarCallbacks {
 
         override fun onScrubStop(timeBar: TimeBar, position: Long, cancelled: Boolean) {
             isScrubbing = false
-            onScrubStop()
+            onScrubStop(position)
         }
     }
 }
@@ -237,7 +239,7 @@ private fun ProgressRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = formatTime(state.positionMs),
+            text = formatTime(state.scrubPositionMs ?: state.positionMs),
             color = ControlsText,
             fontSize = 14.sp,
         )
@@ -479,7 +481,9 @@ private fun PlayerIconButton(
             painter = painterResource(iconRes),
             contentDescription = contentDescription,
             modifier = Modifier.size(iconSize),
-            tint = ControlsText,
+            // 禁用态置灰（Material 禁用内容透明度 0.38），与旧版 View isEnabled=false 时
+            // textColorPrimary ColorStateList 的 disabled 态一致
+            tint = if (enabled) ControlsText else ControlsText.copy(alpha = 0.38f),
         )
     }
 }

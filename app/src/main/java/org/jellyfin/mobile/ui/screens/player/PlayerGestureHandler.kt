@@ -217,11 +217,18 @@ class PlayerGestureHandler(
 
     fun onDrag(position: Offset, dragAmount: Offset) {
         val size = sizeProvider()
-        if (size.width == 0 || size.height == 0) return
+        if (size.width == 0 || size.height == 0) {
+            return
+        }
         // Pinch zoom is handled by the transform detector; ignore drags while multiple
         // pointers are down (mirrors the old per-event pointerCount dispatch).
-        if (activePointerCount > 1) return
-        val start = dragStartPosition ?: return
+        if (activePointerCount > 1) {
+            return
+        }
+        val start = dragStartPosition
+        if (start == null) {
+            return
+        }
 
         // Check whether swipe was started in excluded region (vertical)
         if (start.y < exclusionSizeVerticalPx || start.y > size.height - exclusionSizeVerticalPx) {
@@ -235,7 +242,9 @@ class PlayerGestureHandler(
             currentGesture = when {
                 abs(deltaX) > abs(deltaY) * 2 -> GestureDirection.HORIZONTAL
                 abs(deltaY) > abs(deltaX) * 2 -> GestureDirection.VERTICAL
-                else -> return
+                else -> {
+                    return
+                }
             }
         }
 
