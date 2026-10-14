@@ -7,10 +7,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.ui.Modifier
@@ -67,6 +67,11 @@ fun LogoHeader() {
     }
 }
 
+/**
+ * 复刻旧版样式的填充按钮：旧版 M2 的 TextButton 传入 ButtonDefaults.buttonColors()
+ * 后即主色填充、白字、shapes.small 圆角；M3 的 TextButton 默认无容器，故改用 Button
+ * 并显式固定圆角（M3 Button 默认为全圆角）。
+ */
 @Stable
 @Composable
 fun StyledTextButton(
@@ -74,12 +79,13 @@ fun StyledTextButton(
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
-    TextButton(
+    Button(
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp),
         enabled = enabled,
+        shape = MaterialTheme.shapes.small,
     ) {
         Text(text = text)
     }
