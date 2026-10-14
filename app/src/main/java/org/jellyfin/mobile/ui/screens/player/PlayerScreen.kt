@@ -768,7 +768,19 @@ fun PlayerScreen(
                     playerViewHolder[0] = this
                 }
             },
-            update = { playerView -> playerView.player = player },
+            // Only rebind when the player instance actually changes. `update` runs on *every*
+            // recomposition - the position poll alone recomposes this screen ~5x/s - and
+            // PlayerView.setPlayer() unconditionally calls clearVideoSurfaceView() followed by
+            // setVideoSurfaceView() (see media3's PlayerView.setPlayer). For an ExoPlayer that
+            // is a cheap no-op, but MpvPlayer implements the pair as
+            // removeCallback()/addCallback() on the SurfaceHolder, which destroys and recreates
+            // the platform Surface - and with it mpv's video output - every time. The audio
+            // track is unaffected, so playback keeps running with a black picture.
+            // Binding per player instance keeps that teardown to the one time it is meant to
+            // happen.
+            update = { playerView ->
+                if (playerView.player !== player) playerView.player = player
+            },
             onRelease = { playerView ->
                 playerView.player = null
                 playerView.subtitleView?.removeAllViews()
