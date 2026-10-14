@@ -14,14 +14,11 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
@@ -188,6 +185,11 @@ fun PlayerScreen(
     // not dismiss the (newly started) player again right after it was closed.
     val closingSoon = remember { mutableStateOf(false) }
 
+    // Set once a player instance has been attached during this composition. The player starts
+    // out null while the playback request is resolved, so "player == null" only means
+    // "playback ended" after a player has existed to end.
+    var playbackStarted by remember { mutableStateOf(false) }
+
     /**
      * Leave the player screen: the web app takes playback over again and the native player
      * is stopped unless the user enabled background playback (or the web app is casting).
@@ -285,7 +287,13 @@ fun PlayerScreen(
 
     // region effects
 
-    // Handle playback options and start playback (once per composition)
+    // Handle playback options and start playback (once per composition).
+    // The ViewModel lives in the activity's store, so it - and its player - outlive this
+    // screen: closing the player releases the player but keeps the ViewModel, and nothing
+    // would recreate it for the next session (the old per-fragment ViewModel was built
+    // anew for every playback, which ran setupPlayer() from its lifecycle observer).
+    // Without this the second "play" of a session ends up with a released player and
+    // PlayerViewModel.load() bails out on the null player, leaving the screen black.
     LaunchedEffect(Unit) {
         val request = playbackLauncher.consume()
         if (request == null) {
@@ -293,19 +301,34 @@ fun PlayerScreen(
             closePlayer()
             return@LaunchedEffect
         }
-        when (viewModel.queueManager.initializePlaybackQueue(request.playOptions, request.preferences)) {
-            is PlayerException.InvalidPlayOptions -> context.toast(R.string.player_error_invalid_play_options)
-            is PlayerException.NetworkFailure -> context.toast(R.string.player_error_network_failure)
-            is PlayerException.UnsupportedContent -> context.toast(R.string.player_error_unsupported_content)
-            null -> Unit // success
+        if (viewModel.playerOrNull == null) {
+            viewModel.setupPlayer()
+        }
+        val error = viewModel.queueManager.initializePlaybackQueue(request.playOptions, request.preferences)
+        if (error != null) {
+            // Nothing will ever start playing; show why and leave instead of
+            // staying on an empty black screen.
+            val messageRes = when (error) {
+                is PlayerException.InvalidPlayOptions -> R.string.player_error_invalid_play_options
+                is PlayerException.NetworkFailure -> R.string.player_error_network_failure
+                is PlayerException.UnsupportedContent -> R.string.player_error_unsupported_content
+            }
+            context.toast(messageRes)
+            closePlayer()
         }
     }
 
     // Automatically close the screen when playback ended, unless we're in PiP mode.
-    // Playback is already over here, so calling onPlayerClosed() again would only risk
-    // stopping playback of an item that was started in the meantime; just dismiss.
+    // Only a player that actually appeared and then went away means "playback ended":
+    // at the start of a session the player is legitimately still null (it is created while
+    // the playback request is being resolved, which involves network round trips), and
+    // closing on that would dismiss the screen the user just opened.
     LaunchedEffect(player) {
-        if (player == null && !pipMode && !closingSoon.value) {
+        if (player != null) {
+            playbackStarted = true
+        } else if (playbackStarted && !pipMode && !closingSoon.value) {
+            // Playback is already over here, so calling onPlayerClosed() again would only
+            // risk stopping playback of an item that was started in the meantime; dismiss.
             onClose()
         }
     }
@@ -737,6 +760,16 @@ fun PlayerScreen(
                 .padding(playerViewPadding),
         )
 
+        // Double tap seek ripple. Sits below the gesture layer and does not take part in
+        // gesture handling.
+        SeekRippleOverlay(
+            trigger = gestureHandler.ripple,
+            onFinished = gestureHandler::hideRipple,
+            modifier = Modifier
+                .matchParentSize()
+                .padding(playerViewPadding),
+        )
+
         // Gesture layer (brightness/volume/seek/double tap/long press/zoom)
         GestureOverlay(
             handler = gestureHandler,
@@ -754,21 +787,15 @@ fun PlayerScreen(
         ) {
             // Loading indicator. Fade instead of popping: the player reports BUFFERING for
             // a single frame on cold start, and a hard show/hide reads as a stutter.
+            // Just the spinner - the pre-Compose player had a bare 64dp ProgressBar here,
+            // no label.
             AnimatedVisibility(
                 visible = playerState == Player.STATE_BUFFERING,
                 enter = fadeIn(),
                 exit = fadeOut(),
                 modifier = Modifier.align(Alignment.Center),
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(modifier = Modifier.size(64.dp))
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = stringResource(R.string.player_loading),
-                        color = Color.White,
-                        fontSize = 16.sp,
-                    )
-                }
+                CircularProgressIndicator(modifier = Modifier.size(64.dp))
             }
 
             // Skip media segment button

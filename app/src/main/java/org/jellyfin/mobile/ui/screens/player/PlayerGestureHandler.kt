@@ -29,7 +29,7 @@ import kotlin.math.abs
  * 阶段 5：手势逻辑（亮度/音量/横向 seek/双击/长按倍速/缩放）。
  *
  * 由原 [org.jellyfin.mobile.player.ui.PlayerGestureHelper] 平移而来：
- * 所有 View 操作改为写入快照状态（[indicator]/[seekIndicator]/[doubleTapToggle]/[rippleSide]），
+ * 所有 View 操作改为写入快照状态（[indicator]/[seekIndicator]/[doubleTapToggle]/[ripple]），
  * 由 GestureOverlay 渲染；与播放器的交互通过构造回调转发。
  */
 
@@ -57,9 +57,9 @@ data class DoubleTapToggleIndicator(
 )
 
 /**
- * 双击 seek 的涟漪反馈（[token] 用于重放动画）。
+ * 双击 seek 的涟漪反馈的一次性触发（[token] 用于识别新的双击）。
  *
- * [x]/[y] 为双击坐标，涟漪从此处扩散（对齐旧版 RippleDrawable 以 hotspot 为中心的 behavior）。
+ * [x]/[y] 为双击坐标，作为平台 RippleDrawable 的 hotspot。
  */
 data class RippleIndicator(
     val x: Float,
@@ -146,9 +146,8 @@ class PlayerGestureHandler(
                 token = ++toggleToken,
             )
         } else {
-            // Show ripple effect and fast-forward/rewind.
-            // The overlay drives the expand/fade-out animation and clears the
-            // state once it finishes (mirrors the old RippleDrawable lifecycle).
+            // Show ripple effect and fast-forward/rewind. The overlay replays the ripple
+            // for every new token and clears the state once it finished fading out.
             ripple = RippleIndicator(x = position.x, y = position.y, token = ++rippleToken)
             if (position.x > viewCenterX) onFastForward() else onRewind()
         }

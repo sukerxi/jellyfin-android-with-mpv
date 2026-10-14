@@ -1,6 +1,10 @@
-// 依赖下载加固：Maven Central 共享出口会返回 429 Too Many Requests，
-// 而 Gradle 默认把 429 视为硬失败、不做重试，导致下载依赖时流水线随机失败
-// 见构建 cnb-55v-1k4l8999k：获取 dev.jdtech.mpv:libmpv:1.0.0 的 .pom 时返回 429。
+// 依赖下载加固：Maven Central 共享出口会返回 429 Too Many Requests。
+// Gradle 会把 429 归类为「瞬时网络错误」并自动重试，但默认上限只有 3 次尝试
+// （org.gradle.internal.repository.max.tentatives=3，退避 1s 起翻倍），
+// 限流窗口稍长就会重试耗尽、整个构建失败（见构建 cnb-55v-1k4l8999k：
+// 获取 dev.jdtech.mpv:libmpv:1.0.0 的 .pom 时返回 429）。
+// 顶层策略已把尝试次数提到 8 次，见 gradle.properties；本文件负责让
+// 依赖尽量落在镜像上、减少回落到共享出口的请求量。
 //
 // 多层防护：
 //   1. 多个公共镜像并列，官方源兜底。
@@ -13,8 +17,8 @@
 //      后面的阿里云/华为云/Maven Central 明明有这个 AAR 却永远不会被访问。
 //      见构建 cnb-7pd-1k4lev2r1（本注释对应的失败）。
 //      关闭 GMM 后按 POM 解析，Gradle 才会在每个仓库逐个尝试制品，镜像缺口能真正互补。
-//   3. 官方 mavenCentral 作为最终兜底，配合 gradle.properties 的 HTTP 重试
-//      （429 属瞬时错误，重试通常可恢复）。
+//   3. 官方 mavenCentral 作为最终兜底，配合 gradle.properties 里调大的
+//      重试次数（max.tentatives）与 HTTP 超时。
 //   4. 本地开发不受影响：官方源仍在列表内，镜像不可达时自动回落。
 //
 // 关闭 GMM 的影响：GMM 主要用于 KMP 的变体重定向（如 jellyfin-core -> jellyfin-core-android）。

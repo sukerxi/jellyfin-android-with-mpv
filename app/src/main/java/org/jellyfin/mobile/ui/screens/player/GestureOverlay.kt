@@ -2,7 +2,6 @@ package org.jellyfin.mobile.ui.screens.player
 
 import android.view.ViewConfiguration
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -12,6 +11,9 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -28,20 +30,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.clipRect
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -51,12 +51,11 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.ui.theme.JellyfinPrimary
 import org.jellyfin.mobile.utils.Constants
-import kotlin.math.hypot
-import kotlin.math.roundToInt
 
 /**
  * 阶段 5：手势层。挂载指针输入（单击/双击/长按/拖拽/缩放）并渲染
@@ -64,7 +63,6 @@ import kotlin.math.roundToInt
  */
 
 private val IndicatorBackground = Color(0xCC000000)
-private val IndicatorRippleColor = Color.White.copy(alpha = 0.12f)
 private val IndicatorTrackColor = Color.White.copy(alpha = 0.24f)
 private val SeekPositionTextColor = Color(0xFFAAAAAA)
 private val IndicatorWidth = 160.dp
@@ -197,78 +195,6 @@ private fun BoxScope.GestureIndicators(
     handler: PlayerGestureHandler,
     surfaceSize: IntSize,
 ) {
-    // Double tap seek ripple: a soft circle expanding from the tap point and fading out.
-    // Ported from the old seek_ripple_overlay foreground (a RippleDrawable): the glow was
-    // bounded to the tapped half of the surface (a square of half the surface width,
-    // vertically centered) with its hotspot at the tap point, so it expanded from the tap
-    // without ever crossing into the other half, then faded out.
-    handler.ripple?.let { ripple ->
-        if (surfaceSize.width > 0) {
-            val centerX = surfaceSize.width / 2f
-            val centerY = surfaceSize.height / 2f
-            val isFastForward = ripple.x > centerX
-            // Old drawable bounds: the tapped half, as tall as the half is wide
-            val clipLeft = if (isFastForward) centerX else 0f
-            val clipRight = if (isFastForward) surfaceSize.width.toFloat() else centerX
-            val clipTop = centerY - centerX / 2f
-            val clipBottom = centerY + centerX / 2f
-            val center = Offset(ripple.x, ripple.y)
-            // The old ripple grew until the circle covered its bounds, i.e. to the
-            // farthest bounds corner from the hotspot
-            val maxRadiusPx = maxOf(
-                hypot(center.x - clipLeft, center.y - clipTop),
-                hypot(center.x - clipRight, center.y - clipTop),
-                hypot(center.x - clipLeft, center.y - clipBottom),
-                hypot(center.x - clipRight, center.y - clipBottom),
-            )
-            // Rebuild the animation state for every double tap (new token) so the ripple
-            // always expands from scratch instead of resuming the previous one
-            key(ripple.token) {
-                val expand = remember { Animatable(0f) }
-                val fade = remember { Animatable(1f) }
-                LaunchedEffect(Unit) {
-                    // Expand phase: the old drawable stayed pressed for the ripple
-                    // duration before the state reset started the fade-out
-                    expand.animateTo(1f, tween(Constants.DOUBLE_TAP_RIPPLE_DURATION_MS.toInt()))
-                    fade.animateTo(0f, tween(Constants.DOUBLE_TAP_RIPPLE_FADE_OUT_DURATION_MS.toInt()))
-                    handler.hideRipple()
-                }
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .fillMaxSize()
-                        .drawBehind {
-                            clipRect(
-                                left = clipLeft,
-                                top = clipTop,
-                                right = clipRight,
-                                bottom = clipBottom,
-                            ) {
-                                val expandValue = expand.value.coerceIn(0f, 1f)
-                                // The old drawable faded in while the radius grew and
-                                // faded out after the pressed state was released
-                                val alpha = IndicatorRippleColor.alpha * fade.value * expandValue
-                                val radius = maxRadiusPx * expandValue
-                                if (radius > 0f && alpha > 0f) {
-                                    drawCircle(
-                                        brush = Brush.radialGradient(
-                                            0f to IndicatorRippleColor.copy(alpha = alpha),
-                                            0.75f to IndicatorRippleColor.copy(alpha = alpha),
-                                            1f to Color.Transparent,
-                                            center = center,
-                                            radius = radius,
-                                        ),
-                                        radius = radius,
-                                        center = center,
-                                    )
-                                }
-                            }
-                        },
-                )
-            }
-        }
-    }
-
     // Brightness / volume indicator
     handler.indicator?.let { indicator ->
         Box(
@@ -394,5 +320,64 @@ private fun BoxScope.GestureIndicators(
                 )
             }
         }
+    }
+}
+
+/**
+ * 双击 seek 的涟漪反馈：被点击的那半屏上的一圈 Material 涟漪。
+ *
+ * 旧实现给 `seek_ripple_overlay` 的 RippleDrawable 设 bounds（被点击的半屏，半屏宽的正方形、
+ * 垂直居中）和 hotspot（点击点），压住 [Constants.DOUBLE_TAP_RIPPLE_DURATION_MS] 后松开，
+ * 退场动画由 drawable 自己完成。这里用 Material 的 [ripple] 表达同一件事：一块覆盖该半屏的
+ * 不可见方块，由 indication 在按压点画涟漪。
+ */
+@Composable
+fun SeekRippleOverlay(
+    trigger: RippleIndicator?,
+    onFinished: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (trigger == null) return
+    var surfaceSize by remember { mutableStateOf(IntSize.Zero) }
+    val density = LocalDensity.current
+
+    // 旧代码压住 drawable 一段时间再松开触发退场动画，这里保持同样的按压时长
+    LaunchedEffect(trigger.token) {
+        delay(Constants.DOUBLE_TAP_RIPPLE_DURATION_MS)
+        onFinished()
+    }
+
+    Box(modifier = modifier.onSizeChanged { surfaceSize = it }) {
+        val halfWidthPx = surfaceSize.width / 2f
+        if (halfWidthPx == 0f) return@Box
+        val isFastForward = trigger.x > halfWidthPx
+
+        // hotspot 是点击点在该半屏内的位置（旧代码传给 drawable 的是视图内绝对坐标，
+        // 由 RippleDrawable 换算到 bounds 内，这里手工换算）
+        val boundsLeftPx = if (isFastForward) halfWidthPx else 0f
+        val boundsTopPx = surfaceSize.height / 2f - halfWidthPx / 2f
+        val hotspot = Offset(trigger.x - boundsLeftPx, trigger.y - boundsTopPx)
+
+        val interactionSource = remember { MutableInteractionSource() }
+        LaunchedEffect(trigger.token, interactionSource) {
+            val press = PressInteraction.Press(hotspot)
+            interactionSource.emit(press)
+            delay(Constants.DOUBLE_TAP_RIPPLE_DURATION_MS)
+            interactionSource.emit(PressInteraction.Release(press))
+        }
+
+        // 被点击的半屏：半屏宽的正方形，垂直居中
+        Box(
+            modifier = Modifier
+                .offset {
+                    IntOffset(
+                        x = if (isFastForward) halfWidthPx.roundToInt() else 0,
+                        y = (surfaceSize.height / 2f - halfWidthPx / 2f).roundToInt(),
+                    )
+                }
+                .size(with(density) { halfWidthPx.toDp() })
+                .clipToBounds()
+                .indication(interactionSource = interactionSource, indication = ripple()),
+        )
     }
 }
