@@ -1,7 +1,5 @@
 package org.jellyfin.mobile.ui.screens.player
 
-import android.content.Context
-import android.view.View
 import android.view.ViewConfiguration
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -13,6 +11,9 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -29,6 +30,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -37,9 +39,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -49,12 +51,11 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.view.doOnLayout
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.ui.theme.JellyfinPrimary
 import org.jellyfin.mobile.utils.Constants
-import kotlin.math.roundToInt
 
 /**
  * 阶段 5：手势层。挂载指针输入（单击/双击/长按/拖拽/缩放）并渲染
@@ -323,88 +324,60 @@ private fun BoxScope.GestureIndicators(
 }
 
 /**
- * 双击 seek 的涟漪反馈。
+ * 双击 seek 的涟漪反馈：被点击的那半屏上的一圈 Material 涟漪。
  *
- * 重构前它由 `seek_ripple_overlay` 上的一层 [android.graphics.drawable.RippleDrawable]
- * （`@drawable/ripple_background`）实现；Compose 自绘的圆无论在颜色、扩散曲线还是裁剪范围上
- * 都与平台 drawable 存在肉眼可见的差异，多轮调整仍对不上，因此这里不再重画，而是直接渲染
- * 同一个 drawable，并复刻旧版的 bounds / hotspot / state 时序。
- *
- * 视图常驻（idle 时不可见），每次双击只切换一次 state；退场动画由 drawable 自己完成，
- * 结束时通知 [onFinished] 清掉一次性的触发状态。
+ * 旧实现给 `seek_ripple_overlay` 的 RippleDrawable 设 bounds（被点击的半屏，半屏宽的正方形、
+ * 垂直居中）和 hotspot（点击点），压住 [Constants.DOUBLE_TAP_RIPPLE_DURATION_MS] 后松开，
+ * 退场动画由 drawable 自己完成。这里用 Material 的 [ripple] 表达同一件事：一块覆盖该半屏的
+ * 不可见方块，由 indication 在按压点画涟漪。
  */
 @Composable
 fun SeekRippleOverlay(
-    ripple: RippleIndicator?,
+    trigger: RippleIndicator?,
     onFinished: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // 显式读取，确保 ripple 变化时 AndroidView 的 update 会被重新执行
-    val currentRipple = ripple
-    AndroidView(
-        factory = { context -> SeekRippleView(context) },
-        update = { view -> currentRipple?.let { view.show(it.x, it.y, it.token) } },
-        modifier = modifier.fillMaxSize(),
-    )
+    if (trigger == null) return
+    var surfaceSize by remember { mutableStateOf(IntSize.Zero) }
+    val density = LocalDensity.current
 
-    // 扩散 + 淡出结束后清理状态；只是让下一次双击重新触发，视图本身不卸载。
-    LaunchedEffect(currentRipple?.token) {
-        if (currentRipple == null) return@LaunchedEffect
-        delay(Constants.DOUBLE_TAP_RIPPLE_DURATION_MS + Constants.DOUBLE_TAP_RIPPLE_FADE_OUT_DURATION_MS)
+    // 旧代码压住 drawable 一段时间再松开触发退场动画，这里保持同样的按压时长
+    LaunchedEffect(trigger.token) {
+        delay(Constants.DOUBLE_TAP_RIPPLE_DURATION_MS)
         onFinished()
     }
-}
 
-/**
- * 承载重构前 `seek_ripple_overlay` 的 [android.graphics.drawable.RippleDrawable]。
- *
- * [show] 与旧 [org.jellyfin.mobile.player.ui.PlayerGestureHelper] 中的双击处理逐行对应：
- * bounds 取被点击的那半屏（半屏宽的正方形、垂直居中），hotspot 取点击点，
- * 压住 [Constants.DOUBLE_TAP_RIPPLE_DURATION_MS] 后松开以触发退场动画。
- */
-private class SeekRippleView(context: Context) : View(context) {
-    private var lastToken = Long.MIN_VALUE
+    Box(modifier = modifier.onSizeChanged { surfaceSize = it }) {
+        val halfWidthPx = surfaceSize.width / 2f
+        if (halfWidthPx == 0f) return@Box
+        val isFastForward = trigger.x > halfWidthPx
 
-    private val releaseState = Runnable { foreground?.state = IntArray(0) }
+        // hotspot 是点击点在该半屏内的位置（旧代码传给 drawable 的是视图内绝对坐标，
+        // 由 RippleDrawable 换算到 bounds 内，这里手工换算）
+        val boundsLeftPx = if (isFastForward) halfWidthPx else 0f
+        val boundsTopPx = surfaceSize.height / 2f - halfWidthPx / 2f
+        val hotspot = Offset(trigger.x - boundsLeftPx, trigger.y - boundsTopPx)
 
-    init {
-        isClickable = false
-        isFocusable = false
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        // 用承载当前主题的 context 解析 drawable，?attr/colorControlHighlight 才能被替换掉
-        foreground = context.getDrawable(R.drawable.ripple_background)
-    }
+        val interactionSource = remember { MutableInteractionSource() }
+        LaunchedEffect(trigger.token, interactionSource) {
+            val press = PressInteraction.Press(hotspot)
+            interactionSource.emit(press)
+            delay(Constants.DOUBLE_TAP_RIPPLE_DURATION_MS)
+            interactionSource.emit(PressInteraction.Release(press))
+        }
 
-    fun show(x: Float, y: Float, token: Long) {
-        // 每次双击只触发一次：update 会在每次重组时被调用
-        if (token == lastToken) return
-        lastToken = token
-        // update 可能发生在首次布局之前，此时 width/height 还是 0，算出来的 bounds 会让
-        // 涟漪不可见；等布局完成后再触发（已布局时 doOnLayout 立即执行）。
-        doOnLayout { triggerRipple(x, y) }
-    }
-
-    private fun triggerRipple(x: Float, y: Float) {
-        val drawable = foreground ?: return
-        val viewWidth = width
-        if (viewWidth == 0) return
-        val viewCenterX = viewWidth / 2
-        val viewCenterY = height / 2
-        val isFastForward = x > viewCenterX
-        drawable.setBounds(
-            if (isFastForward) viewCenterX else 0,
-            viewCenterY - viewCenterX / 2,
-            if (isFastForward) viewWidth else viewCenterX,
-            viewCenterY + viewCenterX / 2,
+        // 被点击的半屏：半屏宽的正方形，垂直居中
+        Box(
+            modifier = Modifier
+                .offset {
+                    IntOffset(
+                        x = if (isFastForward) halfWidthPx.roundToInt() else 0,
+                        y = (surfaceSize.height / 2f - halfWidthPx / 2f).roundToInt(),
+                    )
+                }
+                .size(with(density) { halfWidthPx.toDp() })
+                .clipToBounds()
+                .indication(interactionSource = interactionSource, indication = ripple()),
         )
-        drawable.setHotspot(x, y)
-        drawable.state = intArrayOf(android.R.attr.state_enabled, android.R.attr.state_pressed)
-        removeCallbacks(releaseState)
-        postDelayed(releaseState, Constants.DOUBLE_TAP_RIPPLE_DURATION_MS)
-    }
-
-    override fun onDetachedFromWindow() {
-        removeCallbacks(releaseState)
-        super.onDetachedFromWindow()
     }
 }

@@ -761,9 +761,9 @@ fun PlayerScreen(
         )
 
         // Double tap seek ripple. Sits below the gesture layer and does not take part in
-        // gesture handling (it is the platform RippleDrawable, see [SeekRippleOverlay]).
+        // gesture handling.
         SeekRippleOverlay(
-            ripple = gestureHandler.ripple,
+            trigger = gestureHandler.ripple,
             onFinished = gestureHandler::hideRipple,
             modifier = Modifier
                 .matchParentSize()
