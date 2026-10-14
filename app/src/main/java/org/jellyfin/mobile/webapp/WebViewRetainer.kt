@@ -20,6 +20,9 @@ class WebViewRetainer {
     private var retainedWebView: WebView? = null
     private var retainedServerId: Long? = null
 
+    /** [destroy] 之后置位：容器已随 Activity 销毁，不再接受新的保留。 */
+    private var stopped = false
+
     /**
      * web 应用是否已连接。随组合保留：复用 WebView 时（如从播放器返回）恢复该状态，
      * 否则返回键会从"web 应用内后退"退化为直接弹出导航路由。
@@ -37,6 +40,12 @@ class WebViewRetainer {
 
     /** 保留 [webView]；同一时间只保留一个，非同一实例的旧实例立即销毁。 */
     fun retain(serverId: Long, webView: WebView) {
+        // 已经 destroy（Activity 退出）后不再保留：此时 WebView 持有已销毁 Activity 的
+        // Context，留着只会被下一次复用，必须直接销毁。
+        if (stopped) {
+            webView.destroy()
+            return
+        }
         if (retainedWebView !== webView) destroyRetained()
         retainedWebView = webView
         retainedServerId = serverId
