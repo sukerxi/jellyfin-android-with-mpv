@@ -43,6 +43,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jellyfin.mobile.BuildConfig
+import org.jellyfin.mobile.MainActivity
 import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.app.PLAYER_EVENT_CHANNEL
 import org.jellyfin.mobile.player.interaction.PlayerEvent
@@ -203,13 +204,20 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     private var closedByUser = false
 
     /**
+     * Whether the web app is streaming to a remote device (Cast). The remote player service
+     * keeps its own playback alive in that case and must not be interrupted by the native
+     * player being closed.
+     */
+    private val remotePlaybackActive: Boolean
+        get() = (getApplication<Application>() as? MainActivity)?.serviceBinder?.isPlaying == true
+
+    /**
      * Whether playback should be allowed to run while the app is in the background:
      * the user consented by enabling "Background audio" (now called "Play in the
      * background"), or the web app is playing to a remote device (Cast).
      */
     private val backgroundPlaybackAllowed: Boolean
-        get() = appPreferences.exoPlayerAllowBackgroundAudio ||
-            serviceBinder?.isPlaying == true
+        get() = appPreferences.exoPlayerAllowBackgroundAudio || remotePlaybackActive
 
     init {
         ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
@@ -913,7 +921,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
      * service - would keep playing after the screen is closed.
      */
     fun onPlayerClosed() {
-        val keepPlaying = notificationHelper.allowBackgroundAudio || serviceBinder?.isPlaying == true
+        val keepPlaying = notificationHelper.allowBackgroundAudio || remotePlaybackActive
         if (!keepPlaying) {
             stop()
         }
