@@ -291,9 +291,11 @@ private fun buildEngineInfo(
     appPreferences: AppPreferences,
     labels: PlaybackInfoLabels,
 ): String {
-    val engine = when {
-        player is MpvPlayer -> "mpv"
-        player is ExoPlayer -> "ExoPlayer"
+    // The player instance is authoritative: the setting can already have been changed
+    // (or be about to change) without the running player being recreated.
+    val engine = when (player) {
+        is MpvPlayer -> "mpv"
+        is ExoPlayer -> "ExoPlayer"
         else -> when (appPreferences.videoPlayerType) {
             VideoPlayerType.MPV_PLAYER -> "mpv"
             VideoPlayerType.EXO_PLAYER -> "ExoPlayer"

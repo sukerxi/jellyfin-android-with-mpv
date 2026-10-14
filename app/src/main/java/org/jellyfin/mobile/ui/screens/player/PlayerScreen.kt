@@ -707,13 +707,15 @@ fun PlayerScreen(
                 .matchParentSize()
                 .padding(systemBarsPadding),
         ) {
-            // Loading indicator
-            if (playerState == Player.STATE_BUFFERING) {
-                CircularProgressIndicator(
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .size(64.dp),
-                )
+            // Loading indicator. Fade instead of popping: the player reports BUFFERING for
+            // a single frame on cold start, and a hard show/hide reads as a stutter.
+            AnimatedVisibility(
+                visible = playerState == Player.STATE_BUFFERING,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier.align(Alignment.Center),
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(64.dp))
             }
 
             // Skip media segment button
@@ -739,25 +741,6 @@ fun PlayerScreen(
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                     )
                 }
-            }
-
-            // Playback info panel
-            if (infoPanelVisible) {
-                PlaybackInfoPanel(
-                    model = infoModel,
-                    onDismiss = { infoPanelVisible = false },
-                )
-            }
-
-            // Episode picker panel
-            if (episodePickerVisible) {
-                EpisodePickerPanel(
-                    currentIndex = currentQueueIndex,
-                    queueSize = queueSize,
-                    items = episodeItems,
-                    onSelect = { position -> viewModel.selectQueueItem(position) },
-                    onDismiss = { episodePickerVisible = false },
-                )
             }
 
             // Unlock screen button
@@ -912,6 +895,25 @@ fun PlayerScreen(
                 modifier = Modifier
                     .matchParentSize()
                     .padding(controlsPadding),
+            )
+        }
+
+        // Panels are drawn last so they stay above the controls layer (the info card must
+        // not be covered by the title bar / control bar).
+        if (infoPanelVisible) {
+            PlaybackInfoPanel(
+                model = infoModel,
+                onDismiss = { infoPanelVisible = false },
+            )
+        }
+
+        if (episodePickerVisible) {
+            EpisodePickerPanel(
+                currentIndex = currentQueueIndex,
+                queueSize = queueSize,
+                items = episodeItems,
+                onSelect = { position -> viewModel.selectQueueItem(position) },
+                onDismiss = { episodePickerVisible = false },
             )
         }
     }
