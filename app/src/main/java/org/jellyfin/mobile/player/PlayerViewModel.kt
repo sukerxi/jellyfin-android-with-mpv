@@ -23,6 +23,7 @@ import androidx.media3.common.util.Clock
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.RenderersFactory
 import androidx.media3.exoplayer.analytics.DefaultAnalyticsCollector
 import androidx.media3.exoplayer.mediacodec.MediaCodecDecoderException
 import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
@@ -324,9 +325,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         else -> DefaultLoadControl()
     }
 
-    private fun buildRenderersFactory(preferExtensionRenderers: Boolean): DefaultRenderersFactory {
+    private fun buildRenderersFactory(preferExtensionRenderers: Boolean): RenderersFactory {
         val application: Application = getApplication()
-        return DefaultRenderersFactory(application).apply {
+        val defaultFactory = DefaultRenderersFactory(application).apply {
             setEnableDecoderFallback(true) // Fallback only works if initialization fails, not decoding at playback time
             val rendererMode = when {
                 preferExtensionRenderers -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
@@ -360,8 +361,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
 
                 filteredDecoderList
             }
-        }.let { factory ->
-            if (appPreferences.exoPlayerDirectPlayAss) AssRenderersFactory(get(), factory) else factory
+        }
+        // AssRenderersFactory wraps the default factory with libass support; it only
+        // implements RenderersFactory (there is no context-taking constructor), so the
+        // handler is passed explicitly here rather than resolved again per playback.
+        return if (appPreferences.exoPlayerDirectPlayAss) {
+            AssRenderersFactory(get<AssHandler>(), defaultFactory)
+        } else {
+            defaultFactory
         }
     }
 
