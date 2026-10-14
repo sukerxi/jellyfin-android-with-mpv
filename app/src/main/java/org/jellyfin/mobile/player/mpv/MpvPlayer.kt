@@ -1,7 +1,9 @@
 package org.jellyfin.mobile.player.mpv
 
 import android.app.Application
+import android.os.Handler
 import android.os.Looper
+import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.media3.common.AudioAttributes
@@ -202,10 +204,32 @@ class MpvPlayer(
         MpvCore.subscribe(eventListener)
     }
 
-    val surfaceHolderCallback = object : SurfaceHolder.Callback {
+    /**
+     * The surface currently handed to mpv, or null when mpv holds none.
+     *
+     * media3's `PlayerView.setPlayer` calls `clearVideoSurfaceView` right before
+     * `setVideoSurfaceView` on *every* invocation, and the Compose player screen recomposes
+     * several times per second (its position poll). Acting on those two transitions literally -
+     * detaching on the clear, re-attaching on the set - made the platform [Surface] be torn
+     * down and recreated at that rate, which killed mpv's video output while its audio track
+     * kept playing: a black picture with sound.
+     *
+     * [handleSetVideoOutput] / [handleClearVideoOutput] and the holder callbacks therefore all
+     * go through [attachSurface] / [detachSurface], which only act on a real change of output.
+     */
+    private var attachedSurface: Surface? = null
+
+    /** The view [surfaceHolderCallback] is currently registered on, or null. */
+    private var attachedSurfaceView: SurfaceView? = null
+
+    /** Pending teardown posted by [handleClearVideoOutput], cancelled by a matching set. */
+    private var pendingDetach: Runnable? = null
+
+    private val mainHandler = Handler(looper)
+
+    private val surfaceHolderCallback = object : SurfaceHolder.Callback {
         override fun surfaceCreated(holder: SurfaceHolder) {
-            MpvCore.attachSurface(holder.surface)
-            MpvCore.setProperty("vid", "auto")
+            attachSurface(holder.surface)
         }
 
         override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -213,9 +237,37 @@ class MpvPlayer(
         }
 
         override fun surfaceDestroyed(holder: SurfaceHolder) {
-            MpvCore.setProperty("vid", "no")
-            MpvCore.detachSurface()
+            // The handler is called with the surface it is destroying; only drop the output if
+            // that is still the one mpv is using.
+            if (attachedSurface === holder.surface) detachSurface()
         }
+    }
+
+    /** Hands [surface] to mpv. Repeated calls for the surface already attached are no-ops. */
+    private fun attachSurface(surface: Surface?) {
+        if (surface == null || attachedSurface === surface) return
+        // mpv holds a single video output: drop the previous one before replacing it.
+        if (attachedSurface != null) {
+            MpvCore.detachSurface()
+            attachedSurface = null
+        }
+        attachedSurface = surface
+        MpvCore.attachSurface(surface)
+        MpvCore.setProperty("vid", "auto")
+    }
+
+    /** Takes the current surface away from mpv, if there is one. */
+    private fun detachSurface() {
+        if (attachedSurface == null) return
+        attachedSurface = null
+        MpvCore.setProperty("vid", "no")
+        MpvCore.detachSurface()
+    }
+
+    /** Calls off the teardown [handleClearVideoOutput] posted, if one is still pending. */
+    private fun cancelPendingDetach() {
+        pendingDetach?.let { mainHandler.removeCallbacks(it) }
+        pendingDetach = null
     }
 
     private val permanentAvailableCommands =
@@ -283,14 +335,44 @@ class MpvPlayer(
 
     override fun handleSetVideoOutput(videoOutput: Any): ListenableFuture<*> {
         val surfaceView = videoOutput as SurfaceView
-        surfaceView.holder.addCallback(surfaceHolderCallback)
+        // media3 pairs this with a [handleClearVideoOutput] for the very same view: the pending
+        // teardown of that clear is called off here.
+        cancelPendingDetach()
+        if (surfaceView !== attachedSurfaceView) {
+            unregisterSurfaceHolder()
+            attachedSurfaceView = surfaceView
+            surfaceView.holder.addCallback(surfaceHolderCallback)
+        }
+        attachSurface(surfaceView.holder.surface)
         return Futures.immediateFuture(null)
     }
 
     override fun handleClearVideoOutput(videoOutput: Any?): ListenableFuture<*> {
-        val surfaceView = videoOutput as SurfaceView
-        surfaceView.holder.removeCallback(surfaceHolderCallback)
+        // Called *before* every [handleSetVideoOutput], usually for the very same view (see
+        // [attachedSurface] for why reacting immediately broke video playback). The teardown is
+        // therefore deferred by one main-loop turn and called off by the matching set: a pair
+        // collapses into a no-op, while a clear that is not followed by a set still releases
+        // mpv's output.
+        val view = videoOutput as? SurfaceView
+        cancelPendingDetach()
+        val runnable = Runnable {
+            pendingDetach = null
+            // A null output means "drop whatever is attached"; a specific view only drops the
+            // output if that view is still the one mpv renders into.
+            if (view == null || attachedSurfaceView === view) {
+                unregisterSurfaceHolder()
+                detachSurface()
+            }
+        }
+        pendingDetach = runnable
+        mainHandler.post(runnable)
         return Futures.immediateFuture(null)
+    }
+
+    /** Unregisters [surfaceHolderCallback] from whatever view it was registered on. */
+    private fun unregisterSurfaceHolder() {
+        attachedSurfaceView?.holder?.removeCallback(surfaceHolderCallback)
+        attachedSurfaceView = null
     }
 
     override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
@@ -401,6 +483,9 @@ class MpvPlayer(
 
     override fun handleRelease(): ListenableFuture<*> {
         stopRequested = true
+        cancelPendingDetach()
+        unregisterSurfaceHolder()
+        detachSurface()
         MpvCore.unsubscribe(eventListener)
         MpvCore.command(arrayOf("stop"))
         return Futures.immediateFuture(null)
