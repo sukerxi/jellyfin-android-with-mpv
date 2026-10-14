@@ -12,7 +12,6 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.SimpleBasePlayer
 import androidx.media3.common.TrackSelectionParameters
-import androidx.media3.common.util.Assertions
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.util.Util
 import androidx.media3.exoplayer.analytics.AnalyticsCollector
@@ -431,10 +430,17 @@ class MpvPlayer(
         return Futures.immediateFuture(null)
     }
 
+    /**
+     * Attaches [analyticsCollector] to this player.
+     *
+     * Takes a non-null collector on purpose: attaching is what makes the collector releasable
+     * ([AnalyticsCollector.release] must follow [AnalyticsCollector.setPlayer]), so the caller
+     * has to hand over a usable instance rather than a nullable one the player then has to
+     * assert away.
+     */
     @UnstableApi
-    fun setAnalyticsCollector(analyticsCollector: AnalyticsCollector?) {
-        Assertions.checkNotNull<AnalyticsCollector?>(analyticsCollector)
-        analyticsCollector!!.setPlayer(this, applicationLooper)
+    fun setAnalyticsCollector(analyticsCollector: AnalyticsCollector) {
+        analyticsCollector.setPlayer(this, applicationLooper)
     }
 
     fun disableSubTrack() {

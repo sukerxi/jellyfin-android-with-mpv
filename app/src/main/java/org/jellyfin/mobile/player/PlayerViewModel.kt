@@ -24,6 +24,7 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.RenderersFactory
+import androidx.media3.exoplayer.analytics.AnalyticsCollector
 import androidx.media3.exoplayer.analytics.DefaultAnalyticsCollector
 import androidx.media3.exoplayer.mediacodec.MediaCodecDecoderException
 import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
@@ -165,7 +166,17 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     val error: LiveData<String> = _error
 
     private val eventLogger = EventLogger()
-    private var analyticsCollector = buildAnalyticsCollector()
+
+    /**
+     * Collector of the player built last, or null while no player has been built.
+     *
+     * Non-null therefore means "already attached": [AnalyticsCollector.release] may only be
+     * called after [AnalyticsCollector.setPlayer], and attaching is the player's job (its
+     * constructor, or [MpvPlayer.setAnalyticsCollector]). Creating the collector up front -
+     * as the field initialiser used to - made the first [rebuildPlayer] release a collector
+     * no player had ever seen, which is what crashed on the very first setup.
+     */
+    private var analyticsCollector: AnalyticsCollector? = null
     private val initialTracksSelected = AtomicBoolean(false)
     private var fallbackPreferExtensionRenderers = false
     private var playSpeed = 1f
@@ -308,11 +319,12 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
      * [MpvPlayer]) instead of an erased type parameter, so nothing is cast and the
      * construction path can be read - and reviewed - linearly.
      */
-    private fun buildPlayer(): Player = when (val type = appPreferences.videoPlayerType) {
-        VideoPlayerType.EXO_PLAYER -> buildExoPlayer()
-        VideoPlayerType.MPV_PLAYER -> buildMpvPlayer()
-        else -> throw IllegalArgumentException("Invalid video player type: $type")
-    }
+    private fun buildPlayer(analyticsCollector: AnalyticsCollector): Player =
+        when (val type = appPreferences.videoPlayerType) {
+            VideoPlayerType.EXO_PLAYER -> buildExoPlayer(analyticsCollector)
+            VideoPlayerType.MPV_PLAYER -> buildMpvPlayer(analyticsCollector)
+            else -> throw IllegalArgumentException("Invalid video player type: $type")
+        }
 
     @Suppress("MagicNumber")
     private fun buildLoadControl(): DefaultLoadControl = when (appPreferences.exoPlayerNetworkBuffer) {
@@ -372,7 +384,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         }
     }
 
-    private fun buildExoPlayer(): ExoPlayer {
+    private fun buildExoPlayer(analyticsCollector: AnalyticsCollector): ExoPlayer {
         val application: Application = getApplication()
         val renderersFactory = buildRenderersFactory(fallbackPreferExtensionRenderers)
         val player = ExoPlayer.Builder(application, renderersFactory, get())
@@ -388,7 +400,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         return player
     }
 
-    private fun buildMpvPlayer(): MpvPlayer {
+    private fun buildMpvPlayer(analyticsCollector: AnalyticsCollector): MpvPlayer {
         val application: Application = getApplication()
         return MpvPlayer(application, Looper.getMainLooper()).apply {
             setDecoderProcessor(
@@ -442,15 +454,16 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         closedByUser = false
         fallbackPreferExtensionRenderers = preferExtensionRenderers
 
-        // Swap the analytics collector *before* building the player (the builder wires the
-        // new collector into it), but only release the old one once the new player exists:
-        // an engine build that throws must not leave the ViewModel holding a collector that
-        // was already torn down.
+        // Each player gets a collector of its own, and it is recorded only once the player
+        // actually attached it: an engine build that throws must not leave the ViewModel
+        // holding a collector a player has never seen (see [analyticsCollector]), and only
+        // the collector of the player built before this one may be released.
         val previousCollector = analyticsCollector
-        analyticsCollector = buildAnalyticsCollector()
+        val collector = buildAnalyticsCollector()
 
-        val player = buildPlayer()
-        previousCollector.release()
+        val player = buildPlayer(collector)
+        analyticsCollector = collector
+        previousCollector?.release()
 
         // The listener is registered before the player is published, so an observer of
         // [player] - or a callback fired during `addListener` - already finds it subscribed.
@@ -986,7 +999,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     }
 
     fun logTracks() {
-        playerOrNull?.logTracks(analyticsCollector)
+        val player = playerOrNull ?: return
+        val collector = analyticsCollector ?: return
+        player.logTracks(collector)
     }
 
     suspend fun changeBitrate(bitrate: Int?): Boolean {
@@ -1226,6 +1241,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     override fun onCleared() {
         reportPlaybackStop()
         releasePlayer()
+        // The collector outlives its player only as long as the ViewModel does; the
+        // documented order is player first, collector second.
+        analyticsCollector?.release()
+        analyticsCollector = null
         _mediaSession?.release()
         _mediaSession = null
     }
