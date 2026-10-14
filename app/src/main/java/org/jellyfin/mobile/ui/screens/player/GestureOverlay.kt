@@ -344,33 +344,54 @@ fun SeekRippleOverlay(
 ) {
     if (trigger == null) return
     var surfaceSize by remember { mutableStateOf(IntSize.Zero) }
+    // Not a `mutableStateOf`: the view is created by the `factory` during composition, and
+    // writing observed state from there would schedule another recomposition for nothing.
+    // [LaunchedEffect] reads it after the first frame, when the factory has run.
+    val rippleViewHolder = remember { arrayOfNulls<View>(1) }
 
     Box(modifier = modifier.onSizeChanged { surfaceSize = it }) {
         val width = surfaceSize.width
         val height = surfaceSize.height
-        if (width == 0 || height == 0) return@Box
-
-        // Bounds of the tapped half: half of the view wide, full height, centred vertically
-        // (the old code used a viewWidth/2 square centred on the view's vertical centre).
-        val viewCenterX = width / 2
-        val viewCenterY = height / 2
-        val isFastForward = trigger.x.toInt() > viewCenterX
-        val left = if (isFastForward) viewCenterX else 0
-        val right = if (isFastForward) width else viewCenterX
-        val top = viewCenterY - viewCenterX / 2
-        val bottom = viewCenterY + viewCenterX / 2
 
         AndroidView(
             factory = { context ->
                 // A plain view whose foreground is the platform ripple: rendered by the
                 // framework (RenderThread) and free of any Compose gesture handling.
-                View(context).apply { foreground = colorControlHighlightRipple(context) }
+                View(context)
+                    .apply { foreground = colorControlHighlightRipple(context) }
+                    .also { rippleViewHolder[0] = it }
             },
-            update = { view ->
-                view.playRipple(left, top, right, bottom, trigger.x, trigger.y)
-            },
+            // Deliberately no ripple in `update`: it runs on *every* recomposition (the
+            // player polls its position every 200ms, so that is constantly), and every call
+            // would re-press the drawable, restarting the animation before it could play.
+            // The ripple is a one-shot; it is driven by the [LaunchedEffect] below.
             modifier = Modifier.fillMaxSize(),
         )
+
+        // Play the ripple exactly once per double tap, once the surface size is known.
+        LaunchedEffect(trigger.token, width, height) {
+            if (width == 0 || height == 0) return@LaunchedEffect
+            val view = rippleViewHolder[0] ?: return@LaunchedEffect
+
+            // Bounds of the tapped half: half of the view wide, full height, centred
+            // vertically (the old code used a viewWidth/2 square centred on the view's
+            // vertical centre).
+            val viewCenterX = width / 2
+            val viewCenterY = height / 2
+            val isFastForward = trigger.x.toInt() > viewCenterX
+            val left = if (isFastForward) viewCenterX else 0
+            val right = if (isFastForward) width else viewCenterX
+            val top = viewCenterY - viewCenterX / 2
+            val bottom = viewCenterY + viewCenterX / 2
+
+            // The platform re-applies `mForegroundInfo.mDrawable.setBounds(0, 0, w, h)` on
+            // every layout pass, so the custom bounds have to be set after the view is laid
+            // out - and re-set right before pressing, otherwise a layout pass in between
+            // silently replaces them with the full-view bounds.
+            view.post {
+                view.playRipple(left, top, right, bottom, trigger.x, trigger.y)
+            }
+        }
 
         // The overlay is a one-shot visual; clear the trigger once it has faded out.
         LaunchedEffect(trigger.token) {

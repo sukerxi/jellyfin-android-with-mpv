@@ -298,29 +298,38 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     }
 
     /**
-     * Builds a player of the type selected in the preferences, wired to the shared track
-     * selector / analytics collector and configured for video playback.
+     * Builds the player selected in the preferences.
      *
-     * Generic so the return type follows the builder (an [ExoPlayer] for the ExoPlayer based
-     * engine, a [MpvPlayer] otherwise) instead of forcing a cast at every use site.
+     * Deliberately a *concrete* factory instead of the previous generic
+     * `buildPlayer<T>()`: that one returned `T` through an unchecked `as T` cast, and its
+     * callers then immediately dereferenced the result. Keeping the two engines in named
+     * functions makes the return type follow the actual builder (an [ExoPlayer] or an
+     * [MpvPlayer]) instead of an erased type parameter, so nothing is cast and the
+     * construction path can be read - and reviewed - linearly.
      */
-    @Suppress("UNCHECKED_CAST")
-    private inline fun <reified T : Player> buildPlayer(): T {
-        @Suppress("MagicNumber")
-        val loadControl = when (appPreferences.exoPlayerNetworkBuffer) {
-            Constants.NETWORK_BUFFER_LARGE -> DefaultLoadControl.Builder()
-                .setBufferDurationsMs(50_000, 120_000, 2_500, 5_000)
-                .build()
-            Constants.NETWORK_BUFFER_EXTRA_LARGE -> DefaultLoadControl.Builder()
-                .setBufferDurationsMs(80_000, 240_000, 5_000, 10_000)
-                .build()
-            else -> DefaultLoadControl()
-        }
-        val appPreferences: AppPreferences = get()
-        val renderersFactory = DefaultRenderersFactory(getApplication()).apply {
+    private fun buildPlayer(): Player = when (val type = appPreferences.videoPlayerType) {
+        VideoPlayerType.EXO_PLAYER -> buildExoPlayer()
+        VideoPlayerType.MPV_PLAYER -> buildMpvPlayer()
+        else -> throw IllegalArgumentException("Invalid video player type: $type")
+    }
+
+    @Suppress("MagicNumber")
+    private fun buildLoadControl(): DefaultLoadControl = when (appPreferences.exoPlayerNetworkBuffer) {
+        Constants.NETWORK_BUFFER_LARGE -> DefaultLoadControl.Builder()
+            .setBufferDurationsMs(50_000, 120_000, 2_500, 5_000)
+            .build()
+        Constants.NETWORK_BUFFER_EXTRA_LARGE -> DefaultLoadControl.Builder()
+            .setBufferDurationsMs(80_000, 240_000, 5_000, 10_000)
+            .build()
+        else -> DefaultLoadControl()
+    }
+
+    private fun buildRenderersFactory(preferExtensionRenderers: Boolean): DefaultRenderersFactory {
+        val application: Application = getApplication()
+        return DefaultRenderersFactory(application).apply {
             setEnableDecoderFallback(true) // Fallback only works if initialization fails, not decoding at playback time
             val rendererMode = when {
-                fallbackPreferExtensionRenderers -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+                preferExtensionRenderers -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
                 else -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
             }
             setExtensionRendererMode(rendererMode)
@@ -351,33 +360,36 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
 
                 filteredDecoderList
             }
-        }.let { if (appPreferences.exoPlayerDirectPlayAss) AssRenderersFactory(get(), it) else it }
+        }.let { factory ->
+            if (appPreferences.exoPlayerDirectPlayAss) AssRenderersFactory(get(), factory) else factory
+        }
+    }
 
-        return when (appPreferences.videoPlayerType) {
-            VideoPlayerType.EXO_PLAYER -> {
-                ExoPlayer.Builder(getApplication(), renderersFactory, get()).apply {
-                    setUsePlatformDiagnostics(false)
-                    setTrackSelector(trackSelector)
-                    setAnalyticsCollector(analyticsCollector)
-                    setLoadControl(loadControl)
-                    setWakeMode(C.WAKE_MODE_NETWORK)
-                    setHandleAudioBecomingNoisy(true)
-                }.build().apply {
-                    applyDefaultAudioAttributes(C.AUDIO_CONTENT_TYPE_MOVIE)
-                    if (appPreferences.exoPlayerDirectPlayAss) get<AssHandler>().init(this)
-                } as T
-            }
-            VideoPlayerType.MPV_PLAYER -> {
-                MpvPlayer(getApplication(), Looper.getMainLooper()).apply {
-                    setDecoderProcessor(
-                        { _decoderType.value ?: DecoderType.HARDWARE },
-                        { _detectedDecoderType.postValue(it) },
-                    )
-                    setAnalyticsCollector(analyticsCollector)
-                    applyDefaultAudioAttributes(C.AUDIO_CONTENT_TYPE_MOVIE)
-                } as T
-            }
-            else -> throw IllegalArgumentException("Invalid video player type")
+    private fun buildExoPlayer(): ExoPlayer {
+        val application: Application = getApplication()
+        val renderersFactory = buildRenderersFactory(fallbackPreferExtensionRenderers)
+        val player = ExoPlayer.Builder(application, renderersFactory, get())
+            .setUsePlatformDiagnostics(false)
+            .setTrackSelector(trackSelector)
+            .setAnalyticsCollector(analyticsCollector)
+            .setLoadControl(buildLoadControl())
+            .setWakeMode(C.WAKE_MODE_NETWORK)
+            .setHandleAudioBecomingNoisy(true)
+            .build()
+        player.applyDefaultAudioAttributes(C.AUDIO_CONTENT_TYPE_MOVIE)
+        if (appPreferences.exoPlayerDirectPlayAss) get<AssHandler>().init(player)
+        return player
+    }
+
+    private fun buildMpvPlayer(): MpvPlayer {
+        val application: Application = getApplication()
+        return MpvPlayer(application, Looper.getMainLooper()).apply {
+            setDecoderProcessor(
+                { _decoderType.value ?: DecoderType.HARDWARE },
+                { _detectedDecoderType.postValue(it) },
+            )
+            setAnalyticsCollector(analyticsCollector)
+            applyDefaultAudioAttributes(C.AUDIO_CONTENT_TYPE_MOVIE)
         }
     }
 
@@ -423,12 +435,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         closedByUser = false
         fallbackPreferExtensionRenderers = preferExtensionRenderers
 
-        // The previous player (if any) is torn down by the caller; its analytics collector is
-        // always released here, even when the player itself is still alive.
-        analyticsCollector.release()
+        // Swap the analytics collector *before* building the player (the builder wires the
+        // new collector into it), but only release the old one once the new player exists:
+        // an engine build that throws must not leave the ViewModel holding a collector that
+        // was already torn down.
+        val previousCollector = analyticsCollector
         analyticsCollector = buildAnalyticsCollector()
 
-        val player = buildPlayer<Player>()
+        val player = buildPlayer()
+        previousCollector.release()
+
+        // The listener is registered before the player is published, so an observer of
+        // [player] - or a callback fired during `addListener` - already finds it subscribed.
         player.addListener(this@PlayerViewModel)
         _player.value = player
 
@@ -1002,7 +1020,22 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
      * service - would keep playing after the screen is closed.
      */
     fun onPlayerClosed() {
-        if (!keepPlaybackOnExit()) endPlayback()
+        if (!keepPlaybackOnExit()) {
+            endPlayback()
+            return
+        }
+
+        // Background playback keeps the engine (and its audio) alive, but the *session* is
+        // still over: the screen is gone, and the next session must not inherit this one's
+        // bookkeeping.
+        //
+        // Skipping this is what made "start playback, leave the player, then play again"
+        // need two attempts: the retained player kept the previous media item and the
+        // [closedByUser] latch from [pauseInBackground], so the first play() of the new
+        // session was immediately paused again and only the second one stuck. Clearing the
+        // latch here (rather than only in [rebuildPlayer], which is a no-op while a player
+        // exists) is what makes a retained player start cleanly.
+        resetSessionState()
     }
 
     /**
@@ -1040,12 +1073,34 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
      * server and tears the player down, so the next session starts from a clean state.
      */
     fun endPlayback() {
-        if (playerOrNull == null) return
-        stop()
-        reportPlaybackStop()
-        releasePlayer()
-        // Drop the session position/time so the next session starts at the item's own start
-        // position instead of resuming where this one left off.
+        // The session state is dropped even when there is no player left to tear down:
+        // playback may have ended on its own ([onPlayerStateChanged]) between the screen's
+        // last check and this call.
+        if (playerOrNull != null) {
+            stop()
+            reportPlaybackStop()
+            releasePlayer()
+        }
+        resetSessionState()
+    }
+
+    /**
+     * Drops the per-session state a *new* playback session must not inherit.
+     *
+     * Called both when the player is torn down ([endPlayback]) and when it is deliberately
+     * kept alive for background playback ([onPlayerClosed]): the player may outlive the
+     * screen, but the session bookkeeping must not.
+     *
+     * - [closedByUser]: otherwise the next play() is paused again as soon as it starts
+     *   playing (see [onIsPlayingChanged]), which reads as "the first click does nothing";
+     * - the current media source: its `startTime` is mutated while seeking, so keeping it
+     *   around makes the next session resume where the previous one stopped;
+     * - the initial-track latch: the reused player has to re-run track selection for the
+     *   new media source.
+     */
+    private fun resetSessionState() {
+        closedByUser = false
+        initialTracksSelected.set(false)
         queueManager.resetCurrentMediaSource()
     }
 
