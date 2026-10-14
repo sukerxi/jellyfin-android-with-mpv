@@ -14,11 +14,14 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
@@ -118,6 +121,8 @@ private const val SEEK_UI_SETTLE_TIMEOUT_MS = 1000L
 @Composable
 fun PlayerScreen(
     onClose: () -> Unit,
+    closeRequested: Boolean = false,
+    onCloseRequestHandled: () -> Unit = {},
     viewModel: PlayerViewModel = viewModel(),
     playbackLauncher: PlaybackLauncher = koinInject(),
     playbackController: PlaybackController = koinInject(),
@@ -177,6 +182,23 @@ fun PlayerScreen(
     fun showControls() {
         controlsVisible = true
         controlsToken++
+    }
+
+    // Set while the screen is being closed, so the "player == null" auto-close effect does
+    // not dismiss the (newly started) player again right after it was closed.
+    val closingSoon = remember { mutableStateOf(false) }
+
+    /**
+     * Leave the player screen: the web app takes playback over again and the native player
+     * is stopped unless the user enabled background playback (or the web app is casting).
+     * Every exit path (back button, the toolbar back arrow, the WebView's back handling)
+     * goes through here, otherwise the foreground service keeps playing behind the UI.
+     */
+    fun closePlayer() {
+        if (closingSoon.value) return
+        closingSoon.value = true
+        viewModel.onPlayerClosed()
+        onClose()
     }
 
     fun hideUnlockButton() {
@@ -268,7 +290,7 @@ fun PlayerScreen(
         val request = playbackLauncher.consume()
         if (request == null) {
             // No pending playback request (e.g. restored to the player route), close
-            onClose()
+            closePlayer()
             return@LaunchedEffect
         }
         when (viewModel.queueManager.initializePlaybackQueue(request.playOptions, request.preferences)) {
@@ -279,10 +301,21 @@ fun PlayerScreen(
         }
     }
 
-    // Automatically close the screen when playback ended, unless we're in PiP mode
+    // Automatically close the screen when playback ended, unless we're in PiP mode.
+    // Playback is already over here, so calling onPlayerClosed() again would only risk
+    // stopping playback of an item that was started in the meantime; just dismiss.
     LaunchedEffect(player) {
-        if (player == null && !pipMode) {
+        if (player == null && !pipMode && !closingSoon.value) {
             onClose()
+        }
+    }
+
+    // Back press forwarded from the overlay host (it sits outside this screen). The player
+    // screen has to be the one closing, as only it runs PlayerViewModel.onPlayerClosed().
+    LaunchedEffect(closeRequested) {
+        if (closeRequested) {
+            closePlayer()
+            onCloseRequestHandled()
         }
     }
 
@@ -360,7 +393,7 @@ fun PlayerScreen(
                     }
                     // If playback ended during picture in picture we'll return to the main app when PiP is closed
                     if (viewModel.playerOrNull == null) {
-                        onClose()
+                        closePlayer()
                     }
                 }
                 else -> Unit
@@ -395,9 +428,12 @@ fun PlayerScreen(
         onDispose { playbackController.onUserLeaveHint = null }
     }
 
-    // Reset window state when leaving the player (equivalent of the old onDestroy)
+    // Reset window state when leaving the player (equivalent of the old onDestroy), and make
+    // sure playback is stopped even when the screen is dismissed without going through
+    // closePlayer() (e.g. a server switch pops the web route while the overlay is open).
     DisposableEffect(Unit) {
         onDispose {
+            if (!closingSoon.value) viewModel.onPlayerClosed()
             activity.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             playerFullscreenHelper.disableFullscreen()
             window.brightness = BRIGHTNESS_OVERRIDE_NONE
@@ -651,11 +687,20 @@ fun PlayerScreen(
         gestureHandler.handleConfiguration()
     }
 
-    // Back closes open panels/menus first
-    BackHandler(enabled = infoPanelVisible || episodePickerVisible || expandedMenu != null) {
-        expandedMenu = null
-        infoPanelVisible = false
-        episodePickerVisible = false
+    // Back closes open panels/menus first, and always consumes the press while the player
+    // screen is up: the web app's back handler (WebViewScreen) stays enabled behind the
+    // overlay (the WebView is retained), and while locked it would otherwise send the app
+    // to the background behind the lock screen instead of closing the player.
+    BackHandler {
+        when {
+            infoPanelVisible || episodePickerVisible || expandedMenu != null -> {
+                expandedMenu = null
+                infoPanelVisible = false
+                episodePickerVisible = false
+            }
+            !locked -> closePlayer()
+            // Locked: swallow the press, the unlock button closes the player
+        }
     }
 
     Box(
@@ -715,7 +760,15 @@ fun PlayerScreen(
                 exit = fadeOut(),
                 modifier = Modifier.align(Alignment.Center),
             ) {
-                CircularProgressIndicator(modifier = Modifier.size(64.dp))
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(modifier = Modifier.size(64.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = stringResource(R.string.player_loading),
+                        color = Color.White,
+                        fontSize = 16.sp,
+                    )
+                }
             }
 
             // Skip media segment button
@@ -800,7 +853,7 @@ fun PlayerScreen(
                     decoders = decoders,
                 ),
                 actions = PlayerControlsActions(
-                    onBack = { onClose() },
+                    onBack = { closePlayer() },
                     onTogglePlayPause = {
                         viewModel.playerOrNull?.let { currentPlayer ->
                             if (currentPlayer.isPlaying) currentPlayer.pause() else currentPlayer.play()
@@ -898,12 +951,15 @@ fun PlayerScreen(
             )
         }
 
-        // Panels are drawn last so they stay above the controls layer (the info card must
-        // not be covered by the title bar / control bar).
+        // Panels are drawn last so they stay above the controls layer: their cards must not
+        // be covered by the title bar / control bar. Their own bounds match the controls
+        // layer, so the bars on top of them keep working (the requirement is "the video
+        // info card sits above the play button layer").
         if (infoPanelVisible) {
             PlaybackInfoPanel(
                 model = infoModel,
                 onDismiss = { infoPanelVisible = false },
+                controlsBounds = controlsPadding,
             )
         }
 
@@ -914,6 +970,7 @@ fun PlayerScreen(
                 items = episodeItems,
                 onSelect = { position -> viewModel.selectQueueItem(position) },
                 onDismiss = { episodePickerVisible = false },
+                controlsBounds = controlsPadding,
             )
         }
     }

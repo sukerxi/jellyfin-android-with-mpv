@@ -116,6 +116,7 @@
     </plurals>
     <string name="player_error_unsupported_content">该媒体无法在本设备上播放</string>
     <string name="player_error_network_failure">无法从服务器加载媒体信息</string>
+    <string name="player_loading">加载中…</string>
     <string name="player_error_invalid_play_options">无法解析播放信息</string>
     <string name="toast_reopen_after_change">进行更改后，请重新打开应用</string>
     <string name="dialog_button_ignore">忽略</string>

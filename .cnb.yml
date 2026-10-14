@@ -206,6 +206,25 @@
     cat RELEASE_NOTES.md
 
 
+# ============================== PR 校验（compile + detekt） ==============================
+# 所有 PR 触发一次 assembleDebug（对应 app-build.yaml 的 PR 触发）：
+# 只看编译能否通过，产物不发布。并发上限用 lock wait 控制，避免多 PR 同时抢
+# Android SDK 数据卷；失败信息即编译错误。
+.pr-ci-pipeline: &pr-ci-pipeline
+  name: pr-build
+  lock:
+    key: pr-build
+    wait: true
+    timeout: 900
+  docker: *android-docker
+  env: *android-env
+  stages:
+    - *setup-stage
+    - name: 编译 Libre Debug
+      script: |
+        set -e
+        ./gradlew --no-daemon --console=plain assembleLibreDebug --stacktrace
+
 # ============================== Nightly 发版（对应 release.yml） ==============================
 
 .nightly-pipeline: &nightly-pipeline
@@ -573,6 +592,11 @@ master:
     - *nightly-pipeline
   web_trigger_release:
     - *nightly-pipeline
+
+# 所有 PR：编译校验（此前 PR 上没有流水线，问题只能等合并后才暴露）
+"**":
+  pull_request:
+    - *pr-ci-pipeline
 
 # 推送 v* tag 触发正式发版（对应 app-publish.yaml）
 "v*":
