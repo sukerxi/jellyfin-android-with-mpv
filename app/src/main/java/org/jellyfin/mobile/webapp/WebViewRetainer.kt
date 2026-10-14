@@ -8,9 +8,10 @@ import androidx.compose.runtime.setValue
 /**
  * 在路由切换期间保留 [WebView] 实例。
  *
- * 导航到播放器等其它路由时，WEB 目的地的组合会被销毁，AndroidView 的 onRelease 随之
+ * 导航到设置/下载等其它路由时，WEB 目的地的组合会被销毁，AndroidView 的 onRelease 随之
  * 销毁 WebView；返回时工厂方法重建 WebView 并 loadUrl(服务器首页)，用户回到的就会是
  * web 应用首页而不是离开时的页面（旧版 Fragment 叠加方案中 WebView 始终存活）。
+ * 播放器为全屏浮层，播放期间 WEB 组合不销毁，WebView 始终保持存活。
  *
  * 保留期间 WebView 只是脱离窗口，页面状态（SPA 路由、滚动位置）原样保留；复用前由
  * WebViewScreen 重新绑定客户端与 JS 桥。切换服务器或退出应用时统一销毁。
@@ -56,8 +57,9 @@ class WebViewRetainer {
         return webView
     }
 
-    /** 销毁保留的 WebView（退出应用时调用）。 */
+    /** 销毁保留的 WebView（退出应用时调用）。调用后不再接受保留。 */
     fun destroy() {
+        stopped = true
         destroyRetained()
     }
 

@@ -150,9 +150,25 @@ fun JellyfinNavHost(
             // 的返回行为一致）。此回调注册晚于 WebViewScreen 的返回处理，优先级更高；
             // PlayerScreen 内部的面板返回处理注册更晚，优先关闭面板再关播放器。
             BackHandler { playerVisible = false }
-            PlayerScreen(
-                onClose = { playerVisible = false },
-            )
+            // 播放器浮层持有独立的 ViewModelStore：打开时创建 PlayerViewModel，关闭时
+            // 清除——onCleared 会上报播放进度、停止播放并释放播放器，与旧版 PLAYER 导航
+            // 目标出栈时清理 entry 级 ViewModel 的行为一致。若直接沿用 Activity 的
+            // Store，关闭浮层不会触发 onCleared，音频会继续在后台播放。
+            val playerViewModelStore = remember { ViewModelStore() }
+            DisposableEffect(playerViewModelStore) {
+                onDispose { playerViewModelStore.clear() }
+            }
+            CompositionLocalProvider(
+                LocalViewModelStoreOwner provides remember(playerViewModelStore) {
+                    object : ViewModelStoreOwner {
+                        override val viewModelStore: ViewModelStore = playerViewModelStore
+                    }
+                },
+            ) {
+                PlayerScreen(
+                    onClose = { playerVisible = false },
+                )
+            }
         }
     }
 }
