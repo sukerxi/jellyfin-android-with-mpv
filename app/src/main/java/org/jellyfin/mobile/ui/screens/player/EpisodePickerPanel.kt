@@ -6,6 +6,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -96,6 +97,15 @@ private fun buildEpisodeLabel(item: BaseItemDto?, position: Int): String {
     }
 }
 
+/**
+ * 选集面板。
+ *
+ * 面板只占据控件层（标题栏/控制条）之间的区域：外层 [Box][controlsBounds] 与
+ * [PlayerControlsState] 同尺寸，绘制在控制层之后因而位于其上方，同时不会挡住
+ * 标题栏与控制条（点击这些区域仍能操作播放器）。
+ *
+ * @param controlsBounds 控件层的内边距（系统栏/刘海），由 [PlayerScreen] 传入
+ */
 @Composable
 fun EpisodePickerPanel(
     currentIndex: Int,
@@ -103,6 +113,7 @@ fun EpisodePickerPanel(
     items: List<EpisodePickerItem>?,
     onSelect: (position: Int) -> Unit,
     onDismiss: () -> Unit,
+    controlsBounds: PaddingValues = PaddingValues(),
     modifier: Modifier = Modifier,
 ) {
     val gridState = rememberLazyGridState()
@@ -117,6 +128,9 @@ fun EpisodePickerPanel(
     Box(
         modifier = modifier
             .fillMaxSize()
+            .padding(controlsBounds)
+            // Dismiss when tapping outside of the card, without covering the control bars:
+            // they sit on top of this layer and keep receiving their own clicks.
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,

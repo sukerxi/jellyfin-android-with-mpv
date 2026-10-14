@@ -54,6 +54,9 @@ fun JellyfinNavHost(
 
     // 播放器以全屏浮层覆盖在当前界面之上，而非独立的导航目标（见下方 NavHost 注释）。
     var playerVisible by remember { mutableStateOf(false) }
+    // 由浮层外的 BackHandler 置位：PlayerScreen 内的 BackHandler 注册更晚而优先处理返回，
+    // 它据此关闭播放器（并停止播放）而不是让浮层被静默移除。
+    var playerScreenClosedRequested by remember { mutableStateOf(false) }
 
     // JS 桥 / Connect 屏发起的导航命令
     LaunchedEffect(activityEventHandler) {
@@ -148,10 +151,20 @@ fun JellyfinNavHost(
         if (playerVisible) {
             // 系统返回优先关闭播放器（与旧版 PlayerFragment 叠加在 WebViewFragment 之上时
             // 的返回行为一致）。此回调注册晚于 WebViewScreen 的返回处理，优先级更高；
-            // PlayerScreen 内部的面板返回处理注册更晚，优先关闭面板再关播放器。
-            BackHandler { playerVisible = false }
+            // PlayerScreen 内部的面板/锁屏返回处理注册更晚，优先关闭面板再关播放器。
+            //
+            // 返回必须走 PlayerScreen 的 onClose，否则不会触发 PlayerViewModel.onPlayerClosed()，
+            // 前台服务里的播放会继续跑在界面后面。
+            BackHandler {
+                if (!playerScreenClosedRequested) {
+                    playerScreenClosedRequested = true
+                }
+            }
             PlayerScreen(
-                onClose = { playerVisible = false },
+                onClose = {
+                    playerScreenClosedRequested = false
+                    playerVisible = false
+                },
             )
         }
     }

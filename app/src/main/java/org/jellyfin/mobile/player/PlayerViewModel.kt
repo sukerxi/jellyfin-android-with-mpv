@@ -194,6 +194,23 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     private var displayPreferences = DisplayPreferences()
     private var autoPlayNextEpisodeEnabled: Boolean = false
 
+    /**
+     * Whether the player was closed by the user ("back" / closing the player overlay), as
+     * opposed to the web app ending playback. The web app only calls its stop methods when
+     * it stops playback itself, so leaving the player screen has to stop the native player
+     * explicitly - otherwise the (foreground service backed) playback keeps running.
+     */
+    private var closedByUser = false
+
+    /**
+     * Whether playback should be allowed to run while the app is in the background:
+     * the user consented by enabling "Background audio" (now called "Play in the
+     * background"), or the web app is playing to a remote device (Cast).
+     */
+    private val backgroundPlaybackAllowed: Boolean
+        get() = appPreferences.exoPlayerAllowBackgroundAudio ||
+            serviceBinder?.isPlaying == true
+
     init {
         ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
 
@@ -267,6 +284,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
      * Setup a new [ExoPlayer] for video playback, register callbacks and set attributes
      */
     fun setupPlayer() {
+        // A player is being (re)created: drop the "user closed the player" latch so a later
+        // setup (decoder change, error fallback, next item) is not muted by [pauseInBackground].
+        closedByUser = false
         @Suppress("MagicNumber")
         val loadControl = when (appPreferences.exoPlayerNetworkBuffer) {
             Constants.NETWORK_BUFFER_LARGE -> DefaultLoadControl.Builder()
@@ -359,6 +379,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
      * player writing to a dead session. [onCleared] releases it for good.
      */
     private fun releasePlayer() {
+        // Reset the audio focus handling latch: the next player is a fresh start.
+        closedByUser = false
         val releasedPlayer = playerOrNull
         _player.value = null
         releasedPlayer?.run {
@@ -883,8 +905,51 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         return setPlaybackSpeed(speed)
     }
 
+    /**
+     * Called when the user leaves the player screen (back button, closing the player
+     * overlay, or navigating away). Web playback is handed back to the web app; the native
+     * player is only stopped when the web app does not keep playing in the background
+     * (music playback, or Cast). Without this the player - kept alive by the foreground
+     * service - would keep playing after the screen is closed.
+     */
+    fun onPlayerClosed() {
+        val keepPlaying = notificationHelper.allowBackgroundAudio || serviceBinder?.isPlaying == true
+        if (!keepPlaying) {
+            stop()
+        }
+    }
+
+    /**
+     * Called when the app goes to the background. Drops the native playback unless the user
+     * enabled background playback or the web app keeps playing on a remote device.
+     */
+    fun pauseInBackground() {
+        if (!backgroundPlaybackAllowed) {
+            // Latch the user-initiated close so the audio listener does not try to
+            // re-acquire audio focus and restart playback on the next foreground transition.
+            closedByUser = true
+            pause()
+        }
+    }
+
     fun stop() {
-        pause()
+        val player = playerOrNull
+        if (player is MpvPlayer) {
+            // mpv pauses the video but keeps the audio track alive when the app leaves the
+            // foreground (media3's audio focus handling only exists on the ExoPlayer side),
+            // so the player is torn down instead: "back" has to end playback for good.
+            stopPlaybackAndRelease()
+        } else {
+            pause()
+            reportPlaybackStop()
+            releasePlayer()
+        }
+    }
+
+    private fun stopPlaybackAndRelease() {
+        val player = playerOrNull ?: return
+        player.pause()
+        player.stop()
         reportPlaybackStop()
         releasePlayer()
     }
@@ -897,8 +962,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         audioManager.setStreamVolume(stream, scaled, 0)
     }
 
-    @Deprecated("Deprecated in Java")
-    @SuppressLint("SwitchIntDef")
+    @Suppress("DEPRECATION")
     override fun onPlayerStateChanged(playWhenReady: Boolean, playbackState: Int) {
         val player = playerOrNull ?: return
 
@@ -963,6 +1027,16 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         super.onPositionDiscontinuity(oldPosition, newPosition, reason)
         playerOrNull?.setWatchedChapterMarkings()
         playerOrNull?.updateSkipMediaSegmentButton()
+    }
+
+    override fun onIsPlayingChanged(isPlaying: Boolean) {
+        // Playback restarted after the player screen was left (e.g. the player regained audio
+        // focus when the app came back to the foreground) - this is not what "back" should do.
+        // The close path stops the player outright, so this only catches the mpv based
+        // resurrection ExoPlayer prevents via setHandleAudioBecomingNoisy(true).
+        if (isPlaying && closedByUser) {
+            pause()
+        }
     }
 
     override fun onPlayerError(error: PlaybackException) {

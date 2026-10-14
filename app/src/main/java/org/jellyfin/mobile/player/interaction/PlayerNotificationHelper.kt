@@ -165,14 +165,12 @@ class PlayerNotificationHelper(private val viewModel: PlayerViewModel) : KoinCom
         if (receiverRegistered.compareAndSet(true, false)) {
             context.unregisterReceiver(notificationActionReceiver)
         }
-        if (viewModel.playerOrNull == null) {
-            // Playback ended without the web app being told about it. Resetting the session
-            // stops the system from keeping the (already released) player as the active
-            // media session, which would leave the last video running in the background
-            // after the player was closed.
-            viewModel.mediaSession.isActive = false
-            viewModel.mediaSession.setPlaybackState(PlaybackState.STATE_NONE, 0L, 0L)
-        }
+        // Playback ended (or the player was closed) without the web app being told about it.
+        // Resetting the session drops the stale notification/controls and stops the system
+        // from keeping the torn down player as the active media session, which would leave
+        // the last video running in the background after the player was closed.
+        viewModel.mediaSession.isActive = false
+        viewModel.mediaSession.setPlaybackState(PlaybackState.STATE_NONE, 0L, 0L)
     }
 
     private suspend fun loadImage(mediaSource: JellyfinMediaSource) = when (mediaSource) {

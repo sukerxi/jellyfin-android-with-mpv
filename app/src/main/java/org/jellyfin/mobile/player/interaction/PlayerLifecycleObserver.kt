@@ -11,8 +11,14 @@ class PlayerLifecycleObserver(private val viewModel: PlayerViewModel) : DefaultL
     }
 
     override fun onStop(owner: LifecycleOwner) {
-        if (!viewModel.notificationHelper.allowBackgroundAudio) {
-            viewModel.pause()
-        }
+        // Only drop playback the user did not ask to keep running; the web app may still
+        // play (music) or stream to a remote device.
+        viewModel.pauseInBackground()
+    }
+
+    override fun onDestroy(owner: LifecycleOwner) {
+        // Last chance to stop: the view model is only cleared when the activity really goes
+        // away, which is also the point where the foreground service must not keep playing.
+        viewModel.onPlayerClosed()
     }
 }
