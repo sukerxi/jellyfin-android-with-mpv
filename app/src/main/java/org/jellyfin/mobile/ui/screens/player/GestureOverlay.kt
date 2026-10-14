@@ -2,7 +2,7 @@ package org.jellyfin.mobile.ui.screens.player
 
 import android.view.ViewConfiguration
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -40,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -54,6 +55,7 @@ import kotlinx.coroutines.delay
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.ui.theme.JellyfinPrimary
 import org.jellyfin.mobile.utils.Constants
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 /**
@@ -195,6 +197,78 @@ private fun BoxScope.GestureIndicators(
     handler: PlayerGestureHandler,
     surfaceSize: IntSize,
 ) {
+    // Double tap seek ripple: a soft circle expanding from the tap point and fading out.
+    // Ported from the old seek_ripple_overlay foreground (a RippleDrawable): the glow was
+    // bounded to the tapped half of the surface (a square of half the surface width,
+    // vertically centered) with its hotspot at the tap point, so it expanded from the tap
+    // without ever crossing into the other half, then faded out.
+    handler.ripple?.let { ripple ->
+        if (surfaceSize.width > 0) {
+            val centerX = surfaceSize.width / 2f
+            val centerY = surfaceSize.height / 2f
+            val isFastForward = ripple.x > centerX
+            // Old drawable bounds: the tapped half, as tall as the half is wide
+            val clipLeft = if (isFastForward) centerX else 0f
+            val clipRight = if (isFastForward) surfaceSize.width.toFloat() else centerX
+            val clipTop = centerY - centerX / 2f
+            val clipBottom = centerY + centerX / 2f
+            val center = Offset(ripple.x, ripple.y)
+            // The old ripple grew until the circle covered its bounds, i.e. to the
+            // farthest bounds corner from the hotspot
+            val maxRadiusPx = maxOf(
+                hypot(center.x - clipLeft, center.y - clipTop),
+                hypot(center.x - clipRight, center.y - clipTop),
+                hypot(center.x - clipLeft, center.y - clipBottom),
+                hypot(center.x - clipRight, center.y - clipBottom),
+            )
+            // Rebuild the animation state for every double tap (new token) so the ripple
+            // always expands from scratch instead of resuming the previous one
+            key(ripple.token) {
+                val expand = remember { Animatable(0f) }
+                val fade = remember { Animatable(1f) }
+                LaunchedEffect(Unit) {
+                    // Expand phase: the old drawable stayed pressed for the ripple
+                    // duration before the state reset started the fade-out
+                    expand.animateTo(1f, tween(Constants.DOUBLE_TAP_RIPPLE_DURATION_MS.toInt()))
+                    fade.animateTo(0f, tween(Constants.DOUBLE_TAP_RIPPLE_FADE_OUT_DURATION_MS.toInt()))
+                    handler.hideRipple()
+                }
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .fillMaxSize()
+                        .drawBehind {
+                            clipRect(
+                                left = clipLeft,
+                                top = clipTop,
+                                right = clipRight,
+                                bottom = clipBottom,
+                            ) {
+                                val expandValue = expand.value.coerceIn(0f, 1f)
+                                // The old drawable faded in while the radius grew and
+                                // faded out after the pressed state was released
+                                val alpha = IndicatorRippleColor.alpha * fade.value * expandValue
+                                val radius = maxRadiusPx * expandValue
+                                if (radius > 0f && alpha > 0f) {
+                                    drawCircle(
+                                        brush = Brush.radialGradient(
+                                            0f to IndicatorRippleColor.copy(alpha = alpha),
+                                            0.75f to IndicatorRippleColor.copy(alpha = alpha),
+                                            1f to Color.Transparent,
+                                            center = center,
+                                            radius = radius,
+                                        ),
+                                        radius = radius,
+                                        center = center,
+                                    )
+                                }
+                            }
+                        },
+                )
+            }
+        }
+    }
+
     // Brightness / volume indicator
     handler.indicator?.let { indicator ->
         Box(
@@ -271,48 +345,6 @@ private fun BoxScope.GestureIndicators(
                         .height(4.dp),
                     color = JellyfinPrimary,
                     trackColor = IndicatorTrackColor,
-                )
-            }
-        }
-    }
-
-    // Double tap seek ripple: a soft circle expanding from the tap point and fading out
-    // (mirrors the old RippleDrawable hotspot behavior; the previous flat full-half circle
-    // that only faded in was barely visible)
-    handler.ripple?.let { ripple ->
-        if (surfaceSize.width > 0) {
-            // Rebuild the animation state for every double tap (new token) so the ripple
-            // always expands from scratch instead of resuming the previous one
-            key(ripple.token) {
-                var appeared by remember { mutableStateOf(false) }
-                LaunchedEffect(Unit) { appeared = true }
-                val progress by animateFloatAsState(
-                    targetValue = if (appeared) 1f else 0f,
-                    animationSpec = tween(durationMillis = Constants.DOUBLE_TAP_RIPPLE_DURATION_MS.toInt()),
-                )
-                val maxRadiusPx = surfaceSize.width / 2f
-                val center = Offset(ripple.x, ripple.y)
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .fillMaxSize()
-                        .drawBehind {
-                            val radius = maxRadiusPx * progress
-                            val alpha = IndicatorRippleColor.alpha * (1f - progress)
-                            if (radius > 0f && alpha > 0f) {
-                                drawCircle(
-                                    brush = Brush.radialGradient(
-                                        0f to Color.Transparent,
-                                        0.55f to IndicatorRippleColor.copy(alpha = alpha),
-                                        1f to Color.Transparent,
-                                        center = center,
-                                        radius = radius,
-                                    ),
-                                    radius = radius,
-                                    center = center,
-                                )
-                            }
-                        },
                 )
             }
         }

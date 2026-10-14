@@ -146,12 +146,10 @@ class PlayerGestureHandler(
                 token = ++toggleToken,
             )
         } else {
-            // Show ripple effect and fast-forward/rewind
+            // Show ripple effect and fast-forward/rewind.
+            // The overlay drives the expand/fade-out animation and clears the
+            // state once it finishes (mirrors the old RippleDrawable lifecycle).
             ripple = RippleIndicator(x = position.x, y = position.y, token = ++rippleToken)
-            scope.launch {
-                delay(Constants.DOUBLE_TAP_RIPPLE_DURATION_MS)
-                ripple = null
-            }
             if (position.x > viewCenterX) onFastForward() else onRewind()
         }
 
@@ -171,6 +169,11 @@ class PlayerGestureHandler(
     /** 隐藏双击播放/暂停浮层（退场动画结束后由覆盖层调用）。 */
     fun hideDoubleTapToggle() {
         doubleTapToggle = null
+    }
+
+    /** 隐藏双击 seek 涟漪（退场动画结束后由覆盖层调用）。 */
+    fun hideRipple() {
+        ripple = null
     }
 
     /**
