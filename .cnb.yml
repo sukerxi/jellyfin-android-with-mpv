@@ -223,7 +223,20 @@
     - name: 编译 Libre Debug
       script: |
         set -e
-        ./gradlew --no-daemon --console=plain assembleLibreDebug --stacktrace
+        # 依赖下载加固：公共源（Maven Central / Gradle plugin portal / 各云镜像）
+        # 在共享出口下会返回 429 Too Many Requests。Gradle 会把 429 当瞬时错误重试，
+        # 但默认只试 3 次，退避窗口太短，重试完仍可能撞在同一波限流上
+        # （见构建 cnb-noh-1k4t7eu99：解析 kotlin-dsl 插件依赖时 45s 即失败）。
+        # gradle.properties 已把尝试次数提到 8 次，这里再留一层兜底：
+        # 整体失败后退避 60s 重跑一次，让限流窗口过去。
+        run_build() {
+          ./gradlew --no-daemon --console=plain assembleLibreDebug --stacktrace
+        }
+        if ! run_build; then
+          echo "构建失败：等待 60s 后整体重试一次（应对依赖源限流等瞬时故障）..."
+          sleep 60
+          run_build
+        fi
 
 # ============================== Nightly 发版（对应 release.yml） ==============================
 
