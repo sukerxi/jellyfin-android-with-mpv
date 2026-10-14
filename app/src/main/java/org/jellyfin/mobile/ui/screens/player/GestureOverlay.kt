@@ -1,8 +1,9 @@
 package org.jellyfin.mobile.ui.screens.player
 
+import android.content.Context
+import android.view.View
 import android.view.ViewConfiguration
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -31,17 +32,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.clipRect
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -51,11 +49,11 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.doOnLayout
 import kotlinx.coroutines.delay
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.ui.theme.JellyfinPrimary
 import org.jellyfin.mobile.utils.Constants
-import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 /**
@@ -64,7 +62,6 @@ import kotlin.math.roundToInt
  */
 
 private val IndicatorBackground = Color(0xCC000000)
-private val IndicatorRippleColor = Color.White.copy(alpha = 0.12f)
 private val IndicatorTrackColor = Color.White.copy(alpha = 0.24f)
 private val SeekPositionTextColor = Color(0xFFAAAAAA)
 private val IndicatorWidth = 160.dp
@@ -197,78 +194,6 @@ private fun BoxScope.GestureIndicators(
     handler: PlayerGestureHandler,
     surfaceSize: IntSize,
 ) {
-    // Double tap seek ripple: a soft circle expanding from the tap point and fading out.
-    // Ported from the old seek_ripple_overlay foreground (a RippleDrawable): the glow was
-    // bounded to the tapped half of the surface (a square of half the surface width,
-    // vertically centered) with its hotspot at the tap point, so it expanded from the tap
-    // without ever crossing into the other half, then faded out.
-    handler.ripple?.let { ripple ->
-        if (surfaceSize.width > 0) {
-            val centerX = surfaceSize.width / 2f
-            val centerY = surfaceSize.height / 2f
-            val isFastForward = ripple.x > centerX
-            // Old drawable bounds: the tapped half, as tall as the half is wide
-            val clipLeft = if (isFastForward) centerX else 0f
-            val clipRight = if (isFastForward) surfaceSize.width.toFloat() else centerX
-            val clipTop = centerY - centerX / 2f
-            val clipBottom = centerY + centerX / 2f
-            val center = Offset(ripple.x, ripple.y)
-            // The old ripple grew until the circle covered its bounds, i.e. to the
-            // farthest bounds corner from the hotspot
-            val maxRadiusPx = maxOf(
-                hypot(center.x - clipLeft, center.y - clipTop),
-                hypot(center.x - clipRight, center.y - clipTop),
-                hypot(center.x - clipLeft, center.y - clipBottom),
-                hypot(center.x - clipRight, center.y - clipBottom),
-            )
-            // Rebuild the animation state for every double tap (new token) so the ripple
-            // always expands from scratch instead of resuming the previous one
-            key(ripple.token) {
-                val expand = remember { Animatable(0f) }
-                val fade = remember { Animatable(1f) }
-                LaunchedEffect(Unit) {
-                    // Expand phase: the old drawable stayed pressed for the ripple
-                    // duration before the state reset started the fade-out
-                    expand.animateTo(1f, tween(Constants.DOUBLE_TAP_RIPPLE_DURATION_MS.toInt()))
-                    fade.animateTo(0f, tween(Constants.DOUBLE_TAP_RIPPLE_FADE_OUT_DURATION_MS.toInt()))
-                    handler.hideRipple()
-                }
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .fillMaxSize()
-                        .drawBehind {
-                            clipRect(
-                                left = clipLeft,
-                                top = clipTop,
-                                right = clipRight,
-                                bottom = clipBottom,
-                            ) {
-                                val expandValue = expand.value.coerceIn(0f, 1f)
-                                // The old drawable faded in while the radius grew and
-                                // faded out after the pressed state was released
-                                val alpha = IndicatorRippleColor.alpha * fade.value * expandValue
-                                val radius = maxRadiusPx * expandValue
-                                if (radius > 0f && alpha > 0f) {
-                                    drawCircle(
-                                        brush = Brush.radialGradient(
-                                            0f to IndicatorRippleColor.copy(alpha = alpha),
-                                            0.75f to IndicatorRippleColor.copy(alpha = alpha),
-                                            1f to Color.Transparent,
-                                            center = center,
-                                            radius = radius,
-                                        ),
-                                        radius = radius,
-                                        center = center,
-                                    )
-                                }
-                            }
-                        },
-                )
-            }
-        }
-    }
-
     // Brightness / volume indicator
     handler.indicator?.let { indicator ->
         Box(
@@ -394,5 +319,92 @@ private fun BoxScope.GestureIndicators(
                 )
             }
         }
+    }
+}
+
+/**
+ * 双击 seek 的涟漪反馈。
+ *
+ * 重构前它由 `seek_ripple_overlay` 上的一层 [android.graphics.drawable.RippleDrawable]
+ * （`@drawable/ripple_background`）实现；Compose 自绘的圆无论在颜色、扩散曲线还是裁剪范围上
+ * 都与平台 drawable 存在肉眼可见的差异，多轮调整仍对不上，因此这里不再重画，而是直接渲染
+ * 同一个 drawable，并复刻旧版的 bounds / hotspot / state 时序。
+ *
+ * 视图常驻（idle 时不可见），每次双击只切换一次 state；退场动画由 drawable 自己完成，
+ * 结束时通知 [onFinished] 清掉一次性的触发状态。
+ */
+@Composable
+fun SeekRippleOverlay(
+    ripple: RippleIndicator?,
+    onFinished: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // 显式读取，确保 ripple 变化时 AndroidView 的 update 会被重新执行
+    val currentRipple = ripple
+    AndroidView(
+        factory = { context -> SeekRippleView(context) },
+        update = { view -> currentRipple?.let { view.show(it.x, it.y, it.token) } },
+        modifier = modifier.fillMaxSize(),
+    )
+
+    // 扩散 + 淡出结束后清理状态；只是让下一次双击重新触发，视图本身不卸载。
+    LaunchedEffect(currentRipple?.token) {
+        if (currentRipple == null) return@LaunchedEffect
+        delay(Constants.DOUBLE_TAP_RIPPLE_DURATION_MS + Constants.DOUBLE_TAP_RIPPLE_FADE_OUT_DURATION_MS)
+        onFinished()
+    }
+}
+
+/**
+ * 承载重构前 `seek_ripple_overlay` 的 [android.graphics.drawable.RippleDrawable]。
+ *
+ * [show] 与旧 [org.jellyfin.mobile.player.ui.PlayerGestureHelper] 中的双击处理逐行对应：
+ * bounds 取被点击的那半屏（半屏宽的正方形、垂直居中），hotspot 取点击点，
+ * 压住 [Constants.DOUBLE_TAP_RIPPLE_DURATION_MS] 后松开以触发退场动画。
+ */
+private class SeekRippleView(context: Context) : View(context) {
+    private var lastToken = Long.MIN_VALUE
+
+    private val releaseState = Runnable { foreground?.state = IntArray(0) }
+
+    init {
+        isClickable = false
+        isFocusable = false
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        // 用承载当前主题的 context 解析 drawable，?attr/colorControlHighlight 才能被替换掉
+        foreground = context.getDrawable(R.drawable.ripple_background)
+    }
+
+    fun show(x: Float, y: Float, token: Long) {
+        // 每次双击只触发一次：update 会在每次重组时被调用
+        if (token == lastToken) return
+        lastToken = token
+        // update 可能发生在首次布局之前，此时 width/height 还是 0，算出来的 bounds 会让
+        // 涟漪不可见；等布局完成后再触发（已布局时 doOnLayout 立即执行）。
+        doOnLayout { triggerRipple(x, y) }
+    }
+
+    private fun triggerRipple(x: Float, y: Float) {
+        val drawable = foreground ?: return
+        val viewWidth = width
+        if (viewWidth == 0) return
+        val viewCenterX = viewWidth / 2
+        val viewCenterY = height / 2
+        val isFastForward = x > viewCenterX
+        drawable.setBounds(
+            if (isFastForward) viewCenterX else 0,
+            viewCenterY - viewCenterX / 2,
+            if (isFastForward) viewWidth else viewCenterX,
+            viewCenterY + viewCenterX / 2,
+        )
+        drawable.setHotspot(x, y)
+        drawable.state = intArrayOf(android.R.attr.state_enabled, android.R.attr.state_pressed)
+        removeCallbacks(releaseState)
+        postDelayed(releaseState, Constants.DOUBLE_TAP_RIPPLE_DURATION_MS)
+    }
+
+    override fun onDetachedFromWindow() {
+        removeCallbacks(releaseState)
+        super.onDetachedFromWindow()
     }
 }
