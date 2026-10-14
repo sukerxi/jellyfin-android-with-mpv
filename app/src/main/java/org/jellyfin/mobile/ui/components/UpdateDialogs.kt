@@ -33,7 +33,7 @@ import org.jellyfin.mobile.update.UpdateDialogStateHolder
 import org.jellyfin.mobile.update.UpdateDownloadWorker
 import org.jellyfin.mobile.update.UpdateInfo
 import org.jellyfin.mobile.update.UpdateManager
-import org.koin.compose.koinInject
+import org.jellyfin.mobile.utils.koinInject
 
 /**
  * 挂在根 Compose 宿主上的更新对话框集合：

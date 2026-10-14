@@ -94,7 +94,7 @@ import org.jellyfin.mobile.utils.isAutoRotateOn
 import org.jellyfin.mobile.utils.toast
 import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.MediaSegmentDto
-import org.koin.compose.koinInject
+import org.jellyfin.mobile.utils.koinInject
 import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.max

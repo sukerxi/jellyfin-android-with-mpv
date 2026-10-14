@@ -18,7 +18,7 @@ import org.jellyfin.mobile.ui.dialog.WebViewDialogState
 import org.jellyfin.mobile.update.UpdateDialogStateHolder
 import org.jellyfin.mobile.utils.AndroidVersion
 import org.jellyfin.mobile.utils.BluetoothPermissionHelper
-import org.koin.compose.koinInject
+import org.jellyfin.mobile.utils.koinInject
 
 /**
  * MainActivity setContent 根树中的全局对话框宿主：

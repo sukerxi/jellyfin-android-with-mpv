@@ -46,16 +46,8 @@ allprojects {
         publicMirror("https://repo.huaweicloud.com/repository/maven/")
         // Google 制品（AGP / androidx）镜像源；官方 google() 亦稳定，两者互为冗余。
         publicMirror("https://maven.aliyun.com/repository/google/")
-        // org.jetbrains.skiko 的 Gradle Module Metadata 会把 Android 消费者重定向到
-        // skiko-android，但该制品未发布到 Maven Central（也未同步到各镜像）。一旦回落到
-        // 此仓库读到 .module，就会沿变体重定向去取不存在的 skiko-android 而失败
-        // （见构建 cnb-gn8-1k4sfjh82：解析 koin-compose -> Compose Multiplatform ->
-        // skiko:0.150.1 时 429/404）。上面的镜像仓库均关闭 GMM、只读 POM，skiko 按
-        // 普通 jar 解析、无变体重定向（此前所有成功构建即此路径），故这里将其排除，
-        避免 GMM 路径被启用。
-        mavenCentral {
-            content { excludeGroup("org.jetbrains.skiko") }
-        }
+        // 官方源兜底：镜像未命中时回落。
+        mavenCentral()
         google()
         mavenLocal {
             content {

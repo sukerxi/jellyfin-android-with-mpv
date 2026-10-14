@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.dp
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.player.mpv.MpvConfigManager
-import org.koin.compose.koinInject
+import org.jellyfin.mobile.utils.koinInject
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

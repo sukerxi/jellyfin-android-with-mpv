@@ -27,8 +27,8 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.app.StorageManager
 import org.jellyfin.mobile.ui.theme.JellyfinTheme
+import org.jellyfin.mobile.utils.koinInject
 import org.koin.android.ext.android.get
-import org.koin.compose.koinInject
 import kotlin.coroutines.resume
 
 @Composable

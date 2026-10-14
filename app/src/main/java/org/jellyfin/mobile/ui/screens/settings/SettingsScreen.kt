@@ -58,7 +58,7 @@ import org.jellyfin.mobile.update.UpdateChecker
 import org.jellyfin.mobile.update.UpdateDialogStateHolder
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.isPackageInstalled
-import org.koin.compose.koinInject
+import org.jellyfin.mobile.utils.koinInject
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

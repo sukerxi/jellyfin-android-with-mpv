@@ -22,7 +22,7 @@ import org.jellyfin.mobile.R
 import org.jellyfin.mobile.events.ActivityEvent
 import org.jellyfin.mobile.events.ActivityEventHandler
 import org.jellyfin.mobile.ui.utils.CenterRow
-import org.koin.compose.koinInject
+import org.jellyfin.mobile.utils.koinInject
 
 @Composable
 fun ConnectScreen(

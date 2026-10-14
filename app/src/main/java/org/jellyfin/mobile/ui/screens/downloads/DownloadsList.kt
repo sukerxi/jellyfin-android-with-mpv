@@ -39,7 +39,7 @@ import org.jellyfin.mobile.data.entity.DownloadEntity
 import org.jellyfin.mobile.data.entity.DownloadFiles
 import org.jellyfin.mobile.downloads.DownloadFileType
 import org.jellyfin.mobile.downloads.DownloadStatus
-import org.koin.compose.koinInject
+import org.jellyfin.mobile.utils.koinInject
 
 @Composable
 fun DownloadsList(

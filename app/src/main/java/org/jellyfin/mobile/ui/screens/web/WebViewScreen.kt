@@ -63,11 +63,11 @@ import org.jellyfin.mobile.utils.applyDefault
 import org.jellyfin.mobile.utils.dip
 import org.jellyfin.mobile.utils.fadeIn
 import org.jellyfin.mobile.utils.isOutdated
+import org.jellyfin.mobile.utils.koinInject
 import org.jellyfin.mobile.webapp.JellyfinWebChromeClient
 import org.jellyfin.mobile.webapp.JellyfinWebViewClient
 import org.jellyfin.mobile.webapp.WebappFunctionChannel
 import org.jellyfin.mobile.webapp.WebViewRetainer
-import org.koin.compose.koinInject
 import android.os.PowerManager
 import androidx.core.content.getSystemService
 import timber.log.Timber

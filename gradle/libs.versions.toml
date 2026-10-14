@@ -17,7 +17,6 @@ serialization-json = "1.11.0"
 
 # Core
 koin = "4.2.2"
-koin-compose = "4.2.2"
 androidx-core = "1.19.1"
 androidx-core-splashscreen = "1.2.0"
 androidx-activity = "1.13.0"
@@ -87,8 +86,6 @@ kotlin-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-s
 
 # Core
 koin = { group = "io.insert-koin", name = "koin-android", version.ref = "koin" }
-koin-compose = { group = "io.insert-koin", name = "koin-androidx-compose", version.ref = "koin-compose" }
-koin-compose-navigation = { group = "io.insert-koin", name = "koin-androidx-compose-navigation", version.ref = "koin-compose" }
 android-gradle = { module = "com.android.tools.build:gradle", version.ref = "android-plugin" }
 androidx-core = { group = "androidx.core", name = "core", version.ref = "androidx-core" }
 androidx-core-splashscreen = { group = "androidx.core", name = "core-splashscreen", version.ref = "androidx-core-splashscreen" }
@@ -173,7 +170,7 @@ detekt-formatting = { group = "io.gitlab.arturbosch.detekt", name = "detekt-form
 
 [bundles]
 coroutines = ["coroutines-core", "coroutines-android", "coroutines-guava"]
-koin = ["koin", "koin-compose"]
+koin = ["koin"]
 coil = ["coil", "coil-network", "coil-compose"]
 androidx-lifecycle = [
     "androidx-lifecycle-viewmodel",

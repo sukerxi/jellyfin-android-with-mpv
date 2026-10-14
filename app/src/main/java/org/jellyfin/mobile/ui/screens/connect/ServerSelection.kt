@@ -55,7 +55,7 @@ import org.jellyfin.mobile.setup.ConnectionHelper
 import org.jellyfin.mobile.ui.state.CheckUrlState
 import org.jellyfin.mobile.ui.state.ServerSelectionMode
 import org.jellyfin.mobile.ui.utils.CenterRow
-import org.koin.compose.koinInject
+import org.jellyfin.mobile.utils.koinInject
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Suppress("LongMethod")

@@ -28,8 +28,8 @@ import org.jellyfin.mobile.ui.screens.player.PlayerScreen
 import org.jellyfin.mobile.ui.screens.settings.MpvConfigEditorScreen
 import org.jellyfin.mobile.ui.screens.settings.SettingsScreen
 import org.jellyfin.mobile.ui.screens.web.WebViewScreen
+import org.jellyfin.mobile.utils.koinInject
 import org.jellyfin.mobile.webapp.WebViewRetainer
-import org.koin.compose.koinInject
 
 object Routes {
     const val CONNECT = "connect"
