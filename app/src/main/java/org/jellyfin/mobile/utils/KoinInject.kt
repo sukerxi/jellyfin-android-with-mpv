@@ -23,4 +23,4 @@ object KoinInjector : KoinComponent
  * 原 koinInject() 一致：同一次组合期间记住同一实例。
  */
 @Composable
-inline fun <reified T> koinInject(): T = remember { KoinInjector.get<T>() }
+inline fun <reified T : Any> koinInject(): T = remember { KoinInjector.get<T>() }
