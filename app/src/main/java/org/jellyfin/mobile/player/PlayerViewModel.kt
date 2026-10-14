@@ -176,9 +176,15 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     private var fallbackRetryJob: Job? = null
 
     /**
-     * Returns the current ExoPlayer instance or null
+     * The current player, or null when no player session is alive. Can be an [ExoPlayer] or
+     * an mpv based player, depending on the selected engine.
      */
     val playerOrNull: Player? get() = _player.value
+
+    /**
+     * The current player if it is of type [T], or null otherwise.
+     */
+    inline fun <reified T : Player> playerOrNull(): T? = playerOrNull as? T
 
     private val playerEventChannel: Channel<PlayerEvent> by inject(named(PLAYER_EVENT_CHANNEL))
 
@@ -220,7 +226,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         get() = appPreferences.exoPlayerAllowBackgroundAudio || remotePlaybackActive
 
     init {
-        ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
+        // The process lifecycle observer is registered per playback session in [setupPlayer]
+        // and removed in [releasePlayer]: the ViewModel outlives individual player sessions
+        // (it lives in the activity's ViewModelStore), and a stale observer would tear down
+        // the playback of a session it does not belong to.
 
         // Load display preferences
         viewModelScope.launch {
@@ -289,12 +298,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     }
 
     /**
-     * Setup a new [ExoPlayer] for video playback, register callbacks and set attributes
+     * Builds a player of the type selected in the preferences, wired to the shared track
+     * selector / analytics collector and configured for video playback.
+     *
+     * Generic so the return type follows the builder (an [ExoPlayer] for the ExoPlayer based
+     * engine, a [MpvPlayer] otherwise) instead of forcing a cast at every use site.
      */
-    fun setupPlayer() {
-        // A player is being (re)created: drop the "user closed the player" latch so a later
-        // setup (decoder change, error fallback, next item) is not muted by [pauseInBackground].
-        closedByUser = false
+    @Suppress("UNCHECKED_CAST")
+    private inline fun <reified T : Player> buildPlayer(): T {
         @Suppress("MagicNumber")
         val loadControl = when (appPreferences.exoPlayerNetworkBuffer) {
             Constants.NETWORK_BUFFER_LARGE -> DefaultLoadControl.Builder()
@@ -341,7 +352,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
                 filteredDecoderList
             }
         }.let { if (appPreferences.exoPlayerDirectPlayAss) AssRenderersFactory(get(), it) else it }
-        val player = when (appPreferences.videoPlayerType) {
+
+        return when (appPreferences.videoPlayerType) {
             VideoPlayerType.EXO_PLAYER -> {
                 ExoPlayer.Builder(getApplication(), renderersFactory, get()).apply {
                     setUsePlatformDiagnostics(false)
@@ -353,30 +365,104 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
                 }.build().apply {
                     applyDefaultAudioAttributes(C.AUDIO_CONTENT_TYPE_MOVIE)
                     if (appPreferences.exoPlayerDirectPlayAss) get<AssHandler>().init(this)
-                }
+                } as T
             }
             VideoPlayerType.MPV_PLAYER -> {
-                MpvPlayer(application, Looper.getMainLooper()).apply {
+                MpvPlayer(getApplication(), Looper.getMainLooper()).apply {
                     setDecoderProcessor(
                         { _decoderType.value ?: DecoderType.HARDWARE },
                         { _detectedDecoderType.postValue(it) },
                     )
                     setAnalyticsCollector(analyticsCollector)
                     applyDefaultAudioAttributes(C.AUDIO_CONTENT_TYPE_MOVIE)
-                }
+                } as T
             }
             else -> throw IllegalArgumentException("Invalid video player type")
         }
+    }
 
-        // Publish the new player before its previous sibling is torn down, otherwise
-        // observers would briefly see a player that is about to be released.
-        val previousPlayer = playerOrNull
+    /**
+     * The ExoPlayer based engine, or null when the mpv engine is selected (or no player
+     * is set up). All ExoPlayer specific interactions go through this accessor so the
+     * generic [Player] API is never downcast at the use site.
+     */
+    val exoPlayerOrNull: ExoPlayer? get() = playerOrNull()
+
+    /**
+     * The mpv based engine, or null when the ExoPlayer engine is selected (or no player
+     * is set up).
+     */
+    val mpvPlayerOrNull: MpvPlayer? get() = playerOrNull()
+
+    /**
+     * Sets up the player for a playback session: creates the engine, registers the listener
+     * and starts observing the process lifecycle.
+     *
+     * Idempotent - the screen calls this before every session, while a player may still exist
+     * from the previous one (closing the screen releases it, but a failed setup or an
+     * in-flight fallback retry does not necessarily). Rebuilding unconditionally would hand
+     * the UI a fresh player mid-session.
+     */
+    fun setupPlayer() = rebuildPlayer(fallbackPreferExtensionRenderers)
+
+    /**
+     * (Re)creates the player and optionally restarts the current media source on it.
+     *
+     * The single entry point for every player restart (initial setup, decoder change,
+     * renderer fallback): one place that owns teardown, listener registration, lifecycle
+     * observation and the restart, instead of each call site reimplementing it.
+     */
+    private fun rebuildPlayer(
+        preferExtensionRenderers: Boolean,
+        restartPlayback: Boolean = false,
+    ) {
+        if (playerOrNull != null) return
+
+        // A player is being (re)created: drop the "user closed the player" latch so the new
+        // player is not muted by [pauseInBackground].
+        closedByUser = false
+        fallbackPreferExtensionRenderers = preferExtensionRenderers
+
+        // The previous player (if any) is torn down by the caller; its analytics collector is
+        // always released here, even when the player itself is still alive.
+        analyticsCollector.release()
+        analyticsCollector = buildAnalyticsCollector()
+
+        val player = buildPlayer<Player>()
         player.addListener(this@PlayerViewModel)
         _player.value = player
-        previousPlayer?.run {
+
+        // Observe the process lifecycle only while a player session is alive. Registered here
+        // (not in `init`) because the ViewModel outlives player sessions: a stale observer
+        // would pause/stop a session it does not belong to.
+        ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
+
+        if (restartPlayback) queueManager.tryRestartPlayback()
+    }
+
+    /**
+     * Tears the current player down and builds a new one, then restarts the current media
+     * source on it. Used for decoder switches and error fallbacks, which have to preserve
+     * the playback position of the item being played.
+     */
+    private fun rebuildPlayerAndRestart() {
+        val playedTime = (playerOrNull?.currentPosition ?: 0L).milliseconds
+        releasePlayerForRebuild()
+        queueManager.getCurrentMediaSourceOrNull()?.startTime = playedTime
+        rebuildPlayer(fallbackPreferExtensionRenderers, restartPlayback = true)
+    }
+
+    /**
+     * Releases the current player *without* ending the playback session: the ViewModel keeps
+     * its state (and the caller rebuilds the player) so playback can be restarted where it
+     * was interrupted.
+     */
+    private fun releasePlayerForRebuild() {
+        playerOrNull?.run {
             removeListener(this@PlayerViewModel)
             release()
         }
+        _player.value = null
     }
 
     /**
@@ -389,6 +475,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     private fun releasePlayer() {
         // Reset the audio focus handling latch: the next player is a fresh start.
         closedByUser = false
+        ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
         val releasedPlayer = playerOrNull
         _player.value = null
         releasedPlayer?.run {
@@ -407,6 +494,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
 
     fun load(jellyfinMediaSource: JellyfinMediaSource, exoMediaSource: MediaSource, playWhenReady: Boolean) {
         val startTime = jellyfinMediaSource.startTime
+        // Defensive: a caller that reaches playback without a player would otherwise get an
+        // a silently empty screen (the old code just returned).
+        if (playerOrNull == null) setupPlayer()
         val player = playerOrNull ?: return
         if (player is ExoPlayer){
             player.setMediaSource(exoMediaSource)
@@ -433,6 +523,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     }
 
     fun loadDirect( playWhenReady: Boolean) {
+        if (playerOrNull == null) setupPlayer()
         val player = playerOrNull ?: return
         player.setMediaItem(MediaItem.fromUri("http://baidu.com"))
         player.prepare()
@@ -510,18 +601,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
      * recreate the player with the selected decoder type
      */
     fun updateDecoderType(type: DecoderType) {
-        _decoderType.value=type
-        analyticsCollector.release()
-        val playedTime = (playerOrNull?.currentPosition ?: 0L).milliseconds
-        // Stop and release the player without ending playback
-        playerOrNull?.run {
-            removeListener(this@PlayerViewModel)
-            release()
-        }
-        analyticsCollector = buildAnalyticsCollector()
-        setupPlayer()
-        queueManager.getCurrentMediaSourceOrNull()?.startTime = playedTime
-        queueManager.tryRestartPlayback()
+        _decoderType.value = type
+        rebuildPlayerAndRestart()
     }
 
     private suspend fun Player.reportPlaybackStart(mediaSource: RemoteJellyfinMediaSource) {
@@ -921,45 +1002,51 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
      * service - would keep playing after the screen is closed.
      */
     fun onPlayerClosed() {
-        val keepPlaying = notificationHelper.allowBackgroundAudio || remotePlaybackActive
-        if (!keepPlaying) {
-            stop()
-        }
+        if (!keepPlaybackOnExit()) endPlayback()
     }
 
     /**
-     * Called when the app goes to the background. Drops the native playback unless the user
+     * Called when the app goes to the background. Pauses the native playback unless the user
      * enabled background playback or the web app keeps playing on a remote device.
      */
     fun pauseInBackground() {
-        if (!backgroundPlaybackAllowed) {
-            // Latch the user-initiated close so the audio listener does not try to
-            // re-acquire audio focus and restart playback on the next foreground transition.
-            closedByUser = true
-            pause()
-        }
+        if (backgroundPlaybackAllowed) return
+        // Latch the user-initiated pause so the audio listener does not try to re-acquire
+        // audio focus and restart playback on the next foreground transition.
+        closedByUser = true
+        pause()
     }
 
+    /**
+     * Keeps the native playback alive when the player screen (or the app) is left: either the
+     * user enabled background playback, or the web app is casting to a remote device, which
+     * keeps its own session and must not be interrupted.
+     */
+    fun keepPlaybackOnExit(): Boolean = backgroundPlaybackAllowed
+
+    /**
+     * Stops playback, whichever engine is set up.
+     *
+     * mpv keeps its audio track alive when it is merely paused (media3's audio focus handling
+     * only exists on the ExoPlayer side), so both engines are stopped at the player API level
+     * rather than relying on pause() having an effect on the audio output.
+     */
     fun stop() {
-        val player = playerOrNull
-        if (player is MpvPlayer) {
-            // mpv pauses the video but keeps the audio track alive when the app leaves the
-            // foreground (media3's audio focus handling only exists on the ExoPlayer side),
-            // so the player is torn down instead: "back" has to end playback for good.
-            stopPlaybackAndRelease()
-        } else {
-            pause()
-            reportPlaybackStop()
-            releasePlayer()
-        }
+        playerOrNull?.stop()
     }
 
-    private fun stopPlaybackAndRelease() {
-        val player = playerOrNull ?: return
-        player.pause()
-        player.stop()
+    /**
+     * Ends the current playback session for good: stops the engine, reports the stop to the
+     * server and tears the player down, so the next session starts from a clean state.
+     */
+    fun endPlayback() {
+        if (playerOrNull == null) return
+        stop()
         reportPlaybackStop()
         releasePlayer()
+        // Drop the session position/time so the next session starts at the item's own start
+        // position instead of resuming where this one left off.
+        queueManager.resetCurrentMediaSource()
     }
 
     private fun setVolume(percent: Int) {
@@ -1024,7 +1111,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
                 Player.STATE_ENDED -> {
                     reportPlaybackStop()
                     if (!autoPlayNextEpisodeEnabled || !queueManager.next()) {
+                        // Nothing else to play: end the session so the screen closes and the
+                        // next one starts from a clean state.
                         releasePlayer()
+                        queueManager.resetCurrentMediaSource()
                     }
                 }
             }
@@ -1038,25 +1128,21 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     }
 
     override fun onIsPlayingChanged(isPlaying: Boolean) {
-        // Playback restarted after the player screen was left (e.g. the player regained audio
-        // focus when the app came back to the foreground) - this is not what "back" should do.
-        // The close path stops the player outright, so this only catches the mpv based
-        // resurrection ExoPlayer prevents via setHandleAudioBecomingNoisy(true).
-        if (isPlaying && closedByUser) {
-            pause()
-        }
+        // A player that restarted by itself after the app was sent to the background (the
+        // audio focus coming back is what mpv reacts to; ExoPlayer has
+        // setHandleAudioBecomingNoisy(true)) must not keep playing behind the UI. Leaving the
+        // player screen tears the player down outright (see [endPlayback]), so this only
+        // catches a resurrection while the session is still alive.
+        if (isPlaying && closedByUser) pause()
     }
 
     override fun onPlayerError(error: PlaybackException) {
         if (error.cause is MediaCodecDecoderException && !fallbackPreferExtensionRenderers) {
             Timber.e(error.cause, "Decoder failed, attempting to restart playback with decoder extensions preferred")
-            playerOrNull?.run {
-                removeListener(this@PlayerViewModel)
-                release()
-            }
-            fallbackPreferExtensionRenderers = true
-            setupPlayer()
-            queueManager.tryRestartPlayback()
+            // Release the old player *before* rebuilding: [rebuildPlayer] reuses an existing
+            // player, which would otherwise leave the failing one in place.
+            releasePlayerForRebuild()
+            rebuildPlayer(preferExtensionRenderers = true, restartPlayback = true)
         } else {
             Timber.w(error, "Playback error, attempting fallback")
             val startPosition = (playerOrNull?.currentPosition ?: 0L).milliseconds
@@ -1077,7 +1163,6 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
 
     override fun onCleared() {
         reportPlaybackStop()
-        ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
         releasePlayer()
         _mediaSession?.release()
         _mediaSession = null

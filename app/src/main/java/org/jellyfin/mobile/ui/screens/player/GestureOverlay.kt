@@ -1,5 +1,9 @@
 package org.jellyfin.mobile.ui.screens.player
 
+import android.content.Context
+import android.content.res.ColorStateList
+import android.graphics.drawable.RippleDrawable
+import android.view.View
 import android.view.ViewConfiguration
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -11,9 +15,6 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
-import androidx.compose.foundation.indication
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -30,7 +31,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
-import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -39,18 +39,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import org.jellyfin.mobile.R
@@ -324,12 +323,16 @@ private fun BoxScope.GestureIndicators(
 }
 
 /**
- * 双击 seek 的涟漪反馈：被点击的那半屏上的一圈 Material 涟漪。
+ * 双击 seek 的涟漪反馈。
  *
- * 旧实现给 `seek_ripple_overlay` 的 RippleDrawable 设 bounds（被点击的半屏，半屏宽的正方形、
- * 垂直居中）和 hotspot（点击点），压住 [Constants.DOUBLE_TAP_RIPPLE_DURATION_MS] 后松开，
- * 退场动画由 drawable 自己完成。这里用 Material 的 [ripple] 表达同一件事：一块覆盖该半屏的
- * 不可见方块，由 indication 在按压点画涟漪。
+ * 观感必须和重构前一致：那里是 `seek_ripple_overlay` 上的一层平台 RippleDrawable
+ * （`?attr/colorControlHighlight`），给它设 bounds（被点击的半屏，半屏宽的正方形、垂直居中）
+ * 和 hotspot（点击点），压住 [Constants.DOUBLE_TAP_RIPPLE_DURATION_MS] 后松开，退场动画由
+ * drawable 自己跑。
+ *
+ * 这里直接渲染**同一个** `?attr/colorControlHighlight`（Compose 的 `ripple()` 取
+ * `LocalContentColor`，解析不到主题属性；平台属性则由当前主题解析），几何与时序照搬旧实现，
+ * 这样"像不像"就不再是一个需要逐参数去猜的问题。
  */
 @Composable
 fun SeekRippleOverlay(
@@ -339,45 +342,64 @@ fun SeekRippleOverlay(
 ) {
     if (trigger == null) return
     var surfaceSize by remember { mutableStateOf(IntSize.Zero) }
-    val density = LocalDensity.current
-
-    // 旧代码压住 drawable 一段时间再松开触发退场动画，这里保持同样的按压时长
-    LaunchedEffect(trigger.token) {
-        delay(Constants.DOUBLE_TAP_RIPPLE_DURATION_MS)
-        onFinished()
-    }
 
     Box(modifier = modifier.onSizeChanged { surfaceSize = it }) {
-        val halfWidthPx = surfaceSize.width / 2f
-        if (halfWidthPx == 0f) return@Box
-        val isFastForward = trigger.x > halfWidthPx
+        val width = surfaceSize.width
+        val height = surfaceSize.height
+        if (width == 0 || height == 0) return@Box
 
-        // hotspot 是点击点在该半屏内的位置（旧代码传给 drawable 的是视图内绝对坐标，
-        // 由 RippleDrawable 换算到 bounds 内，这里手工换算）
-        val boundsLeftPx = if (isFastForward) halfWidthPx else 0f
-        val boundsTopPx = surfaceSize.height / 2f - halfWidthPx / 2f
-        val hotspot = Offset(trigger.x - boundsLeftPx, trigger.y - boundsTopPx)
+        // Bounds of the tapped half: half of the view wide, full height, centred vertically
+        // (the old code used a viewWidth/2 square centred on the view's vertical centre).
+        val viewCenterX = width / 2
+        val viewCenterY = height / 2
+        val isFastForward = trigger.x.toInt() > viewCenterX
+        val left = if (isFastForward) viewCenterX else 0
+        val right = if (isFastForward) width else viewCenterX
+        val top = viewCenterY - viewCenterX / 2
+        val bottom = viewCenterY + viewCenterX / 2
 
-        val interactionSource = remember { MutableInteractionSource() }
-        LaunchedEffect(trigger.token, interactionSource) {
-            val press = PressInteraction.Press(hotspot)
-            interactionSource.emit(press)
-            delay(Constants.DOUBLE_TAP_RIPPLE_DURATION_MS)
-            interactionSource.emit(PressInteraction.Release(press))
-        }
-
-        // 被点击的半屏：半屏宽的正方形，垂直居中
-        Box(
-            modifier = Modifier
-                .offset {
-                    IntOffset(
-                        x = if (isFastForward) halfWidthPx.roundToInt() else 0,
-                        y = (surfaceSize.height / 2f - halfWidthPx / 2f).roundToInt(),
-                    )
-                }
-                .size(with(density) { halfWidthPx.toDp() })
-                .clipToBounds()
-                .indication(interactionSource = interactionSource, indication = ripple()),
+        AndroidView(
+            factory = { context ->
+                // A plain view whose foreground is the platform ripple: rendered by the
+                // framework (RenderThread) and free of any Compose gesture handling.
+                View(context).apply { foreground = colorControlHighlightRipple(context) }
+            },
+            update = { view ->
+                view.playRipple(left, top, right, bottom, trigger.x, trigger.y)
+            },
+            modifier = Modifier.fillMaxSize(),
         )
+
+        // The overlay is a one-shot visual; clear the trigger once it has faded out.
+        LaunchedEffect(trigger.token) {
+            delay(Constants.DOUBLE_TAP_RIPPLE_DURATION_MS + RIPPLE_FADE_OUT_DURATION_MS)
+            onFinished()
+        }
     }
+}
+
+/** 涟漪退场动画时长（平台 RippleDrawable 的默认 `rippleExitDuration`）。 */
+private const val RIPPLE_FADE_OUT_DURATION_MS = 200L
+
+/**
+ * 平台主题 `?attr/colorControlHighlight` 对应的涟漪 drawable，行为与重构前
+ * `fragment_player.xml` 里 `seek_ripple_overlay` 的 `android:foreground` 一致。
+ */
+private fun colorControlHighlightRipple(context: Context): RippleDrawable {
+    val attributes = context.obtainStyledAttributes(intArrayOf(android.R.attr.colorControlHighlight))
+    val color = attributes.getColor(0, Color.White.toArgb())
+    attributes.recycle()
+    return RippleDrawable(ColorStateList.valueOf(color), null, null)
+}
+
+/**
+ * 按旧实现的几何与时序播放一次涟漪：设 bounds、hotspot，压住
+ * [Constants.DOUBLE_TAP_RIPPLE_DURATION_MS] 后松开，退场动画由 drawable 自己完成。
+ */
+private fun View.playRipple(left: Int, top: Int, right: Int, bottom: Int, x: Float, y: Float) {
+    val ripple = foreground as? RippleDrawable ?: return
+    ripple.setBounds(left, top, right, bottom)
+    ripple.setHotspot(x, y)
+    ripple.state = intArrayOf(android.R.attr.state_enabled, android.R.attr.state_pressed)
+    postDelayed({ ripple.state = IntArray(0) }, Constants.DOUBLE_TAP_RIPPLE_DURATION_MS)
 }

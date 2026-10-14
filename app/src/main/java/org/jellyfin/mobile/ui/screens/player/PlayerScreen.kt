@@ -185,10 +185,15 @@ fun PlayerScreen(
     // not dismiss the (newly started) player again right after it was closed.
     val closingSoon = remember { mutableStateOf(false) }
 
-    // Set once a player instance has been attached during this composition. The player starts
+    // Set once a player instance has been attached during this session. The player starts
     // out null while the playback request is resolved, so "player == null" only means
     // "playback ended" after a player has existed to end.
     var playbackStarted by remember { mutableStateOf(false) }
+
+    // Set (once) when this session is over, either because the user left the screen or
+    // because playback ended on its own. Guards every other effect from running again and
+    // keeps the closing paths idempotent.
+    val playbackEnded = remember { mutableStateOf(false) }
 
     /**
      * Leave the player screen: the web app takes playback over again and the native player
@@ -197,9 +202,18 @@ fun PlayerScreen(
      * goes through here, otherwise the foreground service keeps playing behind the UI.
      */
     fun closePlayer() {
-        if (closingSoon.value) return
+        if (closingSoon.value || playbackEnded.value) return
         closingSoon.value = true
         viewModel.onPlayerClosed()
+
+        // The player has to be gone by the time the session ends: [PlayerViewModel.onPlayerClosed]
+        // only stops it (and only when the user did not opt into background playback), leaving a
+        // live player behind for the next session. Binding the next media source to a player
+        // that is still attached to the previous one is what made the second "play" of a session
+        // run into the state it was left in.
+        if (!viewModel.keepPlaybackOnExit()) {
+            playbackEnded.value = true
+        }
         onClose()
     }
 
@@ -288,12 +302,10 @@ fun PlayerScreen(
     // region effects
 
     // Handle playback options and start playback (once per composition).
-    // The ViewModel lives in the activity's store, so it - and its player - outlive this
-    // screen: closing the player releases the player but keeps the ViewModel, and nothing
-    // would recreate it for the next session (the old per-fragment ViewModel was built
-    // anew for every playback, which ran setupPlayer() from its lifecycle observer).
-    // Without this the second "play" of a session ends up with a released player and
-    // PlayerViewModel.load() bails out on the null player, leaving the screen black.
+    // The ViewModel lives in the activity's store, so it outlives this screen; the player
+    // does not (see [closePlayer]). Every session therefore has to build its own player -
+    // the old per-fragment ViewModel did that from its lifecycle observer, and dropping it
+    // is what left the second playback of a session without a player.
     LaunchedEffect(Unit) {
         val request = playbackLauncher.consume()
         if (request == null) {
@@ -312,6 +324,7 @@ fun PlayerScreen(
                 is PlayerException.InvalidPlayOptions -> R.string.player_error_invalid_play_options
                 is PlayerException.NetworkFailure -> R.string.player_error_network_failure
                 is PlayerException.UnsupportedContent -> R.string.player_error_unsupported_content
+                is PlayerException.PlayerNotAvailable -> R.string.player_error_unspecific_exception
             }
             context.toast(messageRes)
             closePlayer()
@@ -326,9 +339,10 @@ fun PlayerScreen(
     LaunchedEffect(player) {
         if (player != null) {
             playbackStarted = true
-        } else if (playbackStarted && !pipMode && !closingSoon.value) {
-            // Playback is already over here, so calling onPlayerClosed() again would only
-            // risk stopping playback of an item that was started in the meantime; dismiss.
+        } else if (playbackStarted && !pipMode && !closingSoon.value && !playbackEnded.value) {
+            // Playback ended on its own; the session is over, and PlayerViewModel has already
+            // released the player. Dismiss without running the close path again.
+            playbackEnded.value = true
             onClose()
         }
     }
@@ -415,7 +429,7 @@ fun PlayerScreen(
                         playerFullscreenHelper.enableFullscreen()
                     }
                     // If playback ended during picture in picture we'll return to the main app when PiP is closed
-                    if (viewModel.playerOrNull == null) {
+                    if (viewModel.playerOrNull == null && playbackStarted) {
                         closePlayer()
                     }
                 }
@@ -454,9 +468,14 @@ fun PlayerScreen(
     // Reset window state when leaving the player (equivalent of the old onDestroy), and make
     // sure playback is stopped even when the screen is dismissed without going through
     // closePlayer() (e.g. a server switch pops the web route while the overlay is open).
+    // The player itself is torn down here too: a player that outlives its session would be
+    // reused by the next one, still bound to the media source it was left with.
     DisposableEffect(Unit) {
         onDispose {
-            if (!closingSoon.value) viewModel.onPlayerClosed()
+            if (!playbackEnded.value) {
+                playbackEnded.value = true
+                viewModel.endPlayback()
+            }
             activity.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             playerFullscreenHelper.disableFullscreen()
             window.brightness = BRIGHTNESS_OVERRIDE_NONE

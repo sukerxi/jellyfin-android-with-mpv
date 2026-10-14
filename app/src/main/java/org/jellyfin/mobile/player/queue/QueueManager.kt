@@ -90,6 +90,10 @@ class QueueManager(
         // full season so "previous" and the episode picker can also reach earlier episodes.
         if (playOptions.playFromDownloads != true) expandQueueToSeason(itemId)
 
+        // Reaching playback without a player must not silently no-op: the caller shows the
+        // error and leaves instead of leaving the user on a black screen.
+        if (viewModel.playerOrNull == null) return PlayerException.PlayerNotAvailable()
+
         val maxStreamingBitrate = preferences?.let {
             withContext(Dispatchers.IO) {
                 runCatching {
@@ -214,6 +218,18 @@ class QueueManager(
                 viewModel.load(this, it, playWhenReady = true)
             }
         }
+    }
+
+    /**
+     * Drops the media source of the finished playback session.
+     *
+     * The position is carried by the source object itself, so keeping it around would make
+     * the next session resume where the last one ended; observers are also reset so the UI
+     * for a new session starts blank instead of showing the previous item.
+     */
+    fun resetCurrentMediaSource() {
+        _currentMediaSource.value = null
+        resetPlaybackFallback()
     }
 
     private fun resetPlaybackFallback() {
