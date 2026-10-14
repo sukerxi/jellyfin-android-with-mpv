@@ -26,19 +26,44 @@ fun RepositoryHandler.publicMirror(url: String) = maven {
     metadataSources { mavenPom(); artifact() }
 }
 
+/**
+ * 镜像仓库，但保留 Gradle Module Metadata（GMM）。
+ *
+ * KMP 库（jellyfin-sdk / coil3 / okhttp5 / kotlin-logging 等）的根制品只有一个几 KB 的
+ * 空壳：真实 Android 实现在 `-android` 变体里，且依赖列表在 .module 中才完整（POM 只有
+ * common 依赖）。根制品缺失或变体属性判定为「无匹配变体」时会直接失败，不会回落到后面
+ * 的仓库。这些镜像（阿里云 public / 腾讯云 maven-public）的 .module 与 `-android` 制品
+ * 都完整，所以按 group 限定交给它们，其余依赖继续走关 GMM 的 publicMirror。
+ */
+fun RepositoryHandler.mirrorWithGradleMetadata(url: String, vararg groups: String) = maven {
+    setUrl(url)
+    content { groups.forEach { includeGroup(it) } }
+    metadataSources { mavenPom(); gradleMetadata(); artifact() }
+}
+
 allprojects {
     repositories {
         // KMP 布局的库（coil3 3.6+ 根制品是几 KB 的空壳 jar，真实 Android 实现在
         // coil-compose-android 等变体中）必须读 Gradle Module Metadata 才能完成
         // 变体重定向。为避免与下面「全局关 GMM」的镜像兜底策略冲突，这里为 coil3
         // 单独声明限定 group 的仓库并开启 GMM（阿里云 public 镜像制品完整）。
-        maven("https://maven.aliyun.com/repository/public/") {
-            content { includeGroup("io.coil-kt.coil3") }
-            metadataSources { mavenPom(); gradleMetadata(); artifact() }
-        }
+        mirrorWithGradleMetadata("https://maven.aliyun.com/repository/public/", "io.coil-kt.coil3")
         mavenCentral {
             content { includeGroup("io.coil-kt.coil3") }
         }
+        // jellyfin-sdk 是 KMP（根制品空壳 + `-android` 变体）：GMM 被关掉的镜像里，
+        // 它会在本地开发（直连 Maven Central）能编译、流水线却报
+        // `Unresolved reference 'client'`（见构建 cnb-e7k-1k4t44rap）。
+        // 阿里云 public / 腾讯云 maven-public 的 .module 与 `-android` 制品都完整，
+        // 因此限定 group、保留 GMM 交给它们。
+        mirrorWithGradleMetadata(
+            "https://maven.aliyun.com/repository/public/",
+            JellyfinSdk.GROUP,
+        )
+        mirrorWithGradleMetadata(
+            "https://mirrors.cloud.tencent.com/nexus/repository/maven-public/",
+            JellyfinSdk.GROUP,
+        )
         // 公共镜像：聚合 Maven Central / Google 等。多个镜像并列用于互补缺口
         // （各镜像同步进度与缓存状态不同，单点存在 artifact 缺失风险）。
         publicMirror("https://mirrors.cloud.tencent.com/nexus/repository/maven-public/")
