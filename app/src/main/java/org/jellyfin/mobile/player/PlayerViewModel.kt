@@ -181,18 +181,15 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
 
     private val playerEventChannel: Channel<PlayerEvent> by inject(named(PLAYER_EVENT_CHANNEL))
 
-    val mediaSession: MediaSession by lazy {
-        MediaSession(
-            getApplication<Application>().applicationContext,
-            javaClass.simpleName.removePrefix(BuildConfig.APPLICATION_ID),
-        ).apply {
-            @Suppress("DEPRECATION")
-            setFlags(MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS or MediaSession.FLAG_HANDLES_MEDIA_BUTTONS)
-            setCallback(mediaSessionCallback)
-            applyDefaultLocalAudioAttributes(AudioAttributes.CONTENT_TYPE_MOVIE)
-        }
-    }
     private val mediaSessionCallback = PlayerMediaSessionCallback(this)
+    private var _mediaSession: MediaSession? = null
+
+    /**
+     * The session is created lazily and survives [releasePlayer], so that a later
+     * [setupPlayer] reuses it. Only [onCleared] releases it for good.
+     */
+    val mediaSession: MediaSession
+        get() = _mediaSession ?: createMediaSession().also { _mediaSession = it }
 
     private var displayPreferences = DisplayPreferences()
     private var autoPlayNextEpisodeEnabled: Boolean = false
@@ -256,6 +253,16 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         addListener(eventLogger)
     }
 
+    private fun createMediaSession() = MediaSession(
+        getApplication<Application>().applicationContext,
+        javaClass.simpleName.removePrefix(BuildConfig.APPLICATION_ID),
+    ).apply {
+        @Suppress("DEPRECATION")
+        setFlags(MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS or MediaSession.FLAG_HANDLES_MEDIA_BUTTONS)
+        setCallback(mediaSessionCallback)
+        applyDefaultLocalAudioAttributes(AudioAttributes.CONTENT_TYPE_MOVIE)
+    }
+
     /**
      * Setup a new [ExoPlayer] for video playback, register callbacks and set attributes
      */
@@ -306,9 +313,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
                 filteredDecoderList
             }
         }.let { if (appPreferences.exoPlayerDirectPlayAss) AssRenderersFactory(get(), it) else it }
-        when (appPreferences.videoPlayerType) {
+        val player = when (appPreferences.videoPlayerType) {
             VideoPlayerType.EXO_PLAYER -> {
-                _player.value = ExoPlayer.Builder(getApplication(), renderersFactory, get()).apply {
+                ExoPlayer.Builder(getApplication(), renderersFactory, get()).apply {
                     setUsePlatformDiagnostics(false)
                     setTrackSelector(trackSelector)
                     setAnalyticsCollector(analyticsCollector)
@@ -316,40 +323,56 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
                     setWakeMode(C.WAKE_MODE_NETWORK)
                     setHandleAudioBecomingNoisy(true)
                 }.build().apply {
-                    addListener(this@PlayerViewModel)
                     applyDefaultAudioAttributes(C.AUDIO_CONTENT_TYPE_MOVIE)
                     if (appPreferences.exoPlayerDirectPlayAss) get<AssHandler>().init(this)
                 }
             }
             VideoPlayerType.MPV_PLAYER -> {
-                _player.value = MpvPlayer(application, Looper.getMainLooper()).apply {
+                MpvPlayer(application, Looper.getMainLooper()).apply {
                     setDecoderProcessor(
                         { _decoderType.value ?: DecoderType.HARDWARE },
                         { _detectedDecoderType.postValue(it) },
                     )
                     setAnalyticsCollector(analyticsCollector)
-                    addListener(this@PlayerViewModel)
                     applyDefaultAudioAttributes(C.AUDIO_CONTENT_TYPE_MOVIE)
                 }
             }
-            else -> {
-                throw IllegalArgumentException("Invalid video player type")
-            }
+            else -> throw IllegalArgumentException("Invalid video player type")
+        }
+
+        // Publish the new player before its previous sibling is torn down, otherwise
+        // observers would briefly see a player that is about to be released.
+        val previousPlayer = playerOrNull
+        player.addListener(this@PlayerViewModel)
+        _player.value = player
+        previousPlayer?.run {
+            removeListener(this@PlayerViewModel)
+            release()
         }
     }
 
     /**
-     * Release the current ExoPlayer and stop/release the current MediaSession
+     * Release the current player, stop progress reporting and drop the notification.
+     *
+     * The [MediaSession] is only deactivated here: a later [setupPlayer] (e.g. the user
+     * returns and starts playback again) reuses it. Releasing it would leave the rebuilt
+     * player writing to a dead session. [onCleared] releases it for good.
      */
     private fun releasePlayer() {
-        notificationHelper.dismissNotification()
-        mediaSession.isActive = false
-        mediaSession.release()
-        playerOrNull?.run {
+        val releasedPlayer = playerOrNull
+        _player.value = null
+        releasedPlayer?.run {
             removeListener(this@PlayerViewModel)
             release()
         }
-        _player.value = null
+
+        // Stop progress reporting / notifications before tearing the session down. The
+        // session is kept around (inactive) so a future setupPlayer() can reuse it.
+        _mediaSession?.run {
+            isActive = false
+            setPlaybackState(PlaybackState.STATE_NONE, 0L, 0L)
+        }
+        notificationHelper.dismissNotification()
     }
 
     fun load(jellyfinMediaSource: JellyfinMediaSource, exoMediaSource: MediaSource, playWhenReady: Boolean) {
@@ -974,5 +997,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         reportPlaybackStop()
         ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
         releasePlayer()
+        _mediaSession?.release()
+        _mediaSession = null
     }
 }

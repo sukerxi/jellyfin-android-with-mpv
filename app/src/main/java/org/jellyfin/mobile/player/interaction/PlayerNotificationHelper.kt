@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Bitmap
+import android.media.session.PlaybackState
 import androidx.core.content.ContextCompat
 import androidx.core.content.getSystemService
 import androidx.lifecycle.viewModelScope
@@ -29,8 +30,10 @@ import org.jellyfin.mobile.player.source.LocalJellyfinMediaSource
 import org.jellyfin.mobile.player.source.RemoteJellyfinMediaSource
 import org.jellyfin.mobile.utils.AndroidVersion
 import org.jellyfin.mobile.utils.Constants
+import org.jellyfin.mobile.utils.Constants.SUPPORTED_VIDEO_PLAYER_PLAYBACK_ACTIONS
 import org.jellyfin.mobile.utils.Constants.VIDEO_PLAYER_NOTIFICATION_ID
 import org.jellyfin.mobile.utils.createMediaNotificationChannel
+import org.jellyfin.mobile.utils.setPlaybackState
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.imageApi
 import org.jellyfin.sdk.api.operations.ImageApi
@@ -77,6 +80,17 @@ class PlayerNotificationHelper(private val viewModel: PlayerViewModel) : KoinCom
 
         // Create notification channel
         context.createMediaNotificationChannel(nm)
+
+        // The native player owns the session as soon as it is up: the web app may still
+        // report its own (paused) playback state and would otherwise overwrite the state
+        // the player reports, leaving the notification controls dead.
+        if (viewModel.playerOrNull != null) {
+            viewModel.mediaSession.setPlaybackState(
+                if (player.isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
+                player.currentPosition,
+                SUPPORTED_VIDEO_PLAYER_PLAYBACK_ACTIONS,
+            )
+        }
 
         viewModel.viewModelScope.launch {
             val style = Notification.MediaStyle().apply {
@@ -150,6 +164,14 @@ class PlayerNotificationHelper(private val viewModel: PlayerViewModel) : KoinCom
         notificationManager?.cancel(VIDEO_PLAYER_NOTIFICATION_ID)
         if (receiverRegistered.compareAndSet(true, false)) {
             context.unregisterReceiver(notificationActionReceiver)
+        }
+        if (viewModel.playerOrNull == null) {
+            // Playback ended without the web app being told about it. Resetting the session
+            // stops the system from keeping the (already released) player as the active
+            // media session, which would leave the last video running in the background
+            // after the player was closed.
+            viewModel.mediaSession.isActive = false
+            viewModel.mediaSession.setPlaybackState(PlaybackState.STATE_NONE, 0L, 0L)
         }
     }
 
