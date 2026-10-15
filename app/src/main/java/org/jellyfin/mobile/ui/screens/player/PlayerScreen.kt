@@ -842,23 +842,20 @@ fun PlayerScreen(
                 .matchParentSize()
                 .padding(systemBarsPadding),
         ) {
-            // Loading indicator. Fade instead of popping: the player reports BUFFERING for
-            // a single frame on cold start, and a hard show/hide reads as a stutter.
-            // Just the spinner - the pre-Compose player had a bare 64dp ProgressBar here,
-            // no label.
-            AnimatedVisibility(
-                visible = playerState == Player.STATE_BUFFERING,
-                enter = fadeIn(),
-                exit = fadeOut(),
-                modifier = Modifier.align(Alignment.Center),
-            ) {
-                // Thicker stroke than the 4dp Material default: the ring is 64dp here, so the
-                // default read as thin compared with the pre-Compose 64dp platform ProgressBar.
-                // The tinted track and rounded cap keep it looking like a polished, deliberate
-                // indicator rather than a bare arc.
+            // Loading indicator - a Material3 spinner restyled to be thick enough to read at
+            // this size and deliberately polished: 6dp stroke, 24%-alpha track, rounded caps.
+            //
+            // Deliberately NOT wrapped in AnimatedVisibility: while mpv loads, the reported
+            // playback state flickers (BUFFERING -> READY -> BUFFERING: FILE_LOADED lands before
+            // the initial cache fill completes), and the enter/exit fade restarted on every one
+            // of those flicks - which is exactly what made the spinner stutter. A plain presence
+            // toggle keeps the spin steady.
+            if (playerState == Player.STATE_BUFFERING) {
                 val indicatorColor = MaterialTheme.colorScheme.primary
                 CircularProgressIndicator(
-                    modifier = Modifier.size(64.dp),
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .size(64.dp),
                     color = indicatorColor,
                     strokeWidth = 6.dp,
                     trackColor = indicatorColor.copy(alpha = 0.24f),
