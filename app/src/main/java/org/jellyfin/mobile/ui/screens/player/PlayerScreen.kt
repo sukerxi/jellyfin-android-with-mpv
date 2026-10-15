@@ -32,7 +32,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.State
 import androidx.compose.runtime.remember
@@ -63,12 +62,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.Player
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.compose.state.rememberProgressStateWithTickInterval
 import io.github.peerless2012.ass.media.AssHandler
 import io.github.peerless2012.ass.media.widget.AssSubtitleView
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.jellyfin.mobile.R
@@ -99,10 +98,15 @@ import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.max
 
-/** 播放位置轮询间隔（毫秒）。 */
-private const val POSITION_UPDATE_INTERVAL_MS = 200L
+/**
+ * 播放进度的媒体时钟 tick 间隔（毫秒），交给 media3-ui-compose 的
+ * [rememberProgressStateWithTickInterval] 调度：播放时按媒体时钟对齐（并考虑倍速），
+ * 位置向下取整到 tick 网格；暂停/未就绪时自动降频（库内 1s fallback），
+ * seek / 时长变化等播放器事件会触发即时刷新。
+ */
+private const val POSITION_TICK_INTERVAL_MS = 200L
 
-/** seek 后进度条保持目标位置的最长时间（毫秒）；超时后交还给实时轮询位置。 */
+/** seek 后进度条保持目标位置的最长时间（毫秒）；超时后交还给播放器实时位置。 */
 private const val SEEK_UI_SETTLE_TIMEOUT_MS = 1000L
 
 /**
@@ -145,6 +149,17 @@ fun PlayerScreen(
     val chapterMarkings by viewModel.chapterMarkings.collectAsStateWithLifecycle()
     val activeSkipSegment by viewModel.activeAskToSkipSegment.collectAsStateWithLifecycle()
 
+    // 播放进度 state：media3 官方 Compose 实现，替代原先手写的 200ms while(delay) 轮询。
+    // 库内部按媒体时钟调度（播放 200ms tick / 暂停 1s / 非 READY 不调度），
+    // 并监听 seek、时长、播放态等事件立即重排，无需本屏维护轮询协程。
+    val progressState = rememberProgressStateWithTickInterval(
+        player = player,
+        tickIntervalMs = POSITION_TICK_INTERVAL_MS,
+    )
+    val positionMs = progressState.currentPositionMs
+    val durationMs = progressState.durationMs
+    val bufferedMs = progressState.bufferedPositionMs
+
     // UI state
     var controlsVisible by remember { mutableStateOf(true) }
     var controlsToken by remember { mutableIntStateOf(0) }
@@ -155,12 +170,9 @@ fun PlayerScreen(
     var episodePickerVisible by remember { mutableStateOf(false) }
     var isFullscreen by remember { mutableStateOf(false) }
     var gestureSurfaceSize by remember { mutableStateOf(IntSize.Zero) }
-    var positionMs by remember { mutableLongStateOf(0L) }
-    var durationMs by remember { mutableLongStateOf(0L) }
-    var bufferedMs by remember { mutableLongStateOf(0L) }
     var isPlaying by remember { mutableStateOf(false) }
     var scrubPositionMs by remember { mutableStateOf<Long?>(null) }
-    // 松手后正在生效的 seek 目标位置：轮询位置追上目标（或超时）后置空
+    // 松手后正在生效的 seek 目标位置：进度 state 的位置追上目标（或超时）后置空
     var pendingSeekPositionMs by remember { mutableStateOf<Long?>(null) }
     var pipMode by remember { mutableStateOf(activity.isInPictureInPictureMode) }
     var subtitlesEnabled by remember { mutableStateOf(false) }
@@ -375,17 +387,27 @@ fun PlayerScreen(
         }
     }
 
-    // Keep the screen on while playing and poll the playback position
-    LaunchedEffect(player) {
-        val currentPlayer = player ?: return@LaunchedEffect
-        while (isActive) {
-            positionMs = currentPlayer.currentPosition
-            durationMs = currentPlayer.duration
-            bufferedMs = currentPlayer.bufferedPosition
+    // 播放态事件驱动：官方 ProgressState 只含进度三要素，不含 isPlaying。
+    // 原先它由 200ms 位置轮询顺带读取（暂停也空转），改为 Player.Listener 回调，
+    // 同时驱动播放/暂停图标与屏幕常亮。
+    DisposableEffect(player) {
+        val currentPlayer = player
+        if (currentPlayer == null) {
+            isPlaying = false
+            onDispose { }
+        } else {
             isPlaying = currentPlayer.isPlaying
-            window.keepScreenOn = currentPlayer.isPlaying
-            delay(POSITION_UPDATE_INTERVAL_MS)
+            val listener = object : Player.Listener {
+                override fun onIsPlayingChanged(playing: Boolean) {
+                    isPlaying = playing
+                }
+            }
+            currentPlayer.addListener(listener)
+            onDispose { currentPlayer.removeListener(listener) }
         }
+    }
+    LaunchedEffect(isPlaying) {
+        window.keepScreenOn = isPlaying
     }
 
     // Queue item changes: update fullscreen state, trickplay, menus and subtitle state
@@ -495,15 +517,17 @@ fun PlayerScreen(
     }
 
     // Seek target hold-off: after a scrub-seek the progress bar keeps showing the target
-    // position until the polled player position reaches it. The poll runs every
-    // POSITION_UPDATE_INTERVAL_MS and still reports the pre-seek value until the seek is
-    // applied, so handing control back immediately made the bar snap back to the seek
-    // origin for up to one poll cycle before jumping to the target again. The timeout is
-    // a safety net so a seek that never settles cannot pin the bar forever.
+    // position until the player's reported position reaches it. The official progress state
+    // refreshes on POSITION_DISCONTINUITY, but mpv still reports the pre-seek time-pos until
+    // the seek is actually applied, so handing control back immediately made the bar snap
+    // back to the seek origin before jumping to the target again. The timeout is a safety
+    // net so a seek that never settles cannot pin the bar forever.
     LaunchedEffect(pendingSeekPositionMs) {
         val target = pendingSeekPositionMs ?: return@LaunchedEffect
         withTimeoutOrNull(SEEK_UI_SETTLE_TIMEOUT_MS) {
-            snapshotFlow { positionMs }.first { position ->
+            // 直接读官方 snapshot state：局部别名 positionMs 是普通 Long，
+            // 在 lambda 中只会捕获当次组合的值，无法驱动 flow。
+            snapshotFlow { progressState.currentPositionMs }.first { position ->
                 abs(position - target) <= Constants.SEEK_POSITION_SETTLE_EPSILON_MS
             }
         }
@@ -998,7 +1022,7 @@ fun PlayerScreen(
                         // 松手后执行 seek（旧版仅展示 trickplay，遗漏了 seek）
                         viewModel.seekTo(position)
                         trickplayHelper.onScrubStop()
-                        // 进度条继续显示目标位置直到播放器轮询位置追上：轮询间隔内
+                        // 进度条继续显示目标位置直到播放器上报位置追上：seek 生效前
                         // 位置上仍是旧值，直接置空会让进度条先跳回 seek 起点、再跳到目标。
                         pendingSeekPositionMs = position
                     },
