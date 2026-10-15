@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -41,6 +42,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -850,7 +852,18 @@ fun PlayerScreen(
                 exit = fadeOut(),
                 modifier = Modifier.align(Alignment.Center),
             ) {
-                CircularProgressIndicator(modifier = Modifier.size(64.dp))
+                // Thicker stroke than the 4dp Material default: the ring is 64dp here, so the
+                // default read as thin compared with the pre-Compose 64dp platform ProgressBar.
+                // The tinted track and rounded cap keep it looking like a polished, deliberate
+                // indicator rather than a bare arc.
+                val indicatorColor = MaterialTheme.colorScheme.primary
+                CircularProgressIndicator(
+                    modifier = Modifier.size(64.dp),
+                    color = indicatorColor,
+                    strokeWidth = 6.dp,
+                    trackColor = indicatorColor.copy(alpha = 0.24f),
+                    strokeCap = StrokeCap.Round,
+                )
             }
 
             // Skip media segment button

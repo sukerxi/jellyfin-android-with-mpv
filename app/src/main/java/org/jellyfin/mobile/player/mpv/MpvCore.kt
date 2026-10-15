@@ -42,6 +42,13 @@ sealed interface MpvEvent {
 
     data object DecoderChanged : MpvEvent
     data object TrackListChanged : MpvEvent
+
+    /**
+     * A hot property served to [MpvPlayer.getState] from the cache (currently `pause`/`speed`)
+     * changed on mpv's side, e.g. an external pause. Only used to trigger a state refresh; the
+     * value itself is already in the cache.
+     */
+    data object HotPropertyChanged : MpvEvent
 }
 
 /**
@@ -201,8 +208,17 @@ class MpvCore private constructor(context: Application) {
         override fun eventProperty(property: String, value: Long) {}
 
         override fun eventProperty(property: String, value: Double) {
-            if (property == "duration") {
-                postEvent(MpvEvent.DurationChanged((value * 1000).toLong()))
+            when (property) {
+                "duration" -> postEvent(MpvEvent.DurationChanged((value * 1000).toLong()))
+                // Hot properties are cached here, off the main thread: MpvPlayer.getState() reads
+                // them from the cache instead of blocking the UI thread on a synchronous
+                // mpv_get_property while mpv's core is busy (e.g. during initial load).
+                "time-pos" -> cachedTimePosMs = (value * 1000).toLong()
+                "demuxer-cache-time" -> cachedDemuxerCacheMs = (value * 1000).toLong()
+                "speed" -> if (cachedSpeed != value) {
+                    cachedSpeed = value
+                    postEvent(MpvEvent.HotPropertyChanged)
+                }
             }
         }
 
@@ -210,12 +226,22 @@ class MpvCore private constructor(context: Application) {
             when (property) {
                 "paused-for-cache" -> postEvent(MpvEvent.Caching(value))
                 "eof-reached" -> postEvent(MpvEvent.EofReached(value))
+                "pause" -> if (cachedPause != value) {
+                    cachedPause = value
+                    postEvent(MpvEvent.HotPropertyChanged)
+                }
             }
         }
 
         override fun eventProperty(property: String, value: String) {}
 
         override fun event(eventId: Int) {
+            if (eventId == MPVLib.MpvEvent.MPV_EVENT_START_FILE) {
+                // A new file starts at position 0 (or its start offset): drop the previous file's
+                // cached position so the reported position never briefly shows the old value.
+                cachedTimePosMs = 0L
+                cachedDemuxerCacheMs = 0L
+            }
             val event = when (eventId) {
                 MPVLib.MpvEvent.MPV_EVENT_START_FILE -> MpvEvent.StartFile
                 MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> MpvEvent.FileLoaded
@@ -231,6 +257,40 @@ class MpvCore private constructor(context: Application) {
     companion object {
         private val json = Json { ignoreUnknownKeys = true }
         private val eventListeners: CopyOnWriteArrayList<(MpvEvent) -> Unit> = CopyOnWriteArrayList()
+
+        /**
+         * Cache for the properties [MpvPlayer.getState] needs on the animation-critical main
+         * thread (`pause`, `speed`, playback position, buffered position). media3's
+         * [SimpleBasePlayer] requires [MpvPlayer.getState] to be a cheap, synchronous read, but a
+         * synchronous `mpv_get_property` can block on mpv's core lock while the core is busy -
+         * notably during initial load (demuxer open / cache fill), where it stalled the UI thread
+         * long enough to visibly stutter the loading spinner. The values are therefore maintained
+         * here instead: updated off the main thread by the property observer, and synchronously
+         * by [setProperty] for the values the app sets itself.
+         */
+        @Volatile
+        private var cachedPause: Boolean = true
+
+        @Volatile
+        private var cachedSpeed: Double = 1.0
+
+        @Volatile
+        private var cachedTimePosMs: Long = 0L
+
+        @Volatile
+        private var cachedDemuxerCacheMs: Long = 0L
+
+        /** Whether playback is paused, from the cache (never blocks). */
+        val pause: Boolean get() = cachedPause
+
+        /** Playback speed, from the cache (never blocks). */
+        val speed: Double get() = cachedSpeed
+
+        /** Current playback position in ms, from the cache (never blocks). */
+        val timePosMs: Long get() = cachedTimePosMs
+
+        /** Buffered (demuxer cache) position in ms, from the cache (never blocks). */
+        val demuxerCacheMs: Long get() = cachedDemuxerCacheMs
 
         @Volatile
         private var INSTANCE: MpvCore? = null
@@ -272,6 +332,13 @@ class MpvCore private constructor(context: Application) {
         }
 
         fun setProperty(name: String, value: Any) {
+            // Keep the hot-property cache in sync for values the app sets itself, so a getState()
+            // right after (media3 does one per command) already reports the new value instead of
+            // waiting for the observer on mpv's thread.
+            when (name) {
+                "pause" -> if (value is Boolean) cachedPause = value
+                "speed" -> if (value is Double) cachedSpeed = value
+            }
             val mpv = mpvLib
             when (value) {
                 is String -> mpv.setPropertyString(name, value)
@@ -353,11 +420,14 @@ class MpvCore private constructor(context: Application) {
             Property("hwdec-current"),
             Property("eof-reached", MPVLib.MpvFormat.MPV_FORMAT_FLAG),
             Property("duration", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE),
-            // Property("time-pos/full", MPVLib.MpvFormat.MPV_FORMAT_INT64),
-            // Property("duration/full", MPVLib.MpvFormat.MPV_FORMAT_INT64),
-            // Property("pause", MPVLib.MpvFormat.MPV_FORMAT_FLAG),
-            // Property("speed", MPVLib.MpvFormat.MPV_FORMAT_STRING),
+            // Hot properties cached for MpvPlayer.getState(); never read synchronously on the
+            // main thread (see the cache in the companion).
+            Property("time-pos", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE),
+            Property("demuxer-cache-time", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE),
+            Property("pause", MPVLib.MpvFormat.MPV_FORMAT_FLAG),
+            Property("speed", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE),
             Property("track-list"),
+            // Property("duration/full", MPVLib.MpvFormat.MPV_FORMAT_INT64),
             // Property("video-params/aspect", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE),
             // Property("video-params/rotate", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE),
             // Property("playlist-pos", MPVLib.MpvFormat.MPV_FORMAT_INT64),

@@ -195,6 +195,9 @@ class MpvPlayer(
                 applyAudioTrack()
                 applySubtitleTrack()
             }
+            // pause/speed changed on mpv's side (e.g. an external pause): the new value is already
+            // in MpvCore's cache, so only the state refresh below is needed.
+            MpvEvent.HotPropertyChanged -> Unit
         }
         invalidateState()
     }
@@ -301,8 +304,11 @@ class MpvPlayer(
             .build()
 
     override fun getState(): State {
-        val paused = MpvCore.getProperty<Boolean>("pause") ?: true
-        val speed = MpvCore.getProperty<Double>("speed")?.toFloat() ?: 1f
+        // Read from MpvCore's cache, never via a synchronous mpv property read: getState() runs
+        // on the main thread (media3) on every state refresh, and during initial load such a read
+        // can block on mpv's core lock long enough to stutter the loading spinner.
+        val paused = MpvCore.pause
+        val speed = MpvCore.speed.toFloat()
 
         val mediaItemData = MediaItemData.Builder(mediaItemUid)
             .setMediaItem(currentMediaItem ?: MediaItem.EMPTY)
@@ -564,7 +570,9 @@ class MpvPlayer(
     }
 
     private fun currentPositionMs(): Long {
-        val timePosMs = (MpvCore.getProperty<Double>("time-pos/full") ?: 0.0).let { pos -> (pos * 1000).toLong() }
+        // From the cache (updated by mpv's observer), not a synchronous read: this feeds
+        // getState()'s content-position supplier on the main thread.
+        val timePosMs = MpvCore.timePosMs
         // While a seek is in flight mpv keeps reporting the pre-seek time-pos (for network
         // sources this can take more than a second). Return the seek target instead until mpv
         // actually caught up to it, matching ExoPlayer's immediate position update on seekTo().
@@ -583,8 +591,8 @@ class MpvPlayer(
     }
 
     private fun bufferedPositionMs(): Long {
-        val cacheTime = MpvCore.getProperty<Double>("demuxer-cache-time") ?: 0.0
-        return (cacheTime * 1000).toLong()
+        // From the cache, not a synchronous `demuxer-cache-time` read (see currentPositionMs).
+        return MpvCore.demuxerCacheMs
     }
 
     private fun consumePendingFirstFrame(): Boolean {
