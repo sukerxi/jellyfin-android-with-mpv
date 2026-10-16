@@ -145,12 +145,11 @@ class TrickplayHelper(
 
         val runnable = Runnable {
             dispatchRequest(
-                url,
-                offsetX,
-                offsetY,
-                resolvedTrickPlayInfo.width,
-                resolvedTrickPlayInfo.height,
-                currentTile,
+                url = url,
+                info = resolvedTrickPlayInfo,
+                offsetX = offsetX,
+                offsetY = offsetY,
+                tile = currentTile,
             )
         }
         pendingRequest = runnable
@@ -162,17 +161,34 @@ class TrickplayHelper(
         )
     }
 
-    private fun dispatchRequest(url: String, offsetX: Int, offsetY: Int, tileWidth: Int, tileHeight: Int, tile: Int) {
+    private fun dispatchRequest(
+        url: String,
+        info: TrickplayInfoDto,
+        offsetX: Int,
+        offsetY: Int,
+        tile: Int,
+    ) {
         lastDispatchedTile = tile
         pendingTile = -1
         pendingRequest = null
         nextDispatchAt = SystemClock.uptimeMillis() + Constants.TRICKPLAY_TILE_REFRESH_WINDOW_MS
 
+        // Request the tile at half resolution instead of its full size: a tile holds a
+        // tileWidth x tileHeight grid of thumbnails, so the full-size request decoded
+        // the entire grid (tens of megabytes for large tiles) to show a single
+        // thumbnail and threw everything but the crop away. The preview displays each
+        // thumbnail upscaled anyway (160dp against the source thumbnail's height), so
+        // the halved decode is not visible, while allocation, decode CPU and GC
+        // pressure per tile drop 4x. SubsetTransformation maps the crop rectangle
+        // through the same scale factor.
+        val requestWidth = info.tileWidth * info.width / 2
+        val requestHeight = info.tileHeight * info.height / 2
+
         currentRequest?.dispose()
         currentRequest = imageLoader.enqueue(
             ImageRequest.Builder(context)
                 .data(url)
-                .size(Size.ORIGINAL)
+                .size(requestWidth, requestHeight)
                 .maxBitmapSize(Size(Dimension.Undefined, Dimension.Undefined))
                 .httpHeaders(
                     NetworkHeaders.Builder()
@@ -188,7 +204,16 @@ class TrickplayHelper(
                         )
                         .build(),
                 )
-                .transformations(SubsetTransformation(offsetX, offsetY, tileWidth, tileHeight))
+                .transformations(
+                    SubsetTransformation(
+                        x = offsetX,
+                        y = offsetY,
+                        width = info.width,
+                        height = info.height,
+                        sourceWidth = info.tileWidth * info.width,
+                        sourceHeight = info.tileHeight * info.height,
+                    ),
+                )
                 .target(
                     onSuccess = { image ->
                         if (isScrubbing) {

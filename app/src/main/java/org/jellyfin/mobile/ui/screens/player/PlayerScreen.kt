@@ -569,7 +569,10 @@ fun PlayerScreen(
 
     // region derived state
 
-    val title = mediaSource?.getName(context).orEmpty()
+    // getName walks the item's metadata on every call, and the position tick
+    // recomposes ~5x/second. The name only depends on the media source, so it is
+    // computed once per source instead of per tick.
+    val title = remember(mediaSource) { mediaSource?.getName(context).orEmpty() }
     val chapters = mediaSource?.item?.chapters
     val hasChapters = !chapters.isNullOrEmpty()
     val queueSize = viewModel.queueManager.queueSize
@@ -693,33 +696,37 @@ fun PlayerScreen(
 
     val systemBarsPadding = WindowInsets.systemBars.asPaddingValues()
     val controlsPadding = if (isFullscreen) {
+        // PaddingValues does not implement equals, so a freshly built instance per
+        // recomposition (the position tick fires ~5x/second) defeats Compose's
+        // skipping. Keying the remember on the raw pixel values keeps one instance
+        // until the insets themselves change.
         val cutout = WindowInsets.displayCutout
-        PaddingValues(
-            start = with(density) {
-                max(
-                    cutout.getLeft(density, layoutDirection),
-                    WindowInsets.systemBars.getLeft(density, layoutDirection),
-                ).toDp()
-            },
-            top = with(density) {
-                max(
-                    cutout.getTop(density),
-                    WindowInsets.systemBars.getTop(density),
-                ).toDp()
-            },
-            end = with(density) {
-                max(
-                    cutout.getRight(density, layoutDirection),
-                    WindowInsets.systemBars.getRight(density, layoutDirection),
-                ).toDp()
-            },
-            bottom = with(density) {
-                max(
-                    cutout.getBottom(density),
-                    WindowInsets.systemBars.getBottom(density),
-                ).toDp()
-            },
-        )
+        val systemBars = WindowInsets.systemBars
+        val cutoutLeft = with(density) { cutout.getLeft(density, layoutDirection) }
+        val cutoutTop = with(density) { cutout.getTop(density) }
+        val cutoutRight = with(density) { cutout.getRight(density, layoutDirection) }
+        val cutoutBottom = with(density) { cutout.getBottom(density) }
+        val barsLeft = with(density) { systemBars.getLeft(density, layoutDirection) }
+        val barsTop = with(density) { systemBars.getTop(density) }
+        val barsRight = with(density) { systemBars.getRight(density, layoutDirection) }
+        val barsBottom = with(density) { systemBars.getBottom(density) }
+        remember(
+            cutoutLeft,
+            cutoutTop,
+            cutoutRight,
+            cutoutBottom,
+            barsLeft,
+            barsTop,
+            barsRight,
+            barsBottom,
+        ) {
+            PaddingValues(
+                start = with(density) { max(cutoutLeft, barsLeft).toDp() },
+                top = with(density) { max(cutoutTop, barsTop).toDp() },
+                end = with(density) { max(cutoutRight, barsRight).toDp() },
+                bottom = with(density) { max(cutoutBottom, barsBottom).toDp() },
+            )
+        }
     } else {
         systemBarsPadding
     }

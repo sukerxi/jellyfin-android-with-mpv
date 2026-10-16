@@ -24,6 +24,9 @@ import io.github.peerless2012.ass.media.AssHandler
 import io.github.peerless2012.ass.media.kt.withAssMkvSupport
 import io.github.peerless2012.ass.media.parser.AssSubtitleParserFactory
 import io.github.peerless2012.ass.media.type.AssRenderType
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import okhttp3.OkHttpClient
 import org.jellyfin.mobile.MainViewModel
@@ -65,10 +68,16 @@ import org.koin.dsl.module
 import java.io.File
 
 const val PLAYER_EVENT_CHANNEL = "PlayerEventChannel"
+const val APP_SCOPE = "AppScope"
 private const val TS_SEARCH_PACKETS = 1800
 
 val applicationModule = module {
     single { AppPreferences(androidApplication()) }
+    // Application-lifetime scope for work that must outlive a ViewModel: the playback
+    // stop report runs when the ViewModel is already cleared (viewModelScope is
+    // cancelled by then), and a fresh ad-hoc scope per call was the only way to
+    // escape that cancellation.
+    single<CoroutineScope>(named(APP_SCOPE)) { CoroutineScope(SupervisorJob() + Dispatchers.Main) }
     single { OkHttpClient() }
     single { ImageLoader(androidApplication()) }
     single { PermissionRequestHelper() }
@@ -191,7 +200,12 @@ val applicationModule = module {
         }
     }
 
-    single(createdAtStart = true) { StorageManager(get(), get()) }
+    // Deliberately not createdAtStart: its AppPreferences dependency reads the
+    // DataStore from disk on construction, and an eager singleton would drag that
+    // blocking read onto the main thread during startKoin (the singletons that are
+    // expensive to build are prewarmed on a background thread instead, see
+    // JellyfinApplication). Every consumer resolves it lazily anyway.
+    single { StorageManager(get(), get()) }
     single { DownloadManager(get(), get(), get(), get(), get()) }
     single { DownloadNotificationManager(get()) }
     single { DownloadQueue(get(), get(), get(), get(), get(), get()) }

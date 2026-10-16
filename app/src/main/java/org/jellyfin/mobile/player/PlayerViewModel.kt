@@ -15,7 +15,6 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.application
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -46,6 +45,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jellyfin.mobile.BuildConfig
 import org.jellyfin.mobile.MainActivity
+import org.jellyfin.mobile.app.APP_SCOPE
 import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.app.PLAYER_EVENT_CHANNEL
 import org.jellyfin.mobile.player.interaction.PlayerEvent
@@ -118,6 +118,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     private val userApi: UserApi = apiClient.userApi
 
     private val appPreferences: AppPreferences by inject()
+    private val appScope: CoroutineScope by inject(named(APP_SCOPE))
     private val lifecycleObserver = PlayerLifecycleObserver(this)
     private val audioManager: AudioManager by lazy { getApplication<Application>().getSystemService()!! }
     val notificationHelper: PlayerNotificationHelper by lazy { PlayerNotificationHelper(this) }
@@ -590,21 +591,6 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         }
     }
 
-    fun loadDirect( playWhenReady: Boolean) {
-        if (playerOrNull == null) setupPlayer()
-        val player = playerOrNull ?: return
-        player.setMediaItem(MediaItem.fromUri("http://baidu.com"))
-        player.prepare()
-
-        initialTracksSelected.set(false)
-
-        val startTime = Duration.ZERO
-        if (startTime > Duration.ZERO) player.seekTo(startTime.inWholeMilliseconds)
-
-
-        player.playWhenReady = playWhenReady
-    }
-
     /**
      * Publishes the reasons the current media source is transcoded, if it is.
      *
@@ -656,6 +642,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
 
     private fun startProgressUpdates() {
         if (mediaSourceOrNull != null && mediaSourceOrNull !is RemoteJellyfinMediaSource) return
+        // Cancel first: onPlayerStateChanged starts these on every READY transition,
+        // and a second loop alongside the first would double the reporting rate.
+        progressUpdateJob?.cancel()
         progressUpdateJob = viewModelScope.launch {
             while (true) {
                 delay(Constants.PLAYER_TIME_UPDATE_RATE)
@@ -669,6 +658,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     }
 
     private fun startChapterMarkingUpdates() {
+        chapterMarkingUpdateJob?.cancel()
         chapterMarkingUpdateJob = viewModelScope.launch {
             while (true) {
                 delay(Constants.CHAPTER_MARKING_UPDATE_DELAY)
@@ -682,6 +672,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     }
 
     private fun startSkipMediaSegmentUpdates() {
+        skipMediaSegmentUpdateJob?.cancel()
         skipMediaSegmentUpdateJob = viewModelScope.launch {
             while (true) {
                 delay(Constants.SKIP_MEDIA_SEGMENT_UPDATE_DELAY)
@@ -859,8 +850,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
             else -> player.currentPosition.milliseconds.inWholeTicks
         }
 
-        // viewModelScope may already be cancelled at this point, so we need to fallback
-        CoroutineScope(Dispatchers.Main).launch {
+        // viewModelScope may already be cancelled at this point (the stop report also
+        // runs from onCleared), so the work goes to the application-level scope
+        // instead of an ad-hoc one.
+        appScope.launch {
             try {
                 // Report stopped playback
                 withContext(Dispatchers.IO) {

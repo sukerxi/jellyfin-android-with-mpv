@@ -12,6 +12,8 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.jellyfin.mobile.app.AppPreferences
+import org.koin.core.component.KoinComponent
+import org.koin.core.component.inject
 import timber.log.Timber
 import java.io.File
 import java.util.concurrent.CountDownLatch
@@ -184,14 +186,26 @@ object MpvAssetInstaller {
  *
  * @author dr
  */
-class MpvCore private constructor(context: Application) {
+class MpvCore private constructor(context: Application) : KoinComponent {
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * The preference singleton, injected instead of constructing a second
+     * [AppPreferences] here: its constructor reads the DataStore from disk, so a second
+     * instance would pay for that read again on whichever thread creates it.
+     */
+    private val appPreferences: AppPreferences by inject()
 
     /**
      * Native mpv instance. libmpv-android 1.0.0 replaced the static MPVLib API with
      * multi-instance support, so every call goes through this handle.
+     *
+     * Created by the initialization task on the [ipcExecutor] thread and null until
+     * that task has run. Every IPC call is queued behind it (see [ipcExecutor]), so
+     * callers never observe the null window.
      */
-    private val mpv: MPVLib
+    @Volatile
+    private var mpv: MPVLib? = null
 
     private fun postEvent(event: MpvEvent) {
         mainHandler.post {
@@ -286,22 +300,28 @@ class MpvCore private constructor(context: Application) {
         private val eventListeners: CopyOnWriteArrayList<(MpvEvent) -> Unit> = CopyOnWriteArrayList()
 
         /**
-         * Serial executor for every mpv IPC call (property sets and commands).
+         * Serial executor for every libmpv client call: the native initialization,
+         * property sets, commands and surface attach/detach.
          *
-         * All synchronous libmpv client calls (`mpv_set_property`, `mpv_command`) acquire
-         * mpv's dispatch lock: `mp_dispatch_lock` blocks the caller until mpv's core
-         * reaches a safe point - inside its dispatch loop and not running an item. While
-         * mpv is busy - opening the demuxer, filling the initial cache
-         * (`cache-pause-initial=yes`), or initializing the decoder for the first frame -
-         * the core does not reach safe points for tens to hundreds of milliseconds, so
-         * issuing IPC from the main thread stalls the UI thread exactly during the
-         * loading phase. Seeking is unaffected (during playback the core passes a safe
-         * point every frame), which is why only the loading spinner stuttered.
+         * All synchronous libmpv client calls (`mpv_set_property`, `mpv_command`,
+         * `mpv_attach_surface`) acquire mpv's dispatch lock: `mp_dispatch_lock` blocks
+         * the caller until mpv's core reaches a safe point - inside its dispatch loop
+         * and not running an item. While mpv is busy - opening the demuxer, filling the
+         * initial cache (`cache-pause-initial=yes`), or initializing the decoder for
+         * the first frame - the core does not reach safe points for tens to hundreds
+         * of milliseconds, so issuing IPC from the main thread stalls the UI thread
+         * exactly during the loading phase. Seeking is unaffected (during playback the
+         * core passes a safe point every frame), which is why only the loading spinner
+         * stuttered.
          *
          * IPC is therefore queued here instead of running on the caller's thread: a
          * single thread keeps the relative order of the calls, and callers never wait
          * for mpv. The hot-property cache in [setProperty] is still updated
          * synchronously, so [MpvPlayer.getState] reports new values without waiting.
+         *
+         * The native initialization (see the `init` block) is queued as the first task,
+         * so it - and the disk I/O and preference read it performs - runs off the main
+         * thread while every later call is still ordered behind it.
          */
         private val ipcExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "mpv-ipc").apply { isDaemon = true }
@@ -387,19 +407,6 @@ class MpvCore private constructor(context: Application) {
         internal val mpvLib: MPVLib
             get() = INSTANCE?.mpv ?: error("MpvCore is not initialized")
 
-        inline fun <reified T> getProperty(name: String): T? {
-            val mpv = mpvLib
-            return when (T::class) {
-                String::class -> mpv.getPropertyString(name) as T?
-                Int::class -> mpv.getPropertyInt(name) as T?
-                Long::class -> mpv.getPropertyInt(name)?.toLong() as T?
-                Float::class -> mpv.getPropertyDouble(name)?.toFloat() as T?
-                Double::class -> mpv.getPropertyDouble(name) as T?
-                Boolean::class -> mpv.getPropertyBoolean(name) as T?
-                else -> throw IllegalArgumentException("Unsupported property type: ${T::class}")
-            }
-        }
-
         // JNI calls into libmpv can surface arbitrary failures; on the background IPC thread
         // they must not take the process down, so they are logged here.
         @Suppress("TooGenericExceptionCaught")
@@ -413,10 +420,6 @@ class MpvCore private constructor(context: Application) {
                     Timber.e(e, "mpv command failed: ${cmd.joinToString(" ")}")
                 }
             }
-        }
-
-        fun setOptions(name: String, value: String) {
-            mpvLib.setOptionString(name, value)
         }
 
         @Suppress("TooGenericExceptionCaught")
@@ -457,12 +460,31 @@ class MpvCore private constructor(context: Application) {
             eventListeners.remove(eventListener)
         }
 
+        // Queued like every other libmpv call (see ipcExecutor): the callers are the
+        // SurfaceView holder callbacks on the main thread, and attaching/detaching
+        // reaches into mpv (it can block on the core lock during load). Queueing also
+        // keeps the ordering against the vid=auto/vid=no property sets that surround
+        // these calls in MpvPlayer.
+        @Suppress("TooGenericExceptionCaught")
         fun attachSurface(surface: Surface) {
-            mpvLib.attachSurface(surface)
+            ipcExecutor.execute {
+                try {
+                    mpvLib.attachSurface(surface)
+                } catch (e: Exception) {
+                    Timber.e(e, "mpv attachSurface failed")
+                }
+            }
         }
 
+        @Suppress("TooGenericExceptionCaught")
         fun detachSurface() {
-            mpvLib.detachSurface()
+            ipcExecutor.execute {
+                try {
+                    mpvLib.detachSurface()
+                } catch (e: Exception) {
+                    Timber.e(e, "mpv detachSurface failed")
+                }
+            }
         }
 
         fun getTracks(): List<MediaTrack> {
@@ -478,11 +500,40 @@ class MpvCore private constructor(context: Application) {
     }
 
     init {
+        // The whole native initialization runs as the first task on the IPC executor
+        // (see [ipcExecutor]): it waits for the asset copy, reads the DataStore-backed
+        // preferences, writes mpv.conf and creates/initializes the native instance -
+        // disk I/O plus a native handshake that must not block the main thread while
+        // the player is being set up. Every later IPC call is queued behind it, so mpv
+        // is fully initialized by the time any command runs.
+        ipcExecutor.execute { initializeNativeAsync(context) }
+    }
+
+    /**
+     * Runs the native initialization on the IPC executor, logging a failure instead of
+     * killing the process: an uncaught exception on that thread would take the app
+     * down, while a failed init only leaves playback unavailable.
+     */
+    @Suppress("TooGenericExceptionCaught")
+    private fun initializeNativeAsync(context: Application) {
+        try {
+            initializeNative(context)
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to initialize mpv")
+        }
+    }
+
+    /**
+     * Creates and initializes the native mpv instance. Runs on the [ipcExecutor] thread
+     * as its first task, so constructing [MpvCore] never blocks its caller.
+     */
+    private fun initializeNative(context: Application) {
         // Wait for assets (e.g. subfont.ttf) to be copied before mpv reads its config directory.
         MpvAssetInstaller.awaitInstalled(context)
         // Publish the user-provided mpv.conf so that mpv picks it up during init().
-        MpvConfigManager.syncConfigFile(context, AppPreferences(context).mpvCustomConfig)
-        mpv = MPVLib.create(context) ?: error("Failed to create native mpv instance")
+        MpvConfigManager.syncConfigFile(context, appPreferences.mpvCustomConfig)
+        val mpv = MPVLib.create(context) ?: error("Failed to create native mpv instance")
+        this.mpv = mpv
         // Limit demuxer cache since the defaults are too high for mobile devices
         val cacheMegs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) 64 else 32
         val cacheBytes = "${cacheMegs * 1024 * 1024}"
@@ -512,11 +563,11 @@ class MpvCore private constructor(context: Application) {
 
 //        mpv.setOptionString("idle", "once")
         // mpv.setOptionString("force-window", "yes")
-        observeProperties()
+        observeProperties(mpv)
         mpv.addObserver(mpvLibEventObserver)
     }
 
-    private fun observeProperties() {
+    private fun observeProperties(mpv: MPVLib) {
         // This observes all properties needed by MpvPlayer or other classes
         data class Property(val name: String, val format: Int = MPVLib.MpvFormat.MPV_FORMAT_NONE)
         val properties = arrayOf(
