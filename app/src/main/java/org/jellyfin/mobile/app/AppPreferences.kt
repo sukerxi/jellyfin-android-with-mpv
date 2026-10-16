@@ -28,6 +28,7 @@ import org.jellyfin.mobile.settings.ExternalPlayerPackage
 import org.jellyfin.mobile.settings.VideoPlayerType
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.sdk.model.api.MediaSegmentType
+import org.jellyfin.sdk.model.api.TranscodeReason
 
 /**
  * Preferences facade backed by Jetpack Preferences DataStore.
@@ -216,6 +217,28 @@ class AppPreferences(context: Context) {
         preferenceFlow(KEY_EXTERNAL_PLAYER_APP, ExternalPlayerPackage.SYSTEM_DEFAULT)
 
     /**
+     * The [TranscodeReason]s the server reported for the last playback request, as a comma
+     * separated string. Used to explain why native SSA/ASS rendering cannot take effect:
+     * while transcoding, the server burns the subtitles into the video and no text track
+     * reaches the client at all.
+     */
+    var exoPlayerTranscodeReasons: String
+        get() = snapshot[KEY_EXOPLAYER_TRANSCODE_REASONS].orEmpty()
+        set(value) = persistValue(KEY_EXOPLAYER_TRANSCODE_REASONS, value)
+
+    /**
+     * Resolves whether ExoPlayer should render SSA/ASS subtitles natively instead of
+     * letting the server burn them into the video stream.
+     *
+     * Transcoding wins over the preference: the server already draws the subtitles into
+     * the video frames, so the client must not claim SSA/ASS support in its device profile
+     * (that would stop the burn-in) and does not need libass to render a text track that
+     * does not exist.
+     */
+    fun resolveExoPlayerDirectPlayAss(isVideoTranscoding: Boolean): Boolean =
+        exoPlayerDirectPlayAss && !isVideoTranscoding
+
+    /**
      * User-provided [mpv.conf](https://mpv.io/manual/master/#configuration-files) content.
      * Written into mpv's config directory and parsed natively before playback starts.
      */
@@ -289,6 +312,8 @@ class AppPreferences(context: Context) {
             booleanPreferencesKey(Constants.PREF_EXOPLAYER_DOUBLE_TAP_PAUSE)
         private val KEY_EXOPLAYER_DIRECT_PLAY_ASS =
             booleanPreferencesKey(Constants.PREF_EXOPLAYER_DIRECT_PLAY_ASS)
+        private val KEY_EXOPLAYER_TRANSCODE_REASONS =
+            stringPreferencesKey(Constants.PREF_EXOPLAYER_TRANSCODE_REASONS)
         private val KEY_EXOPLAYER_NETWORK_BUFFER =
             stringPreferencesKey(Constants.PREF_EXOPLAYER_NETWORK_BUFFER)
         private val KEY_EXTERNAL_PLAYER_APP =

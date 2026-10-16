@@ -175,7 +175,10 @@ val applicationModule = module {
         }
 
         val appPreferences: AppPreferences = get()
-        if (appPreferences.exoPlayerDirectPlayAss) {
+        // Extends the same direct-play-only scope as the device profile: announcing SSA/ASS
+        // support to the server is what keeps the subtitles out of the video stream, and the
+        // parser only sees such a track when the server sends it verbatim.
+        if (appPreferences.resolveExoPlayerDirectPlayAss(isVideoTranscoding = false)) {
             val assHandler: AssHandler = get()
             val assSubtitleParserFactory = AssSubtitleParserFactory(assHandler)
             val assExtractorsFactory = extractorsFactory.withAssMkvSupport(assSubtitleParserFactory, assHandler)

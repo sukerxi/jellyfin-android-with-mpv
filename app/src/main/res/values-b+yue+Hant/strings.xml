@@ -92,7 +92,7 @@
     <string name="pref_exoplayer_allow_press_speed_up_summary">撳住螢幕可以暫時加快播放速度</string>
     <string name="pref_exoplayer_allow_background_audio">背景音訊播放</string>
     <string name="pref_exoplayer_allow_background_audio_summary">允許喺背景播放影片（僅限音訊）</string>
-    <string name="pref_exoplayer_direct_play_ass">直接播放嗰陣允許 SSA/ASS 字幕</string>
+    <string name="pref_exoplayer_direct_play_ass">用原生 SSA/ASS 字幕渲染</string>
     <string name="external_player_app">外部播放器應用程式</string>
     <string name="external_player_mpv">MPV 播放器</string>
     <string name="external_player_mpv_description">一款簡單、輕量、細小且自由開源嘅影片播放器。支援多種唔同嘅媒體檔案格式。</string>
@@ -165,5 +165,5 @@
     <string name="download_location_not_set_description">要下載媒體檔案，唔該揀返用嚟儲存檔案嘅資料夾。</string>
     <string name="download_location_inaccessible">下載位置無法存取</string>
     <string name="download_location_inaccessible_description">你所揀嘅資料夾無法存取，唔該揀返第個同級或上級資料夾嚟繼續下載。</string>
-    <string name="pref_exoplayer_direct_play_ass_description">使用實驗性客戶端字幕渲染，未必每次都運作正常</string>
+    <string name="pref_exoplayer_direct_play_ass_description">喺裝置度按照字幕本身嘅樣式、位置同特效渲染 SSA/ASS 字幕，伺服器唔會再燒入畫面。只適用於直接播放：影片唔使轉碼嗰陣先會用。客戶端渲染未必還原到所有特效。</string>
 </resources>

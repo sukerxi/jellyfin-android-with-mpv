@@ -88,14 +88,15 @@ import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.SmartOrientationListener
 import org.jellyfin.mobile.utils.brightness
 import org.jellyfin.mobile.utils.extensions.aspectRational
-import org.jellyfin.mobile.utils.extensions.keepScreenOn
 import org.jellyfin.mobile.utils.extensions.isLandscape
+import org.jellyfin.mobile.utils.extensions.keepScreenOn
 import org.jellyfin.mobile.utils.extensions.lockOrientation
 import org.jellyfin.mobile.utils.isAutoRotateOn
+import org.jellyfin.mobile.utils.koinInject
 import org.jellyfin.mobile.utils.toast
 import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.MediaSegmentDto
-import org.jellyfin.mobile.utils.koinInject
+import org.jellyfin.sdk.model.api.PlayMethod
 import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.max
@@ -154,6 +155,8 @@ fun PlayerScreen(
     // 播放进度 state：media3 官方 Compose 实现，替代原先手写的 200ms while(delay) 轮询。
     // 库内部按媒体时钟调度（播放 200ms tick / 暂停 1s / 非 READY 不调度），
     // 并监听 seek、时长、播放态等事件立即重排，无需本屏维护轮询协程。
+    val isTranscoding = mediaSource?.playMethod == PlayMethod.TRANSCODE
+
     val progressState = rememberProgressStateWithTickInterval(
         player = player,
         tickIntervalMs = POSITION_TICK_INTERVAL_MS,
@@ -788,7 +791,10 @@ fun PlayerScreen(
                     useController = false
                     setBackgroundColor(android.graphics.Color.BLACK)
                     setShutterBackgroundColor(android.graphics.Color.BLACK)
-                    if (appPreferences.exoPlayerDirectPlayAss) {
+                    // Mirror the renderer setup: the subtitle view is only needed when this
+                    // playback session actually renders SSA/ASS locally, and the device profile
+                    // guarantees the server does not burn them in when that is the case.
+                    if (appPreferences.resolveExoPlayerDirectPlayAss(isVideoTranscoding = isTranscoding)) {
                         subtitleView?.addView(AssSubtitleView(viewContext, assHandler))
                     }
                     playerViewHolder[0] = this

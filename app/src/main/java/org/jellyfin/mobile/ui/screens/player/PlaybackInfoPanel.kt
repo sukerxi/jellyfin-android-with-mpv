@@ -45,6 +45,7 @@ import org.jellyfin.mobile.player.source.JellyfinMediaSource
 import org.jellyfin.mobile.player.source.RemoteJellyfinMediaSource
 import org.jellyfin.mobile.player.ui.DecoderType
 import org.jellyfin.mobile.settings.VideoPlayerType
+import org.jellyfin.sdk.model.api.PlayMethod
 import org.jellyfin.sdk.model.api.VideoRange
 import java.util.Locale
 
@@ -89,6 +90,7 @@ private data class PlaybackInfoLabels(
     val sectionSubtitle: String,
     val labelPlayMethod: String,
     val labelEngine: String,
+    val nativeAssRendering: String,
     val labelSpeed: String,
     val labelBitrateLimit: String,
     val labelContainer: String,
@@ -117,6 +119,7 @@ private fun rememberPlaybackInfoLabels(): PlaybackInfoLabels = PlaybackInfoLabel
     sectionSubtitle = stringResource(R.string.playback_info_subtitle),
     labelPlayMethod = stringResource(R.string.playback_info_label_play_method),
     labelEngine = stringResource(R.string.playback_info_label_engine),
+    nativeAssRendering = stringResource(R.string.playback_info_native_ass_rendering),
     labelSpeed = stringResource(R.string.playback_info_label_speed),
     labelBitrateLimit = stringResource(R.string.playback_info_label_bitrate_limit),
     labelContainer = stringResource(R.string.playback_info_label_container),
@@ -170,7 +173,7 @@ private fun buildPlaybackInfoModel(
     // ---- Overview ----
     val overviewRows = mutableListOf<PlaybackInfoRow>()
     overviewRows += PlaybackInfoRow(labels.labelPlayMethod, mediaSource.playMethod.toString())
-    buildEngineInfo(player, decoderType, appPreferences, labels).takeUnless(String::isBlank)?.let { engine ->
+    buildEngineInfo(player, decoderType, mediaSource, appPreferences, labels).takeUnless(String::isBlank)?.let { engine ->
         overviewRows += PlaybackInfoRow(labels.labelEngine, engine)
     }
     player?.playbackParameters?.speed
@@ -289,11 +292,10 @@ private fun buildPlaybackInfoModel(
 private fun buildEngineInfo(
     player: Player?,
     decoderType: DecoderType?,
+    mediaSource: JellyfinMediaSource,
     appPreferences: AppPreferences,
     labels: PlaybackInfoLabels,
 ): String {
-    // The player instance is authoritative: the setting can already have been changed
-    // (or be about to change) without the running player being recreated.
     val engine = when (player) {
         is MpvPlayer -> "mpv"
         is ExoPlayer -> "ExoPlayer"
@@ -310,7 +312,17 @@ private fun buildEngineInfo(
             DecoderType.SOFTWARE -> labels.softwareDecoding
         }
     }
-    return listOfNotNull(engine, decoder).joinToString(" · ")
+    // The player instance is authoritative: the setting can already have been changed
+    // (or be about to change) without the running player being recreated.
+    // SSA/ASS is only rendered locally while the video is sent verbatim: a transcoded stream
+    // already carries the burned-in subtitles, so the renderer is not involved at all.
+    val isExoPlayer = player is ExoPlayer ||
+        player == null && appPreferences.videoPlayerType == VideoPlayerType.EXO_PLAYER
+    val rendersAssNatively = isExoPlayer && appPreferences.resolveExoPlayerDirectPlayAss(
+        isVideoTranscoding = mediaSource.playMethod == PlayMethod.TRANSCODE,
+    )
+    val renderers = if (rendersAssNatively) listOf(labels.nativeAssRendering) else emptyList()
+    return (listOfNotNull(engine, decoder) + renderers).joinToString(" · ")
 }
 
 /**
