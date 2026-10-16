@@ -149,6 +149,7 @@ fun PlayerScreen(
     val mediaSource by viewModel.queueManager.currentMediaSource.observeAsState()
     val decoderType by viewModel.decoderType.observeAsState()
     val detectedDecoderType by viewModel.detectedDecoderType.observeAsState()
+    val transcodeReasons by viewModel.transcodeReasons.observeAsState()
     val chapterMarkings by viewModel.chapterMarkings.collectAsStateWithLifecycle()
     val activeSkipSegment by viewModel.activeAskToSkipSegment.collectAsStateWithLifecycle()
 
@@ -558,6 +559,7 @@ fun PlayerScreen(
         player = player,
         decoderType = effectiveDecoder,
         appPreferences = appPreferences,
+        transcodeReasons = transcodeReasons.orEmpty(),
     )
 
     val volumeTextFormat = stringResource(R.string.gesture_overlay_volume)
