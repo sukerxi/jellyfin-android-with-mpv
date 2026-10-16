@@ -157,6 +157,9 @@ class QueueManager(
         subtitleStreamIndex?.let { index -> mediaSource.selectSubtitleStream(mediaSource.subtitleStreams[index]) }
 
         _currentMediaSource.value = mediaSource
+        // Downloads are played from local files and are never transcoded, so the scope hint
+        // shown in the settings screen resets here as well.
+        appPreferences.wasLastPlaybackTranscoded = false
 
         // Load new media source
         viewModel.load(mediaSource, prepareStreams(mediaSource), playWhenReady)
@@ -198,9 +201,9 @@ class QueueManager(
 
             _currentMediaSource.value = jellyfinMediaSource
             // Remembered so the settings screen can explain why native SSA/ASS rendering is
-            // out of scope here: transcoding means the server burns the subtitles in.
-            appPreferences.exoPlayerTranscodeReasons =
-                jellyfinMediaSource.sourceInfo.transcodeReasons?.joinToString(",").orEmpty()
+            // out of scope here: transcoding means the server burns the subtitles into the
+            // video, where the client side renderer never sees a text track.
+            appPreferences.wasLastPlaybackTranscoded = jellyfinMediaSource.playMethod == PlayMethod.TRANSCODE
 
             // Load new media source
             viewModel.load(jellyfinMediaSource, prepareStreams(jellyfinMediaSource), playWhenReady)

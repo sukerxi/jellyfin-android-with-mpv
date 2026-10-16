@@ -28,7 +28,6 @@ import org.jellyfin.mobile.settings.ExternalPlayerPackage
 import org.jellyfin.mobile.settings.VideoPlayerType
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.sdk.model.api.MediaSegmentType
-import org.jellyfin.sdk.model.api.TranscodeReason
 
 /**
  * Preferences facade backed by Jetpack Preferences DataStore.
@@ -217,14 +216,15 @@ class AppPreferences(context: Context) {
         preferenceFlow(KEY_EXTERNAL_PLAYER_APP, ExternalPlayerPackage.SYSTEM_DEFAULT)
 
     /**
-     * The [TranscodeReason]s the server reported for the last playback request, as a comma
-     * separated string. Used to explain why native SSA/ASS rendering cannot take effect:
+     * Whether the last playback session had to be transcoded by the server.
+     *
+     * The settings screen uses this to explain why native SSA/ASS rendering is out of scope:
      * while transcoding, the server burns the subtitles into the video and no text track
      * reaches the client at all.
      */
-    var exoPlayerTranscodeReasons: String
-        get() = snapshot[KEY_EXOPLAYER_TRANSCODE_REASONS].orEmpty()
-        set(value) = persistValue(KEY_EXOPLAYER_TRANSCODE_REASONS, value)
+    var wasLastPlaybackTranscoded: Boolean
+        get() = snapshot[KEY_EXOPLAYER_WAS_LAST_PLAYBACK_TRANSCODED] ?: false
+        set(value) = persistValue(KEY_EXOPLAYER_WAS_LAST_PLAYBACK_TRANSCODED, value)
 
     /**
      * Resolves whether ExoPlayer should render SSA/ASS subtitles natively instead of
@@ -312,8 +312,8 @@ class AppPreferences(context: Context) {
             booleanPreferencesKey(Constants.PREF_EXOPLAYER_DOUBLE_TAP_PAUSE)
         private val KEY_EXOPLAYER_DIRECT_PLAY_ASS =
             booleanPreferencesKey(Constants.PREF_EXOPLAYER_DIRECT_PLAY_ASS)
-        private val KEY_EXOPLAYER_TRANSCODE_REASONS =
-            stringPreferencesKey(Constants.PREF_EXOPLAYER_TRANSCODE_REASONS)
+        private val KEY_EXOPLAYER_WAS_LAST_PLAYBACK_TRANSCODED =
+            booleanPreferencesKey(Constants.PREF_EXOPLAYER_WAS_LAST_PLAYBACK_TRANSCODED)
         private val KEY_EXOPLAYER_NETWORK_BUFFER =
             stringPreferencesKey(Constants.PREF_EXOPLAYER_NETWORK_BUFFER)
         private val KEY_EXTERNAL_PLAYER_APP =

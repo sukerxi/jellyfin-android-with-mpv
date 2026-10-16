@@ -258,7 +258,7 @@ fun SettingsScreen(
                     // The engine only renders SSA/ASS itself while the video is sent
                     // verbatim; once the server transcodes it burns the subtitles into the
                     // picture. Surface the dependency instead of letting it fail silently.
-                    val isTranscoding = appPreferences.exoPlayerTranscodeReasons.isNotEmpty()
+                    val isTranscoding = appPreferences.wasLastPlaybackTranscoded
                     SwitchPreferenceRow(
                         title = stringResource(R.string.pref_exoplayer_direct_play_ass),
                         summary = if (isTranscoding) {
