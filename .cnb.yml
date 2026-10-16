@@ -6,15 +6,16 @@
 #   .github/workflows/app-test.yaml        -> ci 流水线（./gradlew test）
 #   .github/workflows/app-lint.yaml        -> ci 流水线（./gradlew detekt lint；SARIF 上传为 GitHub 专有，未迁移）
 #   .github/workflows/gradlew-validate.yaml-> 依赖 GitHub 官方 Action，CNB 无等价物，未迁移
-#   .github/workflows/release.yml          -> nightly-release 流水线（master push + 「发布 Nightly」按钮）
+#   .github/workflows/release.yml          -> nightly-release 流水线（「发布 Nightly」按钮手动触发；master push 不再触发）
 #   .github/workflows/app-publish.yaml     -> release 流水线（推送 v* tag 触发）
 #   .github/workflows/repo-*.yaml          -> GitHub 机器人（triage/stale/merge-conflict），与 CNB 无关，未迁移
 #
 # 手动按钮定义见 .cnb/web_trigger.yml（在 master 分支详情页显示）。
 #
 # Nightly 发版（对应 release.yml）:
-#   触发分支：master 与 refactor/jetpack-compose（push 自动 + 分支详情页手动按钮）。
-#   每次推送：版本号 3.0.0-<提交短哈希>，自动创建唯一 tag
+#   触发方式：「发布 Nightly」按钮手动触发（master push 不再自动触发构建）。
+#   refactor/jetpack-compose 分支 push 仍会自动发版，分支详情页按钮同样可用。
+#   每次发版：版本号 3.0.0-<提交短哈希>，自动创建唯一 tag
 #   3.0.0-<CNB 构建号> 与 CNB Release，并上传 libre release APK + version.txt 作为附件。
 #
 # Release 定时清理（prune-releases 流水线）:
@@ -246,7 +247,7 @@
   # 必须用 wait: true 排队：`lock: true` 是非等待锁，锁被占用时后触发的构建会在
   # Prepare 阶段直接失败（见 cnb-k5v-1k4f86k2a）。
   # 单次构建约 3~5 分钟，等待上限设为 600s，可覆盖 1~2 个构建排队；
-  # 等待超时同样会失败，因此应避免密集连推 master（同步 GitHub 的流水线走独立锁，不受影响）。
+  # 等待超时同样会失败，因此应避免密集连推 refactor/jetpack-compose（同步 GitHub 的流水线走独立锁，不受影响）。
   lock:
     key: nightly-release
     wait: true
@@ -580,9 +581,9 @@
 
 master:
   push:
-    # 每次推送 master 自动发一个 Nightly Release（对应 release.yml）
-    - *nightly-pipeline
-    # 每次推送 master 实时同步到 GitHub 镜像仓库
+    # master push 不再触发构建：Nightly 发版改为「发布 Nightly」按钮手动触发
+    #（见下方 web_trigger_release）。
+    # 每次推送 master 实时同步到 GitHub 镜像仓库（同步不是构建，保留 push 触发）
     - *sync-github-pipeline
   # master 分支详情页「发布 Nightly」按钮（对应 release.yml 的 workflow_dispatch）
   web_trigger_release:

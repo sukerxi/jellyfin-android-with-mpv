@@ -16,6 +16,8 @@ import timber.log.Timber
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /**
  * Events emitted by [MpvCore]. Observers always run on the main thread.
@@ -284,6 +286,28 @@ class MpvCore private constructor(context: Application) {
         private val eventListeners: CopyOnWriteArrayList<(MpvEvent) -> Unit> = CopyOnWriteArrayList()
 
         /**
+         * Serial executor for every mpv IPC call (property sets and commands).
+         *
+         * All synchronous libmpv client calls (`mpv_set_property`, `mpv_command`) acquire
+         * mpv's dispatch lock: `mp_dispatch_lock` blocks the caller until mpv's core
+         * reaches a safe point - inside its dispatch loop and not running an item. While
+         * mpv is busy - opening the demuxer, filling the initial cache
+         * (`cache-pause-initial=yes`), or initializing the decoder for the first frame -
+         * the core does not reach safe points for tens to hundreds of milliseconds, so
+         * issuing IPC from the main thread stalls the UI thread exactly during the
+         * loading phase. Seeking is unaffected (during playback the core passes a safe
+         * point every frame), which is why only the loading spinner stuttered.
+         *
+         * IPC is therefore queued here instead of running on the caller's thread: a
+         * single thread keeps the relative order of the calls, and callers never wait
+         * for mpv. The hot-property cache in [setProperty] is still updated
+         * synchronously, so [MpvPlayer.getState] reports new values without waiting.
+         */
+        private val ipcExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "mpv-ipc").apply { isDaemon = true }
+        }
+
+        /**
          * Cache for the properties [MpvPlayer.getState] needs on the animation-critical main
          * thread (`pause`, `speed`, playback position, buffered position). media3's
          * [SimpleBasePlayer] requires [MpvPlayer.getState] to be a cheap, synchronous read, but a
@@ -376,14 +400,26 @@ class MpvCore private constructor(context: Application) {
             }
         }
 
+        // JNI calls into libmpv can surface arbitrary failures; on the background IPC thread
+        // they must not take the process down, so they are logged here.
+        @Suppress("TooGenericExceptionCaught")
         fun command(cmd: Array<String>) {
-            mpvLib.command(cmd)
+            // Queued to the mpv-ipc thread: the synchronous call blocks on mpv's core
+            // lock, and the main thread must not wait for that during load (see ipcExecutor).
+            ipcExecutor.execute {
+                try {
+                    mpvLib.command(cmd)
+                } catch (e: Exception) {
+                    Timber.e(e, "mpv command failed: ${cmd.joinToString(" ")}")
+                }
+            }
         }
 
         fun setOptions(name: String, value: String) {
             mpvLib.setOptionString(name, value)
         }
 
+        @Suppress("TooGenericExceptionCaught")
         fun setProperty(name: String, value: Any) {
             // Keep the hot-property cache in sync for values the app sets itself, so a getState()
             // right after (media3 does one per command) already reports the new value instead of
@@ -392,15 +428,24 @@ class MpvCore private constructor(context: Application) {
                 "pause" -> if (value is Boolean) cachedPause = value
                 "speed" -> if (value is Double) cachedSpeed = value
             }
-            val mpv = mpvLib
-            when (value) {
-                is String -> mpv.setPropertyString(name, value)
-                is Int -> mpv.setPropertyInt(name, value)
-                is Double -> mpv.setPropertyDouble(name, value)
-                is Boolean -> mpv.setPropertyBoolean(name, value)
-                is Float -> mpv.setPropertyDouble(name, value.toDouble())
-                is Long -> mpv.setPropertyInt(name, value.toInt())
-                else -> throw IllegalArgumentException("Unsupported property type: ${value::class}")
+            // The IPC itself runs on the mpv-ipc thread (see ipcExecutor): setting a property
+            // blocks until mpv's core reaches a safe point, and during the initial load that
+            // stalled the UI thread long enough to stutter the loading spinner.
+            ipcExecutor.execute {
+                try {
+                    val mpv = mpvLib
+                    when (value) {
+                        is String -> mpv.setPropertyString(name, value)
+                        is Int -> mpv.setPropertyInt(name, value)
+                        is Double -> mpv.setPropertyDouble(name, value)
+                        is Boolean -> mpv.setPropertyBoolean(name, value)
+                        is Float -> mpv.setPropertyDouble(name, value.toDouble())
+                        is Long -> mpv.setPropertyInt(name, value.toInt())
+                        else -> throw IllegalArgumentException("Unsupported property type: ${value::class}")
+                    }
+                } catch (e: Exception) {
+                    Timber.e(e, "mpv setProperty failed: $name = $value")
+                }
             }
         }
 
