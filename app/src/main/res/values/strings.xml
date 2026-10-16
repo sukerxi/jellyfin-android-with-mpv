@@ -163,7 +163,6 @@
     <string name="pref_exoplayer_double_tap_pause_summary">Double-tapping anywhere on the video toggles play/pause instead of seeking forward/backward</string>
     <string name="pref_exoplayer_direct_play_ass">Native SSA/ASS subtitle rendering</string>
     <string name="pref_exoplayer_direct_play_ass_description">Render SSA/ASS subtitles on the device with their original styling, positioning and effects, instead of asking the server to burn them into the video. Direct play only: this applies when the video does not need transcoding. Client-side rendering may not reproduce every effect.</string>
-    <string name="pref_exoplayer_direct_play_ass_unavailable_transcoding">Not in use: the video is being transcoded and the server burns the subtitles into the picture</string>
     <string name="playback_info_native_ass_rendering">SSA/ASS on device</string>
     <string name="pref_mpv_custom_config">MPV custom configuration</string>
     <string name="pref_mpv_custom_config_summary_empty">Not configured, mpv defaults are used</string>

@@ -110,7 +110,6 @@
     <string name="menu_item_software_decoding">軟體解碼</string>
     <string name="pref_exoplayer_direct_play_ass">使用原生 SSA/ASS 字幕算繪</string>
     <string name="playback_info_native_ass_rendering">裝置端算繪 SSA/ASS</string>
-    <string name="pref_exoplayer_direct_play_ass_unavailable_transcoding">目前未啟用：影片正在轉碼，字幕由伺服器燒錄進畫面</string>
     <string name="pref_exoplayer_direct_play_ass_description">在裝置端依字幕本身的樣式、位置與特效算繪 SSA/ASS 字幕，伺服器不再將其燒錄進畫面。僅對直接播放生效：影片無需轉碼時才會採用此方式。用戶端算繪未必能完整呈現所有特效。</string>
     <string name="pref_subtitle_style">自定義字幕樣式</string>
     <string name="pref_subtitle_style_summary">您可以在Android設定中更改字幕樣式</string>

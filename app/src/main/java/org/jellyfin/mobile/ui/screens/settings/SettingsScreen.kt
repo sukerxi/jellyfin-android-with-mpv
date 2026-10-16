@@ -255,19 +255,14 @@ fun SettingsScreen(
 
             when (playerType) {
                 VideoPlayerType.EXO_PLAYER -> {
-                    // The engine only renders SSA/ASS itself while the video is sent
-                    // verbatim; once the server transcodes it burns the subtitles into the
-                    // picture. Surface the dependency instead of letting it fail silently.
-                    val isTranscoding = appPreferences.wasLastPlaybackTranscoded
+                    // The preference is only ever changed from the settings screen - never
+                    // while a video is playing - so there is nothing to gate here: a session
+                    // that ends up transcoding simply does not use the renderer
+                    // (see AppPreferences.resolveExoPlayerDirectPlayAss).
                     SwitchPreferenceRow(
                         title = stringResource(R.string.pref_exoplayer_direct_play_ass),
-                        summary = if (isTranscoding) {
-                            stringResource(R.string.pref_exoplayer_direct_play_ass_unavailable_transcoding)
-                        } else {
-                            stringResource(R.string.pref_exoplayer_direct_play_ass_description)
-                        },
+                        summary = stringResource(R.string.pref_exoplayer_direct_play_ass_description),
                         checked = directPlayAss,
-                        enabled = !isTranscoding,
                         onCheckedChange = { appPreferences.exoPlayerDirectPlayAss = it },
                     )
                     val networkBufferOptions = listOf(

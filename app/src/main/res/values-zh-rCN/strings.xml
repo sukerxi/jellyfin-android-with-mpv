@@ -216,7 +216,6 @@
     <string name="download_location_inaccessible">无法访问下载地址</string>
     <string name="download_location_inaccessible_description">当前选择的下载位置已无法访问。请选择其他文件夹以继续下载。</string>
     <string name="playback_info_native_ass_rendering">设备端渲染 SSA/ASS</string>
-    <string name="pref_exoplayer_direct_play_ass_unavailable_transcoding">当前未启用：视频正在转码，字幕由服务端烧录进画面</string>
     <string name="pref_exoplayer_direct_play_ass_description">在设备端按字幕自身的样式、位置与特效渲染 SSA/ASS 字幕，服务端不再将其烧录进画面。仅对直接播放生效：视频无需转码时才会使用该方式。客户端渲染未必能完全还原所有特效。</string>
 
     <!-- 应用更新 -->

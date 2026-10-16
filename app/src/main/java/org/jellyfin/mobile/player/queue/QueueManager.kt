@@ -11,7 +11,6 @@ import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.data.dao.DownloadDao
 import org.jellyfin.mobile.downloads.DownloadFileType
 import org.jellyfin.mobile.player.PlayerException
@@ -57,7 +56,6 @@ class QueueManager(
     private val mediaSourceResolver: MediaSourceResolver by inject()
     private val deviceProfileBuilder: DeviceProfileBuilder by inject()
     private val downloadDao: DownloadDao by inject()
-    private val appPreferences: AppPreferences by inject()
     private val deviceProfile = deviceProfileBuilder.getDeviceProfile()
 
     private var currentQueue: List<UUID> = emptyList()
@@ -157,9 +155,6 @@ class QueueManager(
         subtitleStreamIndex?.let { index -> mediaSource.selectSubtitleStream(mediaSource.subtitleStreams[index]) }
 
         _currentMediaSource.value = mediaSource
-        // Downloads are played from local files and are never transcoded, so the scope hint
-        // shown in the settings screen resets here as well.
-        appPreferences.wasLastPlaybackTranscoded = false
 
         // Load new media source
         viewModel.load(mediaSource, prepareStreams(mediaSource), playWhenReady)
@@ -200,10 +195,6 @@ class QueueManager(
             }
 
             _currentMediaSource.value = jellyfinMediaSource
-            // Remembered so the settings screen can explain why native SSA/ASS rendering is
-            // out of scope here: transcoding means the server burns the subtitles into the
-            // video, where the client side renderer never sees a text track.
-            appPreferences.wasLastPlaybackTranscoded = jellyfinMediaSource.playMethod == PlayMethod.TRANSCODE
 
             // Load new media source
             viewModel.load(jellyfinMediaSource, prepareStreams(jellyfinMediaSource), playWhenReady)
