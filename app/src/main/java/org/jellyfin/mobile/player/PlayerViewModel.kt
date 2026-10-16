@@ -78,6 +78,7 @@ import org.jellyfin.sdk.api.client.exception.ApiClientException
 import org.jellyfin.sdk.api.client.extensions.displayPreferencesApi
 import org.jellyfin.sdk.api.client.extensions.hlsSegmentApi
 import org.jellyfin.sdk.api.client.extensions.playStateApi
+import org.jellyfin.sdk.api.client.extensions.sessionApi
 import org.jellyfin.sdk.api.client.extensions.userApi
 import org.jellyfin.sdk.api.operations.DisplayPreferencesApi
 import org.jellyfin.sdk.api.operations.HlsSegmentApi
@@ -91,6 +92,7 @@ import org.jellyfin.sdk.model.api.PlaybackProgressInfo
 import org.jellyfin.sdk.model.api.PlaybackStartInfo
 import org.jellyfin.sdk.model.api.PlaybackStopInfo
 import org.jellyfin.sdk.model.api.RepeatMode
+import org.jellyfin.sdk.model.api.TranscodeReason
 import org.jellyfin.sdk.model.extensions.inWholeTicks
 import org.jellyfin.sdk.model.extensions.ticks
 import org.koin.core.component.KoinComponent
@@ -122,6 +124,17 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     val mediaSourceOrNull: JellyfinMediaSource?
         get() = queueManager.getCurrentMediaSourceOrNull()
     private val mediaSegmentRepository: MediaSegmentRepository by inject()
+
+    /**
+     * Why the current session is transcoding, for the playback info panel.
+     *
+     * The server only ever exposes this on [org.jellyfin.sdk.model.api.TranscodingInfo], which it
+     * attaches to [org.jellyfin.sdk.model.api.SessionInfoDto] once a job is running - the playback
+     * info response carries no reasons at all (the SDK's `MediaSourceInfo` has no such member).
+     * So the panel's data comes from polling this device's own session.
+     */
+    private val _transcodeReasons = MutableLiveData<List<TranscodeReason>>(emptyList())
+    val transcodeReasons: LiveData<List<TranscodeReason>> get() = _transcodeReasons
 
     // ExoPlayer
     private val _player = MutableLiveData<Player?>()
@@ -359,6 +372,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
 
         player.playWhenReady = playWhenReady
 
+        publishTranscodeReasons(jellyfinMediaSource)
+
         mediaSession.setMetadata(jellyfinMediaSource.toMediaMetadata())
 
         if (jellyfinMediaSource is RemoteJellyfinMediaSource) {
@@ -380,6 +395,55 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
 
 
         player.playWhenReady = playWhenReady
+    }
+
+    /**
+     * Publishes the reasons the current media source is transcoded, if it is.
+     *
+     * Polls this device's session until the server reports the reasons: a fresh job is not
+     * registered yet, and the reasons only appear once encoding has started. Stops early when the
+     * media source is replaced, so a stale lookup can never overwrite a newer one.
+     */
+    private fun publishTranscodeReasons(mediaSource: JellyfinMediaSource) {
+        if (mediaSource.playMethod != PlayMethod.TRANSCODE) {
+            _transcodeReasons.value = emptyList()
+            return
+        }
+
+        _transcodeReasons.value = emptyList()
+        viewModelScope.launch {
+            repeat(TRANSCODE_REASON_LOOKUP_ATTEMPTS) { attempt ->
+                val reasons = querySessionTranscodeReasons()
+                // A newer load may have replaced the source while this ran.
+                if (mediaSourceOrNull !== mediaSource) return@launch
+                if (!reasons.isNullOrEmpty()) {
+                    _transcodeReasons.value = reasons
+                    return@launch
+                }
+                if (attempt < TRANSCODE_REASON_LOOKUP_ATTEMPTS - 1) {
+                    delay(TRANSCODE_REASON_LOOKUP_DELAY_MS)
+                    if (mediaSourceOrNull !== mediaSource) return@launch
+                }
+            }
+        }
+    }
+
+    /**
+     * Reads the transcode reasons of this device's session, or null when the server does not
+     * report any (job not registered yet, an older server, or a request failure).
+     */
+    private suspend fun querySessionTranscodeReasons(): List<TranscodeReason>? = withContext(Dispatchers.IO) {
+        try {
+            apiClient.sessionApi
+                .getSessions(deviceId = apiClient.deviceInfo.id)
+                .content
+                .firstNotNullOfOrNull { session ->
+                    session.transcodingInfo?.transcodeReasons?.takeUnless { it.isEmpty() }
+                }
+        } catch (e: ApiClientException) {
+            Timber.e(e, "Failed to load transcode reasons from the server")
+            null
+        }
     }
 
     private fun startProgressUpdates() {
@@ -950,5 +1014,11 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
 
     fun setPlayerMenuHelper(menuHelper: PlayerMenuHelper) {
         playerMenuHelper = menuHelper
+    }
+
+    private companion object {
+        /** How often the session list is polled while waiting for a job's transcode reasons. */
+        private const val TRANSCODE_REASON_LOOKUP_ATTEMPTS = 5
+        private const val TRANSCODE_REASON_LOOKUP_DELAY_MS = 1_000L
     }
 }

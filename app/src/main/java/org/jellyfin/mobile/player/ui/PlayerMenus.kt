@@ -31,11 +31,12 @@ import org.jellyfin.mobile.R
 import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.databinding.ExoPlayerControlViewBinding
 import org.jellyfin.mobile.databinding.FragmentPlayerBinding
+import org.jellyfin.mobile.player.mpv.MpvPlayer
 import org.jellyfin.mobile.player.qualityoptions.QualityOptionsProvider
 import org.jellyfin.mobile.player.source.JellyfinMediaSource
 import org.jellyfin.mobile.player.source.LocalJellyfinMediaSource
 import org.jellyfin.mobile.player.source.RemoteJellyfinMediaSource
-import org.jellyfin.mobile.player.mpv.MpvPlayer
+import org.jellyfin.mobile.player.source.TranscodeReasonFormatter
 import org.jellyfin.mobile.player.ui.playermenuhelper.PlayerMenuHelper
 import org.jellyfin.mobile.player.ui.playermenuhelper.SkipMediaSegmentButton
 import org.jellyfin.mobile.settings.VideoPlayerType
@@ -43,6 +44,8 @@ import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.ChapterInfo
 import org.jellyfin.sdk.model.api.MediaStream
+import org.jellyfin.sdk.model.api.PlayMethod
+import org.jellyfin.sdk.model.api.TranscodeReason
 import org.jellyfin.sdk.model.api.VideoRange
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
@@ -99,6 +102,13 @@ class PlayerMenus(
     private var subtitlesEnabled = false
     private var currentMediaSource: JellyfinMediaSource? = null
     private var decoderType: DecoderType? = null
+
+    /**
+     * Reasons the current session transcodes, as resolved by the view model. Kept separate from
+     * [currentMediaSource] because a running job reports them through the server's session list,
+     * which is polled after the media source has already been handed over.
+     */
+    private var transcodeReasons: List<TranscodeReason> = emptyList()
 
     private var episodeAdapter: EpisodeAdapter? = null
     private var episodePickerLoaded = false
@@ -305,6 +315,7 @@ class PlayerMenus(
                 )
             }
         }
+        appendTranscodeReasonsRow(mediaSource)
 
         // ---- Container / file ----
         val sourceInfo = mediaSource.sourceInfo
@@ -408,6 +419,27 @@ class PlayerMenus(
                 sections.appendInfoRow(R.string.playback_info_label_track, title)
             }
         }
+    }
+
+    /**
+     * Append the "why is this transcoding" row to the overview section.
+     *
+     * Only transcoded sessions get a row: for direct play and direct stream the question does not
+     * arise. A transcoding session whose reasons are still unknown says so explicitly, which is
+     * more useful than leaving the user to wonder whether the panel is simply incomplete.
+     */
+    private fun LinearLayout.appendTranscodeReasonsRow(mediaSource: JellyfinMediaSource) {
+        if (mediaSource.playMethod != PlayMethod.TRANSCODE) return
+
+        val value = if (transcodeReasons.isEmpty()) {
+            context.getString(R.string.playback_info_transcode_reason_unknown)
+        } else {
+            transcodeReasons
+                .map { reason -> TranscodeReasonFormatter.format(context, reason) }
+                .distinct()
+                .joinToString("\n")
+        }
+        appendInfoRow(R.string.playback_info_label_transcode_reason, value)
     }
 
     /**
@@ -677,6 +709,11 @@ class PlayerMenus(
             true
         }
         setOnDismissListener(this@PlayerMenus)
+    }
+
+    fun onTranscodeReasonsChanged(reasons: List<TranscodeReason>) {
+        transcodeReasons = reasons
+        if (playbackInfoContainer.isVisible) rebuildPlaybackInfo()
     }
 
     fun updatedSelectedDecoder(type: DecoderType) {
