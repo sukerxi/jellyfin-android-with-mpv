@@ -137,7 +137,7 @@
     <string name="mpv_config_editor_invalid_line">第 %1$d 行语法无效：每行应为“选项=值”，以 # 开头的行为注释。</string>
     <string name="mpv_config_editor_saved">已保存，重启应用后生效。</string>
     <string name="playback_info_stream_unknown_title">未知标题</string>
-    <string name="pref_exoplayer_direct_play_ass">允许直接播放 SSA/ASS字幕</string>
+    <string name="pref_exoplayer_direct_play_ass">使用原生 SSA/ASS 字幕渲染</string>
     <string name="menu_item_auto">自动</string>
     <string name="pref_exoplayer_start_landscape_video_in_landscape">以横向启动横向模式视频</string>
     <string name="player_error_unspecific_exception">播放器出了点问题</string>
@@ -215,7 +215,9 @@
     <string name="download_location_not_set_description">如需下载媒体，请选择用于存储媒体文件的文件夹。</string>
     <string name="download_location_inaccessible">无法访问下载地址</string>
     <string name="download_location_inaccessible_description">当前选择的下载位置已无法访问。请选择其他文件夹以继续下载。</string>
-    <string name="pref_exoplayer_direct_play_ass_description">使用实验性的客户端字幕渲染，可能并非始终有效</string>
+    <string name="playback_info_native_ass_rendering">设备端渲染 SSA/ASS</string>
+    <string name="pref_exoplayer_direct_play_ass_unavailable_transcoding">当前未启用：视频正在转码，字幕由服务端烧录进画面</string>
+    <string name="pref_exoplayer_direct_play_ass_description">在设备端按字幕自身的样式、位置与特效渲染 SSA/ASS 字幕，服务端不再将其烧录进画面。仅对直接播放生效：视频无需转码时才会使用该方式。客户端渲染未必能完全还原所有特效。</string>
 
     <!-- 应用更新 -->
     <string name="pref_category_update">更新</string>

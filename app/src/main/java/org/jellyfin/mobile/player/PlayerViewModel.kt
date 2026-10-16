@@ -337,6 +337,19 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         else -> DefaultLoadControl()
     }
 
+    /**
+     * Whether the ExoPlayer based engine renders SSA/ASS subtitles itself instead of
+     * letting the server burn them into the video stream.
+     *
+     * Only the local render path is affected: when the server transcodes, subtitles are
+     * already part of the video frames ([C.TRACK_TYPE_TEXT] is unused), so the renderer
+     * configuration is irrelevant there.
+     */
+    private val isAssSubtitleRenderingEnabled: Boolean
+        get() = appPreferences.resolveExoPlayerDirectPlayAss(
+            isVideoTranscoding = mediaSourceOrNull?.playMethod == PlayMethod.TRANSCODE,
+        )
+
     private fun buildRenderersFactory(preferExtensionRenderers: Boolean): RenderersFactory {
         val application: Application = getApplication()
         val defaultFactory = DefaultRenderersFactory(application).apply {
@@ -377,7 +390,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         // AssRenderersFactory wraps the default factory with libass support; it only
         // implements RenderersFactory (there is no context-taking constructor), so the
         // handler is passed explicitly here rather than resolved again per playback.
-        return if (appPreferences.exoPlayerDirectPlayAss) {
+        // Without it the text renderer falls back to media3's own SSA parser, which
+        // drops every style/position tag and shows plain text only.
+        return if (isAssSubtitleRenderingEnabled) {
             AssRenderersFactory(get<AssHandler>(), defaultFactory)
         } else {
             defaultFactory
@@ -396,7 +411,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
             .setHandleAudioBecomingNoisy(true)
             .build()
         player.applyDefaultAudioAttributes(C.AUDIO_CONTENT_TYPE_MOVIE)
-        if (appPreferences.exoPlayerDirectPlayAss) get<AssHandler>().init(player)
+        if (isAssSubtitleRenderingEnabled) get<AssHandler>().init(player)
         return player
     }
 

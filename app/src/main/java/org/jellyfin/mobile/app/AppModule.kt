@@ -175,6 +175,11 @@ val applicationModule = module {
         }
 
         val appPreferences: AppPreferences = get()
+        // Same scope as the device profile: announcing SSA/ASS support to the server is what
+        // keeps the subtitles out of the video stream, and this parser only ever sees such a
+        // track while the server sends it verbatim. The factory is built once, before the play
+        // method of a request is known, so the preference alone decides here - a transcoded
+        // request simply contains no ASS track for the parser to pick up.
         if (appPreferences.exoPlayerDirectPlayAss) {
             val assHandler: AssHandler = get()
             val assSubtitleParserFactory = AssSubtitleParserFactory(assHandler)

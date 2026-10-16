@@ -164,7 +164,7 @@ class DeviceProfileBuilder(
             appPreferences.videoPlayerType== VideoPlayerType.MPV_PLAYER->{
                 getSubtitleProfiles(MPV_EMBEDDED_SUBTITLES, MPV_EXTERNAL_SUBTITLES)
             }
-            appPreferences.exoPlayerDirectPlayAss -> {
+            appPreferences.resolveExoPlayerDirectPlayAss(isVideoTranscoding = false) -> {
                 getSubtitleProfiles(EXO_EMBEDDED_SUBTITLES + SUBTITLES_SSA, EXO_EXTERNAL_SUBTITLES + SUBTITLES_SSA)
             }
             else -> getSubtitleProfiles(EXO_EMBEDDED_SUBTITLES, EXO_EXTERNAL_SUBTITLES)
