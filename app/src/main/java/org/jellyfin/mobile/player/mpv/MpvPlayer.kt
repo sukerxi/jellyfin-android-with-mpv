@@ -132,7 +132,18 @@ class MpvPlayer(
                 durationMs = readDurationMs()
                 applyAudioTrack()
                 applySubtitleTrack()
-                playbackState = STATE_READY
+                // ExoPlayer semantics: STATE_READY means "able to immediately play from the
+                // current position", not "the file was opened". FILE_LOADED only reports that
+                // the demuxer is open - with cache-pause-initial=yes the initial cache fill
+                // still has to complete before playback can start, and the paused-for-cache
+                // event arriving afterwards used to flip the state back to BUFFERING. That
+                // BUFFERING -> READY -> BUFFERING flicker disposed and recreated the loading
+                // indicator (restarting its spin) on every load. Staying in BUFFERING here
+                // collapses the whole initial fill into a single transition to READY, exactly
+                // like media3's load control reports READY only once enough is buffered.
+                // A prepared player that is not asked to play is STATE_READY in media3 as
+                // well, hence the pause check.
+                if (MpvCore.pause) playbackState = STATE_READY
             }
             MpvEvent.EndFile -> {
                 if (!loadingNewFile) {
@@ -170,6 +181,10 @@ class MpvPlayer(
                 }
             }
             MpvEvent.Seek -> playbackState = STATE_BUFFERING
+            // paused-for-cache is mpv's genuine "cannot proceed right now" signal - both the
+            // initial fill (cache-pause-initial=yes) and rebuffering during playback. It is
+            // the ExoPlayer-equivalent of the load control dropping back to STATE_BUFFERING,
+            // and unlike the old FILE_LOADED-based READY it does not flicker.
             is MpvEvent.Caching ->
                 playbackState = if (event.isCaching) STATE_BUFFERING else STATE_READY
             is MpvEvent.EofReached -> {

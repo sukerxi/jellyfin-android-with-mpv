@@ -115,10 +115,11 @@ private const val SEEK_UI_SETTLE_TIMEOUT_MS = 1000L
 /**
  * 加载指示器隐藏延迟（毫秒）。
  *
- * mpv 加载网络视频时播放态会在 BUFFERING -> READY -> BUFFERING 之间抖动（FILE_LOADED
- * 先于初始缓存填充到达，随后 Caching 事件再翻回缓冲态）。若状态一跳变就销毁/重建指示器，
- * 不确定态进度条的旋转动画每次都会从 0° 重启，视觉上就是 Spinner 反复跳回起点的卡顿。
- * READY 稳定这段时间之后才隐藏指示器，抖动期间它保持挂载，旋转不中断。
+ * mpv 的状态机已按 ExoPlayer 语义修复（READY = 「现在就能播」，初始缓存填充期间保持
+ * BUFFERING，见 MpvPlayer 的 FileLoaded 处理），正常情况下加载期间不再有状态抖动。
+ * 这里保留一层滞回作为兜底：万一某条路径仍出现短暂的 READY 闪烁（如网络抖动导致
+ * paused-for-cache 快速翻转），指示器保持挂载、旋转不中断——不确定态进度条一旦被
+ * 销毁重建，旋转就会从 0° 重启，视觉上即是卡顿。
  */
 private const val LOADING_INDICATOR_HIDE_DELAY_MS = 400L
 
@@ -168,9 +169,9 @@ fun PlayerScreen(
     // 并监听 seek、时长、播放态等事件立即重排，无需本屏维护轮询协程。
     val isTranscoding = mediaSource?.playMethod == PlayMethod.TRANSCODE
 
-    // 加载指示器滞回：mpv 初始加载期间播放态会短暂抖回 READY（见
-    // LOADING_INDICATOR_HIDE_DELAY_MS 注释），直接按状态切换会反复销毁/重建指示器、
-    // 每次旋转都从 0° 重启。这里等 READY 稳定后再隐藏，抖动期间指示器保持挂载。
+    // 加载指示器滞回：mpv 状态机已按 ExoPlayer 语义修复（初始缓存填充期间保持
+    // BUFFERING，见 MpvPlayer 的 FileLoaded 处理），此处保留 400ms 兜底——状态若仍有
+    // 短暂闪烁，等 READY 稳定后再隐藏，避免指示器被反复销毁/重建导致旋转重启。
     val isBuffering = playerState == Player.STATE_BUFFERING
     var showLoadingIndicator by remember { mutableStateOf(false) }
     LaunchedEffect(isBuffering) {
@@ -878,12 +879,10 @@ fun PlayerScreen(
             // this size and deliberately polished: 6dp stroke, 24%-alpha track, rounded caps.
             //
             // Visibility is driven by the hysteretic showLoadingIndicator above, NOT by the
-            // raw buffering state: while mpv loads, the reported playback state flickers
-            // (BUFFERING -> READY -> BUFFERING: FILE_LOADED lands before the initial cache
-            // fill completes), and every flick used to dispose and recreate the indicator -
-            // a recreated indeterminate spinner restarts its rotation from 0°, which is
-            // exactly what made it stutter. With the indicator staying mounted across the
-            // flicks, the spin runs continuously.
+            // raw buffering state: mpv's state machine now follows ExoPlayer semantics (READY
+            // only once playback can actually proceed), and the hysteresis below absorbs any
+            // residual flicker - disposing and recreating the indicator restarts its rotation
+            // from 0°, which is exactly what made it stutter.
             if (showLoadingIndicator) {
                 val indicatorColor = MaterialTheme.colorScheme.primary
                 CircularProgressIndicator(
