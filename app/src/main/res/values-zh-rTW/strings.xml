@@ -175,4 +175,34 @@
     <string name="update_download_failed_notification_text">點選重試</string>
     <string name="update_install_permission_title">允許安裝應用程式？</string>
     <string name="update_install_permission_message">為了安裝已下載的更新，請允許此應用程式安裝未知來源的應用程式。</string>
+    <!-- 转码原因：播放信息面板在转码时用它回答「为什么转码」 -->
+    <string name="playback_info_label_transcode_reason">轉碼原因</string>
+    <string name="playback_info_transcode_reason_unknown">伺服器未提供</string>
+    <string name="transcode_reason_container">封裝格式不受支援</string>
+    <string name="transcode_reason_video_codec">視訊編碼不受支援</string>
+    <string name="transcode_reason_audio_codec">音訊編碼不受支援</string>
+    <string name="transcode_reason_subtitle_codec">字幕編碼不受支援</string>
+    <string name="transcode_reason_audio_external">音軌為外掛</string>
+    <string name="transcode_reason_secondary_audio">不支援次要音軌</string>
+    <string name="transcode_reason_video_profile">視訊 Profile 不受支援</string>
+    <string name="transcode_reason_video_level">視訊 Level 不受支援</string>
+    <string name="transcode_reason_video_resolution">視訊解析度不受支援</string>
+    <string name="transcode_reason_video_bit_depth">視訊位元深度不受支援</string>
+    <string name="transcode_reason_video_framerate">視訊影格率不受支援</string>
+    <string name="transcode_reason_ref_frames">參考影格數量不受支援</string>
+    <string name="transcode_reason_anamorphic">不支援變形寬銀幕視訊</string>
+    <string name="transcode_reason_interlaced">不支援交錯視訊</string>
+    <string name="transcode_reason_audio_channels">音訊聲道數不受支援</string>
+    <string name="transcode_reason_audio_profile">音訊 Profile 不受支援</string>
+    <string name="transcode_reason_audio_sample_rate">音訊取樣率不受支援</string>
+    <string name="transcode_reason_audio_bit_depth">音訊位元深度不受支援</string>
+    <string name="transcode_reason_bitrate_exceeds_limit">位元率超出上限</string>
+    <string name="transcode_reason_video_bitrate">視訊位元率不受支援</string>
+    <string name="transcode_reason_audio_bitrate">音訊位元率不受支援</string>
+    <string name="transcode_reason_unknown_video">視訊串流資訊未知</string>
+    <string name="transcode_reason_unknown_audio">音訊串流資訊未知</string>
+    <string name="transcode_reason_direct_play_error">直接播放失敗</string>
+    <string name="transcode_reason_video_range">視訊動態範圍類型不受支援</string>
+    <string name="transcode_reason_video_codec_tag">視訊編碼標籤不受支援</string>
+    <string name="transcode_reason_stream_count">串流數量超出上限</string>
 </resources>

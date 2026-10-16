@@ -43,9 +43,11 @@ import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.player.mpv.MpvPlayer
 import org.jellyfin.mobile.player.source.JellyfinMediaSource
 import org.jellyfin.mobile.player.source.RemoteJellyfinMediaSource
+import org.jellyfin.mobile.player.source.TranscodeReasonFormatter
 import org.jellyfin.mobile.player.ui.DecoderType
 import org.jellyfin.mobile.settings.VideoPlayerType
 import org.jellyfin.sdk.model.api.PlayMethod
+import org.jellyfin.sdk.model.api.TranscodeReason
 import org.jellyfin.sdk.model.api.VideoRange
 import java.util.Locale
 
@@ -90,6 +92,10 @@ private data class PlaybackInfoLabels(
     val sectionSubtitle: String,
     val labelPlayMethod: String,
     val labelEngine: String,
+    val labelTranscodeReason: String,
+    val transcodeReasonUnknown: String,
+    /** Localized text per known [TranscodeReason]; resolved here because it needs the resources. */
+    val transcodeReasonTexts: Map<TranscodeReason, String>,
     val nativeAssRendering: String,
     val labelSpeed: String,
     val labelBitrateLimit: String,
@@ -119,6 +125,13 @@ private fun rememberPlaybackInfoLabels(): PlaybackInfoLabels = PlaybackInfoLabel
     sectionSubtitle = stringResource(R.string.playback_info_subtitle),
     labelPlayMethod = stringResource(R.string.playback_info_label_play_method),
     labelEngine = stringResource(R.string.playback_info_label_engine),
+    labelTranscodeReason = stringResource(R.string.playback_info_label_transcode_reason),
+    transcodeReasonUnknown = stringResource(R.string.playback_info_transcode_reason_unknown),
+    transcodeReasonTexts = buildMap {
+        TranscodeReason.entries.forEach { reason ->
+            TranscodeReasonFormatter.labelResOrNull(reason)?.let { res -> put(reason, stringResource(res)) }
+        }
+    },
     nativeAssRendering = stringResource(R.string.playback_info_native_ass_rendering),
     labelSpeed = stringResource(R.string.playback_info_label_speed),
     labelBitrateLimit = stringResource(R.string.playback_info_label_bitrate_limit),
@@ -148,13 +161,14 @@ fun rememberPlaybackInfoModel(
     player: Player?,
     decoderType: DecoderType?,
     appPreferences: AppPreferences,
+    transcodeReasons: List<TranscodeReason> = emptyList(),
 ): PlaybackInfoModel {
     val labels = rememberPlaybackInfoLabels()
-    return remember(mediaSource, player, decoderType, labels) {
+    return remember(mediaSource, player, decoderType, labels, transcodeReasons) {
         if (mediaSource == null) {
             PlaybackInfoModel(itemName = null, sections = emptyList())
         } else {
-            buildPlaybackInfoModel(mediaSource, player, decoderType, appPreferences, labels)
+            buildPlaybackInfoModel(mediaSource, player, decoderType, appPreferences, labels, transcodeReasons)
         }
     }
 }
@@ -166,6 +180,7 @@ private fun buildPlaybackInfoModel(
     decoderType: DecoderType?,
     appPreferences: AppPreferences,
     labels: PlaybackInfoLabels,
+    transcodeReasons: List<TranscodeReason>,
 ): PlaybackInfoModel {
     val sections = mutableListOf<PlaybackInfoSection>()
     val itemName = mediaSource.item?.name?.takeUnless(String::isBlank)
@@ -185,6 +200,15 @@ private fun buildPlaybackInfoModel(
         mediaSource.maxStreamingBitrate?.let { bitrate ->
             overviewRows += PlaybackInfoRow(labels.labelBitrateLimit, formatBitrate(bitrate.toDouble()))
         }
+    }
+    // Only a transcoding session has a reason to explain. An unknown reason is stated explicitly
+    // rather than hidden: the user asked the panel why, and silence would look like it forgot.
+    if (mediaSource.playMethod == PlayMethod.TRANSCODE) {
+        val value = transcodeReasons
+            .distinct()
+            .joinToString("\n") { reason -> labels.transcodeReasonTexts[reason] ?: reason.serialName }
+            .ifEmpty { labels.transcodeReasonUnknown }
+        overviewRows += PlaybackInfoRow(labels.labelTranscodeReason, value)
     }
     sections += PlaybackInfoSection(title = labels.sectionOverview, rows = overviewRows)
 

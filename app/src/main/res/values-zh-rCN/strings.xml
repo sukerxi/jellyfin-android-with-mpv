@@ -257,4 +257,34 @@
     <string name="update_download_failed_notification_text">点击重试</string>
     <string name="update_install_permission_title">允许安装应用？</string>
     <string name="update_install_permission_message">为了安装已下载的更新，请允许本应用安装未知来源的应用。</string>
+    <!-- 转码原因：播放信息面板在转码时用它回答「为什么转码」 -->
+    <string name="playback_info_label_transcode_reason">转码原因</string>
+    <string name="playback_info_transcode_reason_unknown">服务端未提供</string>
+    <string name="transcode_reason_container">封装格式不受支持</string>
+    <string name="transcode_reason_video_codec">视频编码不受支持</string>
+    <string name="transcode_reason_audio_codec">音频编码不受支持</string>
+    <string name="transcode_reason_subtitle_codec">字幕编码不受支持</string>
+    <string name="transcode_reason_audio_external">音频轨为外挂</string>
+    <string name="transcode_reason_secondary_audio">不支持次要音轨</string>
+    <string name="transcode_reason_video_profile">视频 Profile 不受支持</string>
+    <string name="transcode_reason_video_level">视频 Level 不受支持</string>
+    <string name="transcode_reason_video_resolution">视频分辨率不受支持</string>
+    <string name="transcode_reason_video_bit_depth">视频位深不受支持</string>
+    <string name="transcode_reason_video_framerate">视频帧率不受支持</string>
+    <string name="transcode_reason_ref_frames">参考帧数量不受支持</string>
+    <string name="transcode_reason_anamorphic">不支持变形宽银幕视频</string>
+    <string name="transcode_reason_interlaced">不支持隔行视频</string>
+    <string name="transcode_reason_audio_channels">音频声道数不受支持</string>
+    <string name="transcode_reason_audio_profile">音频 Profile 不受支持</string>
+    <string name="transcode_reason_audio_sample_rate">音频采样率不受支持</string>
+    <string name="transcode_reason_audio_bit_depth">音频位深不受支持</string>
+    <string name="transcode_reason_bitrate_exceeds_limit">码率超出上限</string>
+    <string name="transcode_reason_video_bitrate">视频码率不受支持</string>
+    <string name="transcode_reason_audio_bitrate">音频码率不受支持</string>
+    <string name="transcode_reason_unknown_video">视频流信息未知</string>
+    <string name="transcode_reason_unknown_audio">音频流信息未知</string>
+    <string name="transcode_reason_direct_play_error">直接播放失败</string>
+    <string name="transcode_reason_video_range">视频动态范围类型不受支持</string>
+    <string name="transcode_reason_video_codec_tag">视频编码标签不受支持</string>
+    <string name="transcode_reason_stream_count">流数量超出上限</string>
 </resources>
