@@ -199,17 +199,18 @@ class MpvCore private constructor(context: Application) {
 
     private val mpvLibEventObserver = object : MPVLib.EventObserver {
         override fun eventProperty(property: String) {
-            when (property) {
-                "track-list" -> postEvent(MpvEvent.TrackListChanged)
-                "hwdec-current" -> postEvent(MpvEvent.DecoderChanged)
-            }
+            // Nothing to cache without a value; every property observed with a format below
+            // arrives through the typed overloads instead.
         }
 
         override fun eventProperty(property: String, value: Long) {}
 
         override fun eventProperty(property: String, value: Double) {
             when (property) {
-                "duration" -> postEvent(MpvEvent.DurationChanged((value * 1000).toLong()))
+                "duration" -> {
+                    cachedDurationMs = (value * 1000).toLong()
+                    postEvent(MpvEvent.DurationChanged(cachedDurationMs))
+                }
                 // Hot properties are cached here, off the main thread: MpvPlayer.getState() reads
                 // them from the cache instead of blocking the UI thread on a synchronous
                 // mpv_get_property while mpv's core is busy (e.g. during initial load).
@@ -225,7 +226,10 @@ class MpvCore private constructor(context: Application) {
         override fun eventProperty(property: String, value: Boolean) {
             when (property) {
                 "paused-for-cache" -> postEvent(MpvEvent.Caching(value))
-                "eof-reached" -> postEvent(MpvEvent.EofReached(value))
+                "eof-reached" -> {
+                    cachedEofReached = value
+                    postEvent(MpvEvent.EofReached(value))
+                }
                 "pause" -> if (cachedPause != value) {
                     cachedPause = value
                     postEvent(MpvEvent.HotPropertyChanged)
@@ -233,7 +237,22 @@ class MpvCore private constructor(context: Application) {
             }
         }
 
-        override fun eventProperty(property: String, value: String) {}
+        override fun eventProperty(property: String, value: String) {
+            when (property) {
+                // Cached as raw JSON and parsed on demand (see getTracks): the parse is pure
+                // CPU, whereas the old synchronous property read could block on mpv's core
+                // lock while the demuxer/decoder were busy - during the initial load that
+                // stalled the UI thread long enough to stutter the loading spinner.
+                "track-list" -> {
+                    cachedTrackListJson = value
+                    postEvent(MpvEvent.TrackListChanged)
+                }
+                "hwdec-current" -> {
+                    cachedHwdecCurrent = value
+                    postEvent(MpvEvent.DecoderChanged)
+                }
+            }
+        }
 
         override fun event(eventId: Int) {
             if (eventId == MPVLib.MpvEvent.MPV_EVENT_START_FILE) {
@@ -241,6 +260,12 @@ class MpvCore private constructor(context: Application) {
                 // cached position so the reported position never briefly shows the old value.
                 cachedTimePosMs = 0L
                 cachedDemuxerCacheMs = 0L
+                // Same for the per-file values below: a new file must not report the previous
+                // one's duration/tracks/eof state until mpv has learned the new values (the
+                // change events deliver them shortly after FILE_LOADED).
+                cachedDurationMs = 0L
+                cachedTrackListJson = null
+                cachedEofReached = false
             }
             val event = when (eventId) {
                 MPVLib.MpvEvent.MPV_EVENT_START_FILE -> MpvEvent.StartFile
@@ -280,6 +305,25 @@ class MpvCore private constructor(context: Application) {
         @Volatile
         private var cachedDemuxerCacheMs: Long = 0L
 
+        /**
+         * Raw `track-list` JSON as delivered by the property observer, parsed on demand by
+         * [getTracks]. Null while no file is loaded (reset on START_FILE).
+         */
+        @Volatile
+        private var cachedTrackListJson: String? = null
+
+        /** Duration in ms as delivered by the property observer; 0 while unknown. */
+        @Volatile
+        private var cachedDurationMs: Long = 0L
+
+        /** Current hwdec backend as delivered by the property observer, e.g. "mediacodec". */
+        @Volatile
+        private var cachedHwdecCurrent: String? = null
+
+        /** Whether playback reached end-of-file, as delivered by the property observer. */
+        @Volatile
+        private var cachedEofReached: Boolean = false
+
         /** Whether playback is paused, from the cache (never blocks). */
         val pause: Boolean get() = cachedPause
 
@@ -291,6 +335,15 @@ class MpvCore private constructor(context: Application) {
 
         /** Buffered (demuxer cache) position in ms, from the cache (never blocks). */
         val demuxerCacheMs: Long get() = cachedDemuxerCacheMs
+
+        /** Duration in ms, from the cache (never blocks); 0 while unknown. */
+        val durationMs: Long get() = cachedDurationMs
+
+        /** Current hwdec backend, from the cache (never blocks); null while unknown. */
+        val hwdecCurrent: String? get() = cachedHwdecCurrent
+
+        /** Whether playback reached end-of-file, from the cache (never blocks). */
+        val eofReached: Boolean get() = cachedEofReached
 
         @Volatile
         private var INSTANCE: MpvCore? = null
@@ -368,7 +421,13 @@ class MpvCore private constructor(context: Application) {
         }
 
         fun getTracks(): List<MediaTrack> {
-            val trackList = getProperty<String>("track-list") ?: return emptyList()
+            // Parsed from the JSON cached by the property observer (delivered with the change
+            // event on mpv's thread). Never read the property synchronously here: getTracks
+            // runs on the main thread from the FILE_LOADED / TRACK_LIST_CHANGED handlers,
+            // and mpv_get_property can block on the core lock while the demuxer is busy -
+            // during the initial load that stalled the UI thread long enough to stutter the
+            // loading spinner. Parsing the cached string is pure CPU and touches no locks.
+            val trackList = cachedTrackListJson ?: return emptyList()
             return json.decodeFromString(trackList)
         }
     }
@@ -417,7 +476,10 @@ class MpvCore private constructor(context: Application) {
         data class Property(val name: String, val format: Int = MPVLib.MpvFormat.MPV_FORMAT_NONE)
         val properties = arrayOf(
             Property("paused-for-cache", MPVLib.MpvFormat.MPV_FORMAT_FLAG),
-            Property("hwdec-current"),
+            // Observed with their format so the observer receives the value with the change
+            // event (see the cached values in the companion): reading these synchronously
+            // from the main-thread event handlers could block on mpv's busy core lock.
+            Property("hwdec-current", MPVLib.MpvFormat.MPV_FORMAT_STRING),
             Property("eof-reached", MPVLib.MpvFormat.MPV_FORMAT_FLAG),
             Property("duration", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE),
             // Hot properties cached for MpvPlayer.getState(); never read synchronously on the
@@ -426,7 +488,7 @@ class MpvCore private constructor(context: Application) {
             Property("demuxer-cache-time", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE),
             Property("pause", MPVLib.MpvFormat.MPV_FORMAT_FLAG),
             Property("speed", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE),
-            Property("track-list"),
+            Property("track-list", MPVLib.MpvFormat.MPV_FORMAT_STRING),
             // Property("duration/full", MPVLib.MpvFormat.MPV_FORMAT_INT64),
             // Property("video-params/aspect", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE),
             // Property("video-params/rotate", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE),

@@ -150,7 +150,9 @@ class MpvPlayer(
                     // Distinguish natural end of file from manual stop / load errors.
                     // With keep-open=yes natural EOF usually arrives via MpvEvent.EofReached
                     // instead, but keep this as a fallback for stop-less EOF reporting.
-                    val eofReached = MpvCore.getProperty<Boolean>("eof-reached") == true
+                    // eof-reached comes from the observer cache (never a synchronous read on
+                    // this main-thread handler - see readDurationMs).
+                    val eofReached = MpvCore.eofReached
                     if (!fileLoadedForCurrentItem && !stopRequested && !eofReached) {
                         // mpv never reached FILE_LOADED for the current item and playback ended
                         // without an explicit stop: the stream could not be opened/decoded
@@ -580,8 +582,12 @@ class MpvPlayer(
     }
 
     private fun readDurationMs(): Long {
-        val duration = MpvCore.getProperty<Double>("duration") ?: return 0
-        return (duration * 1000).toLong()
+        // From the cache maintained by MpvCore's property observer (the value arrives with the
+        // change event, off the main thread). The previous synchronous read ran on the main
+        // thread from the FILE_LOADED handler and could block on mpv's core lock while the
+        // demuxer was busy - during the initial load that stalled the UI thread long enough
+        // to visibly stutter the loading spinner.
+        return MpvCore.durationMs
     }
 
     private fun currentPositionMs(): Long {
@@ -645,7 +651,10 @@ class MpvPlayer(
     }
 
     private fun reportDecoderState() {
-        val hwdec = MpvCore.getProperty<String>("hwdec-current")
+        // hwdec-current comes from the observer cache: DecoderChanged is posted right after
+        // the value was cached, so it is fresh here without a synchronous read on the main
+        // thread (see readDurationMs for why that matters during the initial load).
+        val hwdec = MpvCore.hwdecCurrent
         val decoderType = if (hwdec.isNullOrEmpty() || hwdec == "no") {
             DecoderType.SOFTWARE
         } else {
