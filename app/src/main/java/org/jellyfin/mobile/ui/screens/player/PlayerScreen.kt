@@ -78,8 +78,11 @@ import org.jellyfin.mobile.player.PlayerException
 import org.jellyfin.mobile.player.PlayerViewModel
 import org.jellyfin.mobile.player.interaction.PlaybackController
 import org.jellyfin.mobile.player.interaction.PlaybackLauncher
+import org.jellyfin.mobile.player.mpv.MpvPlayer
+import org.jellyfin.mobile.player.mpv.bench.FrameCompareViewModel
 import org.jellyfin.mobile.player.qualityoptions.QualityOptionsProvider
 import org.jellyfin.mobile.player.source.RemoteJellyfinMediaSource
+import org.jellyfin.mobile.ui.screens.mpvcompare.InPlayerCompareOverlay
 import org.jellyfin.mobile.player.ui.DecoderType
 import org.jellyfin.mobile.player.ui.PlayerFullscreenHelper
 import org.jellyfin.mobile.player.ui.TrickplayHelper
@@ -139,6 +142,7 @@ fun PlayerScreen(
     closeRequested: Boolean = false,
     onCloseRequestHandled: () -> Unit = {},
     viewModel: PlayerViewModel = viewModel(),
+    compareViewModel: FrameCompareViewModel = viewModel(),
     playbackLauncher: PlaybackLauncher = koinInject(),
     playbackController: PlaybackController = koinInject(),
     appPreferences: AppPreferences = koinInject(),
@@ -198,6 +202,8 @@ fun PlayerScreen(
     var unlockButtonVisible by remember { mutableStateOf(false) }
     var expandedMenu by remember { mutableStateOf<PlayerMenuType?>(null) }
     var infoPanelVisible by remember { mutableStateOf(false) }
+    // mpv configuration comparison panel; only reachable while the mpv engine is playing.
+    var compareVisible by remember { mutableStateOf(false) }
     var episodePickerVisible by remember { mutableStateOf(false) }
     var isFullscreen by remember { mutableStateOf(false) }
     var gestureSurfaceSize by remember { mutableStateOf(IntSize.Zero) }
@@ -505,6 +511,7 @@ fun PlayerScreen(
                 expandedMenu = null
                 infoPanelVisible = false
                 episodePickerVisible = false
+                compareVisible = false
                 hideUnlockButton()
             }
         }
@@ -798,10 +805,11 @@ fun PlayerScreen(
     // to the background behind the lock screen instead of closing the player.
     BackHandler {
         when {
-            infoPanelVisible || episodePickerVisible || expandedMenu != null -> {
+            infoPanelVisible || episodePickerVisible || expandedMenu != null || compareVisible -> {
                 expandedMenu = null
                 infoPanelVisible = false
                 episodePickerVisible = false
+                compareVisible = false
             }
             !locked -> closePlayer()
             // Locked: swallow the press, the unlock button closes the player
@@ -975,6 +983,7 @@ fun PlayerScreen(
                     trickplay = trickplayHelper.state,
                     scrubPositionMs = scrubPositionMs,
                     pendingSeekPositionMs = pendingSeekPositionMs,
+                    mpvEngine = player is MpvPlayer,
                 ),
                 menus = PlayerMenusState(
                     expanded = expandedMenu,
@@ -1020,7 +1029,14 @@ fun PlayerScreen(
                     onDecoderSelected = { type -> viewModel.updateDecoderType(type) },
                     onShowInfo = {
                         if (episodePickerVisible) episodePickerVisible = false
+                        compareVisible = false
                         infoPanelVisible = !infoPanelVisible
+                    },
+                    onShowCompare = {
+                        // The comparison panel and the info panel share the area above the video.
+                        infoPanelVisible = false
+                        episodePickerVisible = false
+                        compareVisible = !compareVisible
                     },
                     onShowEpisodes = {
                         if (infoPanelVisible) infoPanelVisible = false
@@ -1092,6 +1108,14 @@ fun PlayerScreen(
                 model = infoModel,
                 onDismiss = { infoPanelVisible = false },
                 controlsBounds = controlsPadding,
+            )
+        }
+
+        if (compareVisible) {
+            InPlayerCompareOverlay(
+                viewModel = viewModel,
+                compareViewModel = compareViewModel,
+                onDismiss = { compareVisible = false },
             )
         }
 
