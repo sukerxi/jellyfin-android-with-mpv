@@ -99,6 +99,8 @@ fun SettingsScreen(
         .collectAsState(initial = appPreferences.externalPlayerApp)
     val mpvCustomConfig by appPreferences.mpvCustomConfigFlow
         .collectAsState(initial = appPreferences.mpvCustomConfig)
+    val mpvShowCompareEntry by appPreferences.mpvShowCompareEntryFlow
+        .collectAsState(initial = appPreferences.mpvShowCompareEntry)
     val downloadMethod by appPreferences.downloadMethodFlow
         .collectAsState(initial = appPreferences.downloadMethod)
     val storageLocation by appPreferences.storageLocationFlow
@@ -307,6 +309,12 @@ fun SettingsScreen(
                         title = stringResource(R.string.pref_mpv_custom_config),
                         summary = mpvSummary,
                         onClick = onOpenMpvConfigEditor,
+                    )
+                    SwitchPreferenceRow(
+                        title = stringResource(R.string.pref_mpv_compare_entry),
+                        summary = stringResource(R.string.pref_mpv_compare_entry_summary),
+                        checked = mpvShowCompareEntry,
+                        onCheckedChange = { appPreferences.mpvShowCompareEntry = it },
                     )
                 }
                 else -> Unit

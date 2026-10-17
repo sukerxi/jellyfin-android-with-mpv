@@ -17,9 +17,11 @@ import org.koin.core.component.inject
 import timber.log.Timber
 import java.io.File
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * Events emitted by [MpvCore]. Observers always run on the main thread.
@@ -188,6 +190,12 @@ object MpvAssetInstaller {
  */
 class MpvCore private constructor(context: Application) : KoinComponent {
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * Application context this instance was created with, kept so [reinitialize] can build a
+     * replacement without a caller having to hand one in again.
+     */
+    private val application: Application = context
 
     /**
      * The preference singleton, injected instead of constructing a second
@@ -392,10 +400,40 @@ class MpvCore private constructor(context: Application) : KoinComponent {
         @Volatile
         private var INSTANCE: MpvCore? = null
 
+        private const val REINITIALIZE_TIMEOUT_SECONDS = 10L
+
         fun initialize(application: Application): MpvCore {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: MpvCore(application).also { INSTANCE = it }
             }
+        }
+
+        /**
+         * Tears the native instance down and creates a fresh one, re-reading `mpv.conf`.
+         *
+         * Creating a libmpv instance is the only way to pick up configuration file changes and to
+         * undo an applied profile. Used by the mpv configuration benchmark; playback-adjacent code
+         * must keep using [initialize].
+         *
+         * Runs entirely on the IPC executor, so the ordering against every other libmpv call is
+         * preserved and callers never touch the native instance while it is being replaced.
+         */
+        fun reinitialize() {
+            val future = CompletableFuture<Unit>()
+            ipcExecutor.execute {
+                try {
+                    val previous = INSTANCE ?: error("MpvCore is not initialized")
+                    previous.mpv?.destroy()
+                    previous.mpv = null
+                    INSTANCE = null
+                    MpvCore(previous.application).also { INSTANCE = it }
+                    future.complete(Unit)
+                } catch (e: Exception) {
+                    Timber.e(e, "Failed to reinitialize mpv")
+                    future.completeExceptionally(e)
+                }
+            }
+            future.get(REINITIALIZE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         }
 
         /**

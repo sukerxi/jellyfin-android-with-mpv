@@ -51,7 +51,7 @@ import org.jellyfin.mobile.player.ui.TrickplayState
  * trickplay）与功能按钮行（锁屏/音轨/字幕/倍速/清晰度/解码器/信息/选集/全屏）。
  */
 
-private val ControlsScrim = Color(0x60000000)
+val ControlsScrim = Color(0x60000000)
 private val ControlsText = Color.White
 private val ChapterMarkingWatched = Color(0xFF00A4DC)
 private val ChapterMarkingUnwatched = Color(0xFF333333)
@@ -80,6 +80,8 @@ data class PlayerControlsState(
      * 继续显示目标位置，避免先跳回 seek 起点、再跳到目标位置的观感回跳。
      */
     val pendingSeekPositionMs: Long? = null,
+    /** Whether the configuration comparison entry should be offered (mpv engine, not switched off). */
+    val mpvCompareEnabled: Boolean = false,
 )
 
 /** 下拉菜单渲染所需的全部状态。 */
@@ -109,6 +111,7 @@ class PlayerControlsActions(
     val onDecoderSelected: (DecoderType) -> Unit,
     val onShowInfo: () -> Unit,
     val onShowEpisodes: () -> Unit,
+    val onShowCompare: () -> Unit,
     val onToggleFullscreen: () -> Unit,
     val onMenuExpand: (PlayerMenuType?) -> Unit,
     val onScrubStart: () -> Unit,
@@ -443,6 +446,18 @@ private fun BottomBar(
                 iconRes = R.drawable.ic_info_white_24dp,
                 contentDescription = stringResource(R.string.playback_info_title),
             )
+        }
+        // Only offered for the mpv engine when the user keeps the entry enabled: a configuration
+        // comparison is meaningless for ExoPlayer, and the entry point is hidden rather than
+        // disabled so the bar keeps its usual layout.
+        if (state.mpvCompareEnabled) {
+            PlayerMenuAnchor {
+                PlayerIconButton(
+                    onClick = actions.onShowCompare,
+                    iconRes = R.drawable.ic_compare_white_24dp,
+                    contentDescription = stringResource(R.string.mpv_compare_title),
+                )
+            }
         }
         if (state.queueSize > 1) {
             PlayerMenuAnchor {

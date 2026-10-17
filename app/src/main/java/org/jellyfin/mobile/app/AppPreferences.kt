@@ -237,6 +237,16 @@ class AppPreferences(context: Context) {
     val mpvCustomConfigFlow: Flow<String> =
         dataStore.data.map { it[KEY_MPV_CUSTOM_CONFIG].orEmpty() }
 
+    /**
+     * Whether the player controls offer the mpv configuration comparison.
+     * Defaults to on: the entry is cheap and only appears while mpv is playing.
+     */
+    var mpvShowCompareEntry: Boolean
+        get() = snapshot[KEY_MPV_SHOW_COMPARE_ENTRY] ?: true
+        set(value) = persistValue(KEY_MPV_SHOW_COMPARE_ENTRY, value)
+    val mpvShowCompareEntryFlow: Flow<Boolean> =
+        preferenceFlow(KEY_MPV_SHOW_COMPARE_ENTRY, true)
+
     var autoCheckUpdates: Boolean
         get() = snapshot[KEY_AUTO_CHECK_UPDATES] ?: false
         set(value) = persistValue(KEY_AUTO_CHECK_UPDATES, value)
@@ -306,6 +316,8 @@ class AppPreferences(context: Context) {
         private val KEY_EXTERNAL_PLAYER_APP =
             stringPreferencesKey(Constants.PREF_EXTERNAL_PLAYER_APP)
         private val KEY_MPV_CUSTOM_CONFIG = stringPreferencesKey(Constants.PREF_MPV_CUSTOM_CONFIG)
+        private val KEY_MPV_SHOW_COMPARE_ENTRY =
+            booleanPreferencesKey(Constants.PREF_MPV_SHOW_COMPARE_ENTRY)
         private val KEY_MPV_USE_EMBED_FONT_LEGACY =
             booleanPreferencesKey(Constants.PREF_MPV_USE_EMBED_FONT_LEGACY)
         private val KEY_AUTO_CHECK_UPDATES =

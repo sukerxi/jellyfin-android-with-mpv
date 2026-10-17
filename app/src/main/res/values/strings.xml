@@ -311,4 +311,45 @@
     <string name="transcode_reason_video_range">Video range type not supported</string>
     <string name="transcode_reason_video_codec_tag">Video codec tag not supported</string>
     <string name="transcode_reason_stream_count">Too many streams</string>
+
+    <!-- mpv 配置对比（A/B） -->
+    <string name="mpv_compare_title">MPV configuration comparison</string>
+    <string name="pref_mpv_compare_entry">Show comparison in player</string>
+    <string name="pref_mpv_compare_entry_summary">Adds a compare button to the player controls while MPV is playing</string>
+    <string name="mpv_compare_capture_scene">Use current frame</string>
+    <string name="mpv_compare_capture_scene_in_progress">Capturing frame…</string>
+    <string name="mpv_compare_scene_info">Frame at %1$s · %2$dx%3$d</string>
+    <string name="mpv_compare_run">Compare</string>
+    <string name="mpv_compare_rerun">Compare again</string>
+    <string name="mpv_compare_running">Rendering frames…</string>
+    <string name="mpv_compare_scene_required">Play a video first, then capture the frame you want to compare.</string>
+    <string name="mpv_compare_engine_required">The MPV player must be selected for this comparison.</string>
+    <string name="mpv_compare_no_changes">This configuration has no options to compare.</string>
+    <string name="mpv_compare_no_result">No result</string>
+    <string name="mpv_compare_delta_identical">Pixels are identical</string>
+    <string name="mpv_compare_delta_value">Average difference: %1$d / 255</string>
+    <string name="mpv_compare_change_position">Change %1$d of %2$d</string>
+    <string name="mpv_compare_verdict_identical">Identical</string>
+    <string name="mpv_compare_verdict_negligible">Negligible</string>
+    <string name="mpv_compare_verdict_subtle">Subtle</string>
+    <string name="mpv_compare_verdict_visible">Visible</string>
+    <string name="mpv_compare_mode_swipe">Swipe</string>
+    <string name="mpv_compare_mode_blink">Flicker</string>
+    <string name="mpv_compare_mode_difference">Difference</string>
+    <string name="mpv_compare_zoom">Zoom</string>
+    <string name="mpv_compare_baseline_frame">Frame with the previous configuration</string>
+    <string name="mpv_compare_candidate_frame">Frame with the new configuration</string>
+    <string name="mpv_compare_difference_frame">Difference map</string>
+    <string name="mpv_compare_previous_change">Previous change</string>
+    <string name="mpv_compare_next_change">Next change</string>
+    <string name="mpv_compare_apply">Keep this configuration</string>
+    <string name="mpv_compare_applied">Configuration saved. Restart the app to apply it to normal playback.</string>
+    <string name="mpv_compare_close">Close</string>
+    <string name="mpv_compare_open_from_settings">Compare configuration changes</string>
+    <string name="mpv_compare_open_from_settings_summary">See how each option changes the picture before keeping it</string>
+    <string name="mpv_compare_sample_video_required">Pick a video from your library to compare on.</string>
+    <string name="mpv_compare_source_current">Compare on the frame being played</string>
+    <string name="mpv_compare_source_file">Pick a video from the library</string>
+    <string name="mpv_compare_grid_title">Pick a moment</string>
+    <string name="mpv_compare_grid_loading">Rendering thumbnails…</string>
 </resources>

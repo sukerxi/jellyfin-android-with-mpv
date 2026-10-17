@@ -286,4 +286,45 @@
     <string name="transcode_reason_video_range">视频动态范围类型不受支持</string>
     <string name="transcode_reason_video_codec_tag">视频编码标签不受支持</string>
     <string name="transcode_reason_stream_count">流数量超出上限</string>
+
+    <!-- mpv 配置对比（A/B） -->
+    <string name="mpv_compare_title">MPV 配置对比</string>
+    <string name="pref_mpv_compare_entry">播放器内显示对比入口</string>
+    <string name="pref_mpv_compare_entry_summary">使用 MPV 播放时，在控制条上显示「对比」按钮</string>
+    <string name="mpv_compare_capture_scene">取当前画面</string>
+    <string name="mpv_compare_capture_scene_in_progress">正在取帧…</string>
+    <string name="mpv_compare_scene_info">第 %1$s 帧 · %2$dx%3$d</string>
+    <string name="mpv_compare_run">开始对比</string>
+    <string name="mpv_compare_rerun">重新对比</string>
+    <string name="mpv_compare_running">正在渲染对比帧…</string>
+    <string name="mpv_compare_scene_required">请先播放视频，再取一帧用于对比。</string>
+    <string name="mpv_compare_engine_required">请先在设置里选择 MPV 播放器。</string>
+    <string name="mpv_compare_no_changes">当前配置没有可对比的选项。</string>
+    <string name="mpv_compare_no_result">无结果</string>
+    <string name="mpv_compare_delta_identical">像素完全一致</string>
+    <string name="mpv_compare_delta_value">平均差异：%1$d / 255</string>
+    <string name="mpv_compare_change_position">第 %1$d / %2$d 项改动</string>
+    <string name="mpv_compare_verdict_identical">完全一致</string>
+    <string name="mpv_compare_verdict_negligible">可忽略</string>
+    <string name="mpv_compare_verdict_subtle">轻微</string>
+    <string name="mpv_compare_verdict_visible">明显</string>
+    <string name="mpv_compare_mode_swipe">滑动</string>
+    <string name="mpv_compare_mode_blink">闪烁</string>
+    <string name="mpv_compare_mode_difference">差异图</string>
+    <string name="mpv_compare_zoom">缩放</string>
+    <string name="mpv_compare_baseline_frame">改动前的画面</string>
+    <string name="mpv_compare_candidate_frame">改动后的画面</string>
+    <string name="mpv_compare_difference_frame">差异图</string>
+    <string name="mpv_compare_previous_change">上一项改动</string>
+    <string name="mpv_compare_next_change">下一项改动</string>
+    <string name="mpv_compare_apply">采用这份配置</string>
+    <string name="mpv_compare_applied">配置已保存，重启应用后对正常播放生效。</string>
+    <string name="mpv_compare_close">关闭</string>
+    <string name="mpv_compare_open_from_settings">对比配置改动效果</string>
+    <string name="mpv_compare_open_from_settings_summary">采用之前先看看每一项改动对画面的实际影响</string>
+    <string name="mpv_compare_sample_video_required">请从媒体库选择一个视频用于对比。</string>
+    <string name="mpv_compare_source_current">用正在播放的画面</string>
+    <string name="mpv_compare_source_file">从媒体库选择视频</string>
+    <string name="mpv_compare_grid_title">选择时间点</string>
+    <string name="mpv_compare_grid_loading">正在生成缩略图…</string>
 </resources>
