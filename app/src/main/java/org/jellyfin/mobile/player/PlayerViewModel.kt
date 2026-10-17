@@ -953,12 +953,34 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     }
 
     // Player controls
+
+    /**
+     * Starts playback on behalf of the user (controls, gesture layer, media session, notification).
+     *
+     * Clears the [closedByUser] latch first. That latch is set by [pauseInBackground] when the app
+     * goes to the background and exists only to suppress a playback that *resumes by itself*
+     * (mpv reacts to audio focus coming back) while the UI is gone. Leaving it set past the
+     * user's own request is what made "switch to another app, come back, press play" do
+     * nothing: the resumed player was paused again by [onIsPlayingChanged] on its first frame,
+     * so every click looked like it was ignored.
+     */
     fun play() {
+        closedByUser = false
         playerOrNull?.play()
     }
 
     fun pause() {
         playerOrNull?.pause()
+    }
+
+    /**
+     * Toggles playback. Resuming goes through [play] so the backgrounding latch is lifted; the
+     * UI must not call [Player.play] / [Player.pause] directly, or that path would revive the
+     * "first click does nothing" failure.
+     */
+    fun togglePlayPause() {
+        val player = playerOrNull ?: return
+        if (player.isPlaying) pause() else play()
     }
 
     fun rewind() {

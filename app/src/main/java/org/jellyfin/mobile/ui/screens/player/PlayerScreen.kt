@@ -770,11 +770,7 @@ fun PlayerScreen(
             if (controlsVisible) controlsVisible = false else showControls()
         },
         onPeekUnlockButton = { peekUnlockButton() },
-        onTogglePlayPause = {
-            viewModel.playerOrNull?.let { currentPlayer ->
-                if (currentPlayer.isPlaying) currentPlayer.pause() else currentPlayer.play()
-            }
-        },
+        onTogglePlayPause = { viewModel.togglePlayPause() },
         onSeekTo = { position -> viewModel.seekTo(position) },
         onFastForward = { viewModel.fastForward() },
         onRewind = { viewModel.rewind() },
@@ -999,11 +995,7 @@ fun PlayerScreen(
                 ),
                 actions = PlayerControlsActions(
                     onBack = { closePlayer() },
-                    onTogglePlayPause = {
-                        viewModel.playerOrNull?.let { currentPlayer ->
-                            if (currentPlayer.isPlaying) currentPlayer.pause() else currentPlayer.play()
-                        }
-                    },
+                    onTogglePlayPause = { viewModel.togglePlayPause() },
                     onPrevious = { viewModel.skipToPrevious() },
                     onNext = { viewModel.skipToNext() },
                     onPreviousChapter = { viewModel.previousChapter() },
