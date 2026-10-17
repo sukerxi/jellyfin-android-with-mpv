@@ -105,7 +105,8 @@ class MpvSceneRendererImpl(private val appContext: Context) : MpvSceneRenderer {
 
         /**
          * Reading one frame back from the render target. Generous on purpose: a hardware decoder
-         * can still be finishing the seek, and the target is rebuilt once while waiting.
+         * can still be finishing the seek, and the output may need a moment to present its first
+         * frame after it is (re)created.
          */
         const val CAPTURE_TIMEOUT_MILLIS = 8_000L
 

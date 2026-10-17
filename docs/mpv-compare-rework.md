@@ -102,17 +102,17 @@ mpv 只有在初始化时才读 `mpv.conf`。任何"运行时换配置"的方案
 1. 把候选配置写进 `<cache>/mpv-bench/run-N/config/mpv.conf`；
 2. 创建实例，套用 `baseOptions(configDir = 该目录)`，`init()`；
 3. 强制 `ao=null`、`aid=no`、`sid=no`、`osd-level=0`、`keep-open=yes`（都不影响视频渲染）；
-4. `android-surface-size = WxH`（像素）→ attach 离屏 `ImageReader` 的 surface；
+4. `android-surface-size = WxH`（像素）→ attach 离屏 `SurfaceTexture` 的 surface；
 5. `loadfile url replace 0 start=+pos`；
 6. 等 `FILE_LOADED` → 等 `PLAYBACK_RESTART`（此刻首帧已在屏上）→ `pause=yes` 冻结；
-7. 从 `ImageReader` 直接读回像素（详见下一节）；
-8. `stop` → `detach` → `destroy` → 释放 surface / reader → 删除临时目录。
+7. 把 `SurfaceTexture` 里的帧用自建 EGL 上下文画进 FBO，再 `glReadPixels` 读回像素（详见下一节）；
+8. `stop` → `detach` → `destroy` → 释放 surface / 纹理 / EGL 上下文 → 删除临时目录。
 
-### 取帧：为什么不用 mpv 的 `screenshot`
+### 取帧：三层方案，前两层都不可用
 
 **这是"对比完全无法工作"的真正根因，和时序无关。**
 
-mpv 的 `screenshot` / `screenshot-to-file` 走 libavcodec：先 `screenshot-sw`/GPU 读回拿到帧，再用 `png`/`mjpeg` **编码器**编码、由 **muxer** 写盘。而这个 app 打包的 libmpv，其 FFmpeg 是按
+**第一层：mpv 的 `screenshot`。** 它走 libavcodec：先 GPU 读回拿到帧，再用 `png`/`mjpeg` **编码器**编码、由 **muxer** 写盘。而这个 app 打包的 libmpv，其 FFmpeg 是按
 
 ```
 --disable-{muxers,encoders,devices,filters}
@@ -120,15 +120,30 @@ mpv 的 `screenshot` / `screenshot-to-file` 走 libavcodec：先 `screenshot-sw`
 
 编译的（libmpv-android `buildscripts/scripts/ffmpeg.sh`）。编码器和 muxer 都被关掉，所以**任何格式、任何模式的截图都写不出文件**，mpv 只在自己的日志里留一行失败，界面上就只剩"mpv 没有生成截图"。`screenshot-sw=yes` 也救不了——它换的是取帧方式，编码器仍然缺。
 
-现在的做法完全绕开编码器：mpv 渲染进 `ImageReader`（`RGBA_8888`，`USAGE_GPU_COLOR_OUTPUT | USAGE_GPU_SAMPLED_IMAGE | USAGE_CPU_READ_OFTEN`），渲染完成后直接 `acquireLatestImage()` 拿 buffer，按 `rowStride`/`pixelStride` 拷成 `ARGB_8888` 位图（alpha 强制不透明，否则透明帧在对比视图里什么都看不到）。这样：
+**第二层：`ImageReader`。** 绕开编码器直接读 buffer，听起来可行，但它要求生产端交出的 buffer 格式**和创建时指定的完全一致**。真机上 EGL/gralloc 未必配合：
 
-- 不依赖 FFmpeg 编码器，结构上不可能再出现"没有生成截图"；
+```
+The producer output buffer format 0x2b doesn't match the
+ImageReader's configured buffer format 0x1
+```
+
+`0x1` 是我们申请的 `RGBA_8888`，`0x2b` 是这台设备的 GPU 实际决定输出的格式（10-bit/厂商自定义一类）。换 `RGBX_8888` 也一样是猜——没有哪个格式能被保证匹配，这条路在设备上不可靠。
+
+**最终方案：`SurfaceTexture` + 自建 EGL 读回**（`GlFrameReader`）。`SurfaceTexture` 不挑格式，生产端给什么就收什么，然后把它当作 external texture 由我们自己读：
+
+1. 建独立 EGL 上下文（`EGL14`，1x1 pbuffer 仅用于 `makeCurrent`）与 `GL_TEXTURE_EXTERNAL_OES` 纹理，`SurfaceTexture(texName)` 包成 `Surface` 交给 mpv；
+2. 等 `onFrameAvailable` 回调 → `updateTexImage()` 把最新帧贴到纹理上（暂停后继续 latch，直到没有更新的帧，取到的就是 mpv 认为"当前"的那一帧）；
+3. 把 external texture 用最简 shader（带 `getTransformMatrix`）画进一张 `RGBA_8888` 的 FBO；
+4. `glReadPixels` 读回，按行镜像（GL 原点在左下、位图在左上）、alpha 强转不透明，生成位图。
+
+这样：
+
+- 不依赖 FFmpeg 编码器，也不依赖 gralloc 的格式协商；
 - 拿到的是 GPU 真实输出，正是渲染配置对比要比较的东西；
-- 少一次 PNG 编码和一次磁盘往返，单个候选更快。
+- 全流程无编码、无临时文件。
 
-两个附带处理：
+附带处理：
 
-- **像素格式可能对不上**：某些驱动不接受 GL 往 `RGBA_8888` 里画。`captureFrame` 在超时前半段会用另一套格式（`RGBX_8888`）把渲染目标重建一次并重新 attach，都不行才报错。
 - **渲染尺寸封顶**：`MpvSceneRendererImpl` 把视口按最长边 1080 等比缩小渲染（1440x3040 → 512x1080 一类）。原始视口每帧约 4.4MP，25 个候选仅像素就 400MB+，且 diff 会明显变慢；等比缩放不影响几何比例，也不影响任何渲染选项的效果。
 - **失败要有解释**：取不到帧时会读 `vo-configured`，为 `no` 就报"该配置无法初始化视频输出（vo=…）"——这是对比的合法结论（某个 `vo`/GPU 选项在本机跑不起来），而不是取帧 bug。
 
@@ -157,4 +172,7 @@ mpv 的 `screenshot` / `screenshot-to-file` 走 libavcodec：先 `screenshot-sw`
 如果第 3 步仍然全部"渲染失败"，看它报的是哪一类：
 
 - **"该配置无法初始化视频输出（vo=…）"** —— 该 `vo` 在本机跑不起来，属于对比结论，换一个选项继续测；
+- **"渲染目标不可用（framebuffer 状态 0x…）" / "…GL 错误 0x…"** —— 该设备的 GL 驱动拒绝了 FBO 读回，把 logcat 里 `mpv bench:` 的几行发我；
 - **"mpv 没有输出画面（vo-configured=…）"** —— 解码出画了但渲染目标没收到 buffer，说明这台设备的离屏 surface 需要换一种承载方式（届时把 logcat 里 `mpv bench: no frame` 那几行发我）。
+
+已知的待确认点：`glReadPixels` 的行序（GL 原点在左下）在 `GlFrameReader.readPixels` 里按"镜像一次"处理。如果画面上下颠倒，说明这台设备的 producer 带了翻转，把那里 `(height - 1 - y)` 改成 `y` 即可（一行）。
