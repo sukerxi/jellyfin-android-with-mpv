@@ -279,36 +279,39 @@ fun CompareBody(
         var zoom by remember { mutableStateOf(1f) }
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            when (mode) {
-                CompareDisplayMode.SWIPE -> if (candidateBitmap != null) {
-                    SwipeCompare(
+            val frame = candidateBitmap
+            if (frame == null) {
+                // A candidate can legitimately fail to render (its options may be unsupported on
+                // this device). Saying why beats an empty pane the user cannot interpret.
+                EmptyState(selected.frame.failure ?: stringResource(R.string.mpv_compare_no_result))
+            } else {
+                when (mode) {
+                    CompareDisplayMode.SWIPE -> SwipeCompare(
                         baseline = baseline,
-                        candidate = candidateBitmap,
+                        candidate = frame,
                         difference = null,
                         zoom = zoom,
                     )
-                }
-                CompareDisplayMode.DIFFERENCE -> if (candidateBitmap != null) {
-                    SwipeCompare(
+                    CompareDisplayMode.DIFFERENCE -> SwipeCompare(
                         baseline = baseline,
-                        candidate = candidateBitmap,
+                        candidate = frame,
                         difference = differenceBitmap,
                         zoom = zoom,
                     )
-                }
-                CompareDisplayMode.BLINK -> if (candidateBitmap != null) {
-                    var showBaseline by remember { mutableStateOf(true) }
-                    BlinkCompare(
-                        baseline = baseline,
-                        candidate = candidateBitmap,
-                        showBaseline = showBaseline,
-                        zoom = zoom,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                    LaunchedEffect(Unit) {
-                        while (true) {
-                            kotlinx.coroutines.delay(600)
-                            showBaseline = !showBaseline
+                    CompareDisplayMode.BLINK -> {
+                        var showBaseline by remember { mutableStateOf(true) }
+                        BlinkCompare(
+                            baseline = baseline,
+                            candidate = frame,
+                            showBaseline = showBaseline,
+                            zoom = zoom,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        LaunchedEffect(Unit) {
+                            while (true) {
+                                kotlinx.coroutines.delay(600)
+                                showBaseline = !showBaseline
+                            }
                         }
                     }
                 }

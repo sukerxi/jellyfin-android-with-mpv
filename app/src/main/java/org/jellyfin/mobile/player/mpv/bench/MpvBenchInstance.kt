@@ -2,8 +2,11 @@ package org.jellyfin.mobile.player.mpv.bench
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.SurfaceTexture
+import android.graphics.PixelFormat
+import android.hardware.HardwareBuffer
+import android.media.Image
+import android.media.ImageReader
+import android.os.Build
 import android.view.Surface
 import dev.jdtech.mpv.MPVLib
 import org.jellyfin.mobile.player.mpv.MpvCore
@@ -28,6 +31,19 @@ import java.util.concurrent.TimeUnit
  * The instance is configured through its own `mpv.conf` with the same base options as the player
  * (see [MpvCore.baseOptions]), so what it renders is what playback would render.
  *
+ * ## Why frames are read from the render target, not from mpv
+ *
+ * mpv writes screenshots through libavcodec: `screenshot` / `screenshot-to-file` encode the frame
+ * with the `png`/`mjpeg` encoder and mux it to a file. The libmpv build shipped with this app
+ * disables FFmpeg's encoders and muxers (`--disable-{muxers,encoders,...}`), so *every* screenshot
+ * command fails, for every format, with no file written and nothing but an mpv log line to show for
+ * it - which is exactly the "mpv 没有生成截图" failure.
+ *
+ * The frame is therefore taken from the video output itself: mpv renders into an [ImageReader]
+ * backed surface, and the finished buffer is read back as pixels ([captureFrame]). That skips
+ * encoding entirely, and it captures what the GPU actually produced, which is the thing a render
+ * configuration comparison is about.
+ *
  * Everything here is "issue an IPC call, then wait for the event that proves it happened". The
  * blocking waits are safe because the caller runs on a background thread; they are also what makes
  * the sequence deterministic, and determinism is the whole point of a pixel comparison.
@@ -40,14 +56,26 @@ internal class MpvBenchInstance(
 ) : Closeable {
 
     private val configDir = File(workspace, CONFIG_DIR).apply { mkdirs() }
-    private val shotDir = File(workspace, SHOTS_DIR).apply { mkdirs() }
 
     /** Event ids as mpv emits them, for [awaitEvent]. Entries are consumed, not inspected. */
     private val events = LinkedBlockingQueue<Int>()
 
-    private var surfaceTexture: SurfaceTexture? = null
+    private var renderTarget: ImageReader? = null
     private var surface: Surface? = null
     private var mpv: MPVLib? = null
+
+    /** Buffer geometry of the current render target, kept so it can be recreated. */
+    private var targetWidth = 0
+    private var targetHeight = 0
+
+    /**
+     * Pixel format handed to the video output.
+     *
+     * RGBA is the safe default, but whether the GL driver accepts it as a render target is up to the
+     * device; [rotateRenderTarget] switches to RGBX (the format video outputs usually ask for) when
+     * a frame does not show up.
+     */
+    private var pixelFormat = PixelFormat.RGBA_8888
 
     private val observer = object : MPVLib.EventObserver {
         override fun event(eventId: Int) {
@@ -85,11 +113,8 @@ internal class MpvBenchInstance(
         setProperty("sid", "no")
         setProperty("osd-level", "0")
         setProperty("keep-open", "yes")
-        setProperty("screenshot-format", "png")
-        setProperty("screenshot-sw", "no")
-        setProperty("screenshot-directory", shotDir.path)
 
-        attachOffscreenSurface(viewportWidth, viewportHeight)
+        attachRenderTarget(viewportWidth, viewportHeight)
     }
 
     /** Opens [sourceUrl] at [positionMs]. Seeking at load keeps it to a single decode pass. */
@@ -109,35 +134,49 @@ internal class MpvBenchInstance(
     /**
      * Waits until the first frame of the scene is on screen, then freezes it.
      *
-     * PLAYBACK_RESTART is mpv's "the first frame was displayed" signal; a screenshot taken before
-     * it captures an empty output. Pausing afterwards keeps exactly that frame.
+     * PLAYBACK_RESTART is mpv's "the first frame was displayed" signal; reading the render target
+     * before it returns an empty buffer. Pausing afterwards keeps exactly that frame - the buffer
+     * stays queued in the [ImageReader] and is read by [captureFrame].
      */
     fun awaitFirstFrame(timeoutMillis: Long) {
         awaitEvent(MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED, FILE_LOAD_TIMEOUT_MILLIS, "打开视频源超时")
         awaitEvent(MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART, timeoutMillis, "等待首帧超时")
         setProperty("pause", true)
         // The frame is on screen before the event is emitted, but the video output flips it to the
-        // consumer on its own thread; give it a moment so the screenshot cannot race it.
+        // consumer on its own thread; give it a moment so the read-back cannot race it.
         Thread.sleep(FRAME_SETTLE_MILLIS)
     }
 
-    /** Takes the frozen frame out of the video output. */
+    /**
+     * Reads the frozen frame out of the render target.
+     *
+     * The buffer is taken as pixels directly: no encoder is involved, so this cannot fail the way
+     * mpv's own screenshot command does. A candidate gets the whole [timeoutMillis] because a
+     * hardware decoder may still be finishing the seek, and the render target is rebuilt once in the
+     * other pixel format while waiting - an offscreen surface can miss its first swap after the
+     * video output is (re)created, and a paused output then just sits there without a buffer to hand
+     * over.
+     */
     fun captureFrame(timeoutMillis: Long): Bitmap {
-        clearShots()
-        var file = takeScreenshot(timeoutMillis)
-        if (file == null) {
-            // Last resort. Grabbing the frame through the video output is the only way to capture
-            // what the render configuration produced, but not every GPU backend exposes it; a
-            // software screenshot of the same frozen frame still answers "did this change the
-            // picture?" - it just also runs it through the software scaler.
-            setProperty("screenshot-sw", true)
-            clearShots()
-            file = takeScreenshot(timeoutMillis)
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        var rotated = false
+        while (true) {
+            val target = renderTarget ?: error("渲染目标未初始化")
+            target.acquireLatestImage()?.let { image ->
+                return try {
+                    image.toBitmap()
+                } finally {
+                    image.close()
+                }
+            }
+            val remaining = deadline - System.currentTimeMillis()
+            if (remaining <= 0) error(noFrameReason())
+            if (!rotated && remaining <= timeoutMillis - ROTATE_AFTER_MILLIS) {
+                rotateRenderTarget()
+                rotated = true
+            }
+            Thread.sleep(POLL_INTERVAL_MILLIS)
         }
-        val shot = file ?: error("mpv 没有生成截图")
-        val bitmap = BitmapFactory.decodeFile(shot.path) ?: error("无法解码截图")
-        shot.delete()
-        return bitmap
     }
 
     override fun close() {
@@ -151,9 +190,9 @@ internal class MpvBenchInstance(
             runCatching { instance.destroy() }
         }
         runCatching { surface?.release() }
-        runCatching { surfaceTexture?.release() }
         surface = null
-        surfaceTexture = null
+        runCatching { renderTarget?.close() }
+        renderTarget = null
         runCatching { workspace.deleteRecursively() }
     }
 
@@ -168,23 +207,76 @@ internal class MpvBenchInstance(
     }
 
     /**
-     * Attaches an offscreen surface to this instance.
+     * Points mpv's video output at an offscreen [ImageReader] of [width] x [height].
      *
-     * A [SurfaceTexture] is used because the frame only has to exist as pixels; nothing displays it
-     * while it is rendered, and the comparison views draw the captured bitmap instead. The buffer
-     * is sized in pixels to match the real viewport, so the rendered frame has the same aspect the
-     * user is looking at.
+     * [ImageReader] is used instead of a `SurfaceTexture` because the consumer side has to read the
+     * pixels back: a texture can only be sampled by OpenGL, an [ImageReader] hands the finished
+     * buffer over as bytes. The buffer is sized in pixels to match the real viewport, so the
+     * rendered frame has the same aspect the user is looking at.
      */
-    private fun attachOffscreenSurface(width: Int, height: Int) {
-        val texture = SurfaceTexture(0)
-        texture.setDefaultBufferSize(width, height)
-        val offscreen = Surface(texture)
-        surfaceTexture = texture
-        surface = offscreen
+    private fun attachRenderTarget(width: Int, height: Int) {
+        targetWidth = width
+        targetHeight = height
+        val target = createImageReader(width, height)
+        val targetSurface = target.surface
+        renderTarget = target
+        surface = targetSurface
         // Size first: attaching is what makes the video output (re)create itself, so the size has
         // to be known by then or the first frames are rendered for the previous viewport.
         setProperty("android-surface-size", "${width}x$height")
-        mpv?.attachSurface(offscreen)
+        mpv?.attachSurface(targetSurface)
+    }
+
+    private fun createImageReader(width: Int, height: Int): ImageReader {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return ImageReader.newInstance(width, height, pixelFormat, MAX_BUFFERED_FRAMES)
+        }
+        // The GPU writes the frame, we read it: without the color-output/sampled usage flags some
+        // devices hand out buffers the GL driver refuses to render into.
+        val usage = HardwareBuffer.USAGE_GPU_COLOR_OUTPUT or
+            HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or
+            HardwareBuffer.USAGE_CPU_READ_OFTEN
+        return ImageReader.newInstance(width, height, pixelFormat, MAX_BUFFERED_FRAMES, usage)
+    }
+
+    /**
+     * Rebuilds the render target with the other pixel format.
+     *
+     * Nothing arrived on the current one, which means the video output never handed a buffer over -
+     * usually because the format it wants and the one the reader was created with disagree. A fresh
+     * target with a fresh output is the only way to find out, and it also covers an output that
+     * simply missed its first swap.
+     */
+    private fun rotateRenderTarget() {
+        val instance = mpv ?: return
+        if (targetWidth <= 0 || targetHeight <= 0) return
+        val next = if (pixelFormat == PixelFormat.RGBA_8888) PixelFormat.RGBX_8888 else PixelFormat.RGBA_8888
+        Timber.w("mpv bench: no frame, recreating the render target as format %d", next)
+        runCatching { instance.detachSurface() }
+        runCatching { surface?.release() }
+        surface = null
+        runCatching { renderTarget?.close() }
+        renderTarget = null
+        pixelFormat = next
+        attachRenderTarget(targetWidth, targetHeight)
+    }
+
+    /**
+     * Explains an empty render target in terms the user can act on.
+     *
+     * `vo-configured=no` means the configuration killed the video output itself (an unsupported
+     * `vo`, a GPU option the device rejects) - that is a real result of the comparison, not a
+     * bug in the capture path, so it must not read like one.
+     */
+    private fun noFrameReason(): String {
+        val configured = runCatching { mpv?.getPropertyBoolean("vo-configured") }.getOrNull()
+        val vo = runCatching { mpv?.getPropertyString("vo") }.getOrNull()?.takeIf { it.isNotBlank() }
+        Timber.w("mpv bench: no frame, vo=%s vo-configured=%s", vo, configured)
+        return when {
+            configured == false -> "该配置无法初始化视频输出（vo=${vo ?: "未知"}）"
+            vo != null -> "mpv 没有输出画面（vo=$vo）"
+            else -> "mpv 没有输出画面"
+        }
     }
 
     private fun setProperty(name: String, value: Any) {
@@ -217,67 +309,65 @@ internal class MpvBenchInstance(
         }
     }
 
-    /** Empties the screenshot directory so the next file that appears is the one being waited for. */
-    private fun clearShots() {
-        shotDir.listFiles()?.forEach { it.delete() }
-    }
-
-    /** Writes one screenshot and returns the file, or null when mpv did not produce one. */
-    private fun takeScreenshot(timeoutMillis: Long): File? {
-        if (screenshotToFileSupported) {
-            // Deterministic: mpv writes exactly the file we named instead of us scanning a directory.
-            val target = File(shotDir, FRAME_FILE)
-            mpv?.command(arrayOf("screenshot-to-file", target.path, "video"))
-            waitForScreenshot(PROBE_TIMEOUT_MILLIS)?.let { return it }
-            screenshotToFileSupported = false
-        }
-        mpv?.command(arrayOf("screenshot"))
-        return waitForScreenshot(timeoutMillis)
-    }
-
     /**
-     * Polls [shotDir] for a finished screenshot.
+     * Converts a rendered buffer to a bitmap.
      *
-     * The size is read twice because mpv writes the file in place: a file that is still growing
-     * cannot be decoded, and returning it would fail the candidate for the wrong reason.
+     * Rows can be padded (`rowStride`), so the copy is done per row instead of assuming a packed
+     * `width * 4` layout. Alpha is forced opaque: the video output is free to leave the alpha
+     * channel at zero, and a transparent frame would render as nothing in the comparison views.
      */
-    private fun waitForScreenshot(timeoutMillis: Long): File? {
-        val deadline = System.currentTimeMillis() + timeoutMillis
-        while (System.currentTimeMillis() < deadline) {
-            val candidate = shotDir.listFiles()?.firstOrNull { it.isFile && it.length() > 0 }
-            if (candidate != null) {
-                val size = candidate.length()
-                Thread.sleep(SIZE_SETTLE_MILLIS)
-                if (candidate.length() == size && size > 0) return candidate
-            }
-            Thread.sleep(POLL_INTERVAL_MILLIS)
+    private fun Image.toBitmap(): Bitmap {
+        val plane = planes.firstOrNull() ?: error("渲染帧没有像素数据")
+        val buffer = plane.buffer
+        val rowStride = plane.rowStride
+        val pixelStride = plane.pixelStride
+        val imageWidth = width
+        val imageHeight = height
+        val bytes = ByteArray(buffer.remaining())
+        buffer.get(bytes)
+        // Rows are padded to rowStride, but the *last* row is often handed over unpadded, so the
+        // minimum is one full stride less plus a plain row.
+        val minimumSize = rowStride * (imageHeight - 1) + imageWidth * pixelStride
+        require(bytes.size >= minimumSize) {
+            "渲染帧大小异常：${bytes.size} < $minimumSize"
         }
-        return null
+
+        val pixels = IntArray(imageWidth * imageHeight)
+        var index = 0
+        for (y in 0 until imageHeight) {
+            var offset = y * rowStride
+            repeat(imageWidth) {
+                val r = bytes[offset].toInt() and 0xFF
+                val g = bytes[offset + 1].toInt() and 0xFF
+                val b = bytes[offset + 2].toInt() and 0xFF
+                pixels[index++] = OPAQUE_ALPHA or (r shl 16) or (g shl 8) or b
+                offset += pixelStride
+            }
+        }
+        return Bitmap.createBitmap(pixels, imageWidth, imageHeight, Bitmap.Config.ARGB_8888)
     }
 
     private companion object {
         const val CONFIG_DIR = "config"
         const val CONFIG_FILE_NAME = "mpv.conf"
-        const val SHOTS_DIR = "shots"
-        const val FRAME_FILE = "frame.png"
 
         const val MAX_QUEUED_EVENTS = 64
+
+        /**
+         * Frames kept by the render target. One is the frame being read, the extra one lets the
+         * video output swap without stalling on a buffer we have not consumed yet.
+         */
+        const val MAX_BUFFERED_FRAMES = 3
 
         /** Network sources need a generous opening budget; a transcode can take a while to start. */
         const val FILE_LOAD_TIMEOUT_MILLIS = 30_000L
 
-        /** Screenshot of a frozen frame is local work, so this only needs to cover a slow encoder. */
-        const val PROBE_TIMEOUT_MILLIS = 2_000L
-
         const val POLL_INTERVAL_MILLIS = 20L
-        const val SIZE_SETTLE_MILLIS = 25L
         const val FRAME_SETTLE_MILLIS = 120L
 
-        /**
-         * Whether the native library knows `screenshot-to-file` (mpv 0.36+). Probed once per
-         * process: when it is missing, every candidate would otherwise pay the probe timeout again.
-         */
-        @Volatile
-        var screenshotToFileSupported = true
+        /** How long an empty render target is given before it is rebuilt in the other format. */
+        const val ROTATE_AFTER_MILLIS = 1_500L
+
+        const val OPAQUE_ALPHA = 0xFF shl 24
     }
 }

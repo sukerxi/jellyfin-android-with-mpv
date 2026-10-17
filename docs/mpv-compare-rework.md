@@ -101,12 +101,36 @@ mpv 只有在初始化时才读 `mpv.conf`。任何"运行时换配置"的方案
 
 1. 把候选配置写进 `<cache>/mpv-bench/run-N/config/mpv.conf`；
 2. 创建实例，套用 `baseOptions(configDir = 该目录)`，`init()`；
-3. 强制 `ao=null`、`aid=no`、`sid=no`、`osd-level=0`、`keep-open=yes`、`screenshot-*`（都不影响视频渲染）；
-4. `android-surface-size = WxH`（像素）→ attach 离屏 `SurfaceTexture`；
+3. 强制 `ao=null`、`aid=no`、`sid=no`、`osd-level=0`、`keep-open=yes`（都不影响视频渲染）；
+4. `android-surface-size = WxH`（像素）→ attach 离屏 `ImageReader` 的 surface；
 5. `loadfile url replace 0 start=+pos`；
 6. 等 `FILE_LOADED` → 等 `PLAYBACK_RESTART`（此刻首帧已在屏上）→ `pause=yes` 冻结；
-7. `screenshot-to-file frame.png video`（旧版 mpv 回退到 `screenshot`；GPU 读回不可用时再回退到 `screenshot-sw=yes`）；
-8. `stop` → `detach` → `destroy` → 释放 surface → 删除临时目录。
+7. 从 `ImageReader` 直接读回像素（详见下一节）；
+8. `stop` → `detach` → `destroy` → 释放 surface / reader → 删除临时目录。
+
+### 取帧：为什么不用 mpv 的 `screenshot`
+
+**这是"对比完全无法工作"的真正根因，和时序无关。**
+
+mpv 的 `screenshot` / `screenshot-to-file` 走 libavcodec：先 `screenshot-sw`/GPU 读回拿到帧，再用 `png`/`mjpeg` **编码器**编码、由 **muxer** 写盘。而这个 app 打包的 libmpv，其 FFmpeg 是按
+
+```
+--disable-{muxers,encoders,devices,filters}
+```
+
+编译的（libmpv-android `buildscripts/scripts/ffmpeg.sh`）。编码器和 muxer 都被关掉，所以**任何格式、任何模式的截图都写不出文件**，mpv 只在自己的日志里留一行失败，界面上就只剩"mpv 没有生成截图"。`screenshot-sw=yes` 也救不了——它换的是取帧方式，编码器仍然缺。
+
+现在的做法完全绕开编码器：mpv 渲染进 `ImageReader`（`RGBA_8888`，`USAGE_GPU_COLOR_OUTPUT | USAGE_GPU_SAMPLED_IMAGE | USAGE_CPU_READ_OFTEN`），渲染完成后直接 `acquireLatestImage()` 拿 buffer，按 `rowStride`/`pixelStride` 拷成 `ARGB_8888` 位图（alpha 强制不透明，否则透明帧在对比视图里什么都看不到）。这样：
+
+- 不依赖 FFmpeg 编码器，结构上不可能再出现"没有生成截图"；
+- 拿到的是 GPU 真实输出，正是渲染配置对比要比较的东西；
+- 少一次 PNG 编码和一次磁盘往返，单个候选更快。
+
+两个附带处理：
+
+- **像素格式可能对不上**：某些驱动不接受 GL 往 `RGBA_8888` 里画。`captureFrame` 在超时前半段会用另一套格式（`RGBX_8888`）把渲染目标重建一次并重新 attach，都不行才报错。
+- **渲染尺寸封顶**：`MpvSceneRendererImpl` 把视口按最长边 1080 等比缩小渲染（1440x3040 → 512x1080 一类）。原始视口每帧约 4.4MP，25 个候选仅像素就 400MB+，且 diff 会明显变慢；等比缩放不影响几何比例，也不影响任何渲染选项的效果。
+- **失败要有解释**：取不到帧时会读 `vo-configured`，为 `no` 就报"该配置无法初始化视频输出（vo=…）"——这是对比的合法结论（某个 `vo`/GPU 选项在本机跑不起来），而不是取帧 bug。
 
 ---
 
@@ -130,4 +154,7 @@ mpv 只有在初始化时才读 `mpv.conf`。任何"运行时换配置"的方案
 5. 旋转到竖屏、退出播放器再进入：画面比例正常（这是原来的拉伸 bug）；
 6. 点「采用这份配置」→ 重启应用后生效。
 
-如果第 3 步全部显示"渲染失败"，把 logcat 里 `mpv bench:` 的告警发我——那说明这个设备上离屏 surface 或截图路径需要换一种取帧方式（代码里已留了软件截图回退）。
+如果第 3 步仍然全部"渲染失败"，看它报的是哪一类：
+
+- **"该配置无法初始化视频输出（vo=…）"** —— 该 `vo` 在本机跑不起来，属于对比结论，换一个选项继续测；
+- **"mpv 没有输出画面（vo-configured=…）"** —— 解码出画了但渲染目标没收到 buffer，说明这台设备的离屏 surface 需要换一种承载方式（届时把 logcat 里 `mpv bench: no frame` 那几行发我）。
