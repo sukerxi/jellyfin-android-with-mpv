@@ -65,7 +65,8 @@ fun RawFrame.toImageBitmap(): ImageBitmap = toBitmap().asImageBitmap()
  *
  * When [difference] is provided the comparison switches to the difference overlay instead of the
  * candidate: a spatial swipe only helps when the change is spatially local, while the overlay also
- * shows a difference that covers the whole frame.
+ * shows a difference that covers the whole frame. The overlay already spans the full frame, so the
+ * seam is hidden there - dragging it would not reveal anything.
  */
 @Composable
 fun SwipeCompare(
@@ -82,7 +83,6 @@ fun SwipeCompare(
             .clip(RoundedCornerShape(8.dp))
             .background(Color.Black),
     ) {
-        val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
         FrameImage(
             bitmap = baseline,
             description = stringResource(R.string.mpv_compare_baseline_frame),
@@ -97,6 +97,7 @@ fun SwipeCompare(
                 modifier = Modifier.fillMaxSize(),
             )
         } else {
+            val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
             FrameImage(
                 bitmap = candidate,
                 description = stringResource(R.string.mpv_compare_candidate_frame),
@@ -105,14 +106,14 @@ fun SwipeCompare(
                     .fillMaxSize()
                     .clipToFraction(dividerFraction),
             )
+            CompareDivider(
+                fraction = dividerFraction,
+                onDrag = { delta -> dividerFraction = (dividerFraction + delta / widthPx).coerceIn(0f, 1f) },
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .offset(x = maxWidth * dividerFraction - 12.dp),
+            )
         }
-        CompareDivider(
-            fraction = dividerFraction,
-            onDrag = { delta -> dividerFraction = (dividerFraction + delta / widthPx).coerceIn(0f, 1f) },
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .offset(x = maxWidth * dividerFraction - 12.dp),
-        )
     }
 }
 

@@ -318,6 +318,8 @@ fun CompareBody(
             }
         }
 
+        // The display modes and the zoom steps each get their own row: on a phone-sized screen a
+        // single row cannot fit six chips, and the zoom buttons would fall off the edge.
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -329,7 +331,18 @@ fun CompareBody(
                     label = { Text(stringResource(entry.labelRes)) },
                 )
             }
-            Spacer(modifier = Modifier.weight(1f))
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.mpv_compare_zoom),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             COMPARE_ZOOM_STEPS.forEach { step ->
                 FilterChip(
                     selected = zoom == step,
