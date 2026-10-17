@@ -322,10 +322,13 @@
     <string name="mpv_compare_run">Compare</string>
     <string name="mpv_compare_rerun">Compare again</string>
     <string name="mpv_compare_running">Rendering frames…</string>
+    <string name="mpv_compare_running_hint">Every configuration starts mpv again, so the first frame can take a few seconds. Stop it if it looks stuck.</string>
+    <string name="mpv_compare_cancel">Stop</string>
     <string name="mpv_compare_scene_required">Play a video first, then capture the frame you want to compare.</string>
     <string name="mpv_compare_engine_required">The MPV player must be selected for this comparison.</string>
     <string name="mpv_compare_no_changes">This configuration has no options to compare.</string>
     <string name="mpv_compare_no_result">No result</string>
+    <string name="mpv_compare_baseline_missing">The baseline frame (current configuration) could not be rendered; only the changed frame is shown.</string>
     <string name="mpv_compare_delta_identical">Pixels are identical</string>
     <string name="mpv_compare_delta_value">Average difference: %1$d / 255</string>
     <string name="mpv_compare_change_position">Change %1$d of %2$d</string>
@@ -356,4 +359,8 @@
     <string name="mpv_compare_progress">Rendering frame %1$d of %2$d…</string>
     <string name="mpv_compare_unchanged">The edited configuration matches the saved one. Change an option to compare it.</string>
     <string name="mpv_compare_some_failed">Some changes could not be rendered.</string>
+    <string name="mpv_compare_some_failed_reason">Some changes could not be rendered: %1$s</string>
+    <string name="mpv_compare_apply_failed_title">This configuration rendered nothing</string>
+    <string name="mpv_compare_apply_failed_message">This configuration produced no picture during the comparison:\n%1$s\n\nNormal playback may end up black or audio-only. Keep it anyway?</string>
+    <string name="mpv_compare_apply_anyway">Keep anyway</string>
 </resources>

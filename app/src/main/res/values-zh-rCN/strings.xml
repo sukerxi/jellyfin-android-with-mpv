@@ -297,10 +297,13 @@
     <string name="mpv_compare_run">开始对比</string>
     <string name="mpv_compare_rerun">重新对比</string>
     <string name="mpv_compare_running">正在渲染对比帧…</string>
+    <string name="mpv_compare_running_hint">每个配置都要重新启动一次 mpv，第一帧可能需要几秒；卡住可以停止。</string>
+    <string name="mpv_compare_cancel">停止对比</string>
     <string name="mpv_compare_scene_required">请先播放视频，再取一帧用于对比。</string>
     <string name="mpv_compare_engine_required">请先在设置里选择 MPV 播放器。</string>
     <string name="mpv_compare_no_changes">当前配置没有可对比的选项。</string>
     <string name="mpv_compare_no_result">无结果</string>
+    <string name="mpv_compare_baseline_missing">基线帧（当前配置）没有渲染出来，下面只显示这处改动后的画面。</string>
     <string name="mpv_compare_delta_identical">像素完全一致</string>
     <string name="mpv_compare_delta_value">平均差异：%1$d / 255</string>
     <string name="mpv_compare_change_position">第 %1$d / %2$d 项改动</string>
@@ -331,4 +334,8 @@
     <string name="mpv_compare_progress">正在渲染第 %1$d / %2$d 帧…</string>
     <string name="mpv_compare_unchanged">编辑的配置与当前配置相同，先改动一项再对比。</string>
     <string name="mpv_compare_some_failed">有改动渲染失败。</string>
+    <string name="mpv_compare_some_failed_reason">有改动渲染失败：%1$s</string>
+    <string name="mpv_compare_apply_failed_title">这份配置没能渲染出画面</string>
+    <string name="mpv_compare_apply_failed_message">对比时该配置没有输出任何画面：\n%1$s\n\n采用后正常播放可能黑屏或只有声音，确定要采用吗？</string>
+    <string name="mpv_compare_apply_anyway">仍然采用</string>
 </resources>

@@ -200,6 +200,30 @@ fun BlinkCompare(
     )
 }
 
+/**
+ * A single frame, drawn like the ones in [SwipeCompare].
+ *
+ * For the case where the baseline failed to render but this candidate did: there is nothing to
+ * compare against, yet the frame itself is a result the user asked for, so it must not be hidden
+ * behind an error message.
+ */
+@Composable
+fun SingleFrame(
+    frame: ImageBitmap,
+    zoom: Float,
+    modifier: Modifier = Modifier,
+) {
+    FrameImage(
+        bitmap = frame,
+        description = stringResource(R.string.mpv_compare_candidate_frame),
+        zoom = zoom,
+        modifier = modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color.Black),
+    )
+}
+
 /** Verdict and metrics of one compared change. */
 @Composable
 fun ComparisonSummary(

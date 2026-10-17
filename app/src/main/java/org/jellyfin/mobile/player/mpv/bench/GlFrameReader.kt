@@ -9,6 +9,8 @@ import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
+import android.os.Handler
+import android.os.Looper
 import android.view.Surface
 import timber.log.Timber
 import java.io.Closeable
@@ -100,7 +102,12 @@ internal class GlFrameReader(private val width: Int, private val height: Int) : 
             setDefaultBufferSize(width, height)
             // The producer does not stamp presentation times, so "is there a new frame" cannot be
             // told from `timestamp`; the callback is what reports it.
-            setOnFrameAvailableListener { frameAvailable.set(true) }
+            //
+            // The handler is passed explicitly: without one, `setOnFrameAvailableListener` needs a
+            // Looper on the calling thread and throws when there is none - which is exactly the
+            // case for the background thread a comparison renders on. The callback only flips an
+            // atomic, so the main thread is a fine place to receive it.
+            setOnFrameAvailableListener({ frameAvailable.set(true) }, Handler(Looper.getMainLooper()))
         }
         surface = Surface(surfaceTexture)
 

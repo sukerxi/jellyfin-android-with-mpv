@@ -33,9 +33,7 @@ class MpvSceneRendererImpl(private val appContext: Context) : MpvSceneRenderer {
         val (renderWidth, renderHeight) = renderSizeOf(spec)
 
         val frames = candidates.mapIndexed { index, candidate ->
-            val result = runCatching {
-                renderOne(spec, candidate, renderWidth, renderHeight, File(root, "run-$index"))
-            }
+            val result = renderWithDeadline(spec, candidate, renderWidth, renderHeight, File(root, "run-$index"), index)
             onProgress(index + 1, total)
             result.fold(
                 onSuccess = { image -> SceneFrame(candidate, image) },
@@ -46,6 +44,38 @@ class MpvSceneRendererImpl(private val appContext: Context) : MpvSceneRenderer {
             )
         }
         return SceneCapture(spec, frames)
+    }
+
+    /**
+     * Renders one candidate on a thread this method is allowed to walk away from.
+     *
+     * Everything [renderOne] does ends in a native call (mpv instance start-up, hardware decoding,
+     * `glReadPixels`) and none of them can be interrupted from Kotlin: `join(timeout)` is the only
+     * way to bound them. Abandoning a thread leaks the instance it is stuck in, which is the lesser
+     * evil - the alternative is a comparison that never reports back, and a UI that therefore stays
+     * disabled until the app is restarted.
+     */
+    private fun renderWithDeadline(
+        spec: SceneSpec,
+        candidate: BenchCandidate,
+        renderWidth: Int,
+        renderHeight: Int,
+        workspace: File,
+        index: Int,
+    ): Result<RawFrame> {
+        var outcome: Result<RawFrame>? = null
+        val worker = Thread(
+            { outcome = runCatching { renderOne(spec, candidate, renderWidth, renderHeight, workspace) } },
+            "mpv-bench-$index",
+        ).apply { isDaemon = true }
+        worker.start()
+        worker.join(CANDIDATE_DEADLINE_MILLIS)
+        if (worker.isAlive) {
+            Timber.w("mpv bench: %s did not finish within %d ms", candidate.id, CANDIDATE_DEADLINE_MILLIS)
+            return Result.failure(IllegalStateException("渲染超时（${CANDIDATE_DEADLINE_MILLIS / 1000} 秒内没有取到画面）"))
+        }
+        // `join` returning means the thread finished, so its writes are visible here.
+        return outcome ?: Result.failure(IllegalStateException("渲染失败"))
     }
 
     private fun renderOne(
@@ -59,11 +89,20 @@ class MpvSceneRendererImpl(private val appContext: Context) : MpvSceneRenderer {
         // would be read by the new instance instead of this candidate's.
         workspace.deleteRecursively()
 
+        // Timed per stage on purpose: a stuck run leaves the overlay disabled, and these lines are
+        // what tells "decoder never started" apart from "the read-back never returned" in logcat.
+        val startedAt = System.currentTimeMillis()
+        fun sinceStart(): Long = System.currentTimeMillis() - startedAt
+
         val bitmap: Bitmap = MpvBenchInstance(appContext, workspace).use { instance ->
             instance.open(candidate.configText, renderWidth, renderHeight)
+            Timber.d("mpv bench: %s opened (%dx%d) after %d ms", candidate.id, renderWidth, renderHeight, sinceStart())
             instance.load(spec.sourceUrl, spec.positionMs)
             instance.awaitFirstFrame(FIRST_FRAME_TIMEOUT_MILLIS)
-            instance.captureFrame(CAPTURE_TIMEOUT_MILLIS)
+            Timber.d("mpv bench: %s first frame after %d ms", candidate.id, sinceStart())
+            instance.captureFrame(CAPTURE_TIMEOUT_MILLIS).also {
+                Timber.d("mpv bench: %s frame captured after %d ms", candidate.id, sinceStart())
+            }
         }
         return bitmap.toRawFrame()
     }
@@ -100,8 +139,17 @@ class MpvSceneRendererImpl(private val appContext: Context) : MpvSceneRenderer {
     private companion object {
         const val BENCH_DIR = "mpv-bench"
 
+        /**
+         * Hard limit for one candidate, watchdog included.
+         *
+         * Sits above the sum of the waits [MpvBenchInstance] performs itself (opening the source,
+         * the first frame, the read-back) so a slow but healthy render still reports its own, more
+         * specific error; it only fires when a native call never returns at all.
+         */
+        const val CANDIDATE_DEADLINE_MILLIS = 45_000L
+
         /** Decoding the scene at the captured position; network sources can take a while. */
-        const val FIRST_FRAME_TIMEOUT_MILLIS = 20_000L
+        const val FIRST_FRAME_TIMEOUT_MILLIS = 15_000L
 
         /**
          * Reading one frame back from the render target. Generous on purpose: a hardware decoder

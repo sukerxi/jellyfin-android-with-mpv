@@ -194,7 +194,8 @@ internal class MpvBenchInstance(
         val vo = runCatching { mpv?.getPropertyString("vo") }.getOrNull()?.takeIf { it.isNotBlank() }
         Timber.w("mpv bench: no frame, vo=%s vo-configured=%s", vo, configured)
         return when {
-            configured == false -> "该配置无法初始化视频输出（vo=${vo ?: "未知"}）"
+            configured == false -> "视频输出无法初始化（vo=${vo ?: "未知"}）" +
+                "——名称可能拼错或本机不支持，常用：gpu、gpu-next"
             vo != null -> "mpv 没有输出画面（vo=$vo）"
             else -> "mpv 没有输出画面"
         }
@@ -236,8 +237,14 @@ internal class MpvBenchInstance(
 
         const val MAX_QUEUED_EVENTS = 64
 
-        /** Network sources need a generous opening budget; a transcode can take a while to start. */
-        const val FILE_LOAD_TIMEOUT_MILLIS = 30_000L
+        /**
+         * Network sources need a generous opening budget; a transcode can take a while to start.
+         *
+         * Kept together with [org.jellyfin.mobile.player.mpv.bench.MpvSceneRendererImpl]'s
+         * per-candidate deadline: the waits here must add up to less than that, so a slow start
+         * reports itself instead of being cut off by the watchdog.
+         */
+        const val FILE_LOAD_TIMEOUT_MILLIS = 20_000L
 
         /** Pause lands after the frame was presented; the output needs a moment to hand it over. */
         const val FRAME_SETTLE_MILLIS = 120L
