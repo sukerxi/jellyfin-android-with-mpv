@@ -54,6 +54,7 @@ import org.jellyfin.mobile.R
 import org.jellyfin.mobile.player.PlayerViewModel
 import org.jellyfin.mobile.player.mpv.MpvConfigManager
 import org.jellyfin.mobile.player.mpv.bench.BenchCandidate
+import org.jellyfin.mobile.player.mpv.bench.CompareMode
 import org.jellyfin.mobile.player.mpv.bench.ComparedFrame
 import org.jellyfin.mobile.player.mpv.bench.FrameCompareViewModel
 import org.jellyfin.mobile.player.mpv.bench.MpvBenchConfig
@@ -128,10 +129,13 @@ fun InPlayerCompareOverlay(
     }
 
     // Rendering a candidate is the only way to know whether the edited config still differs from the
-    // saved one; comparing the two texts is cheap and does not need a run.
-    val hasChanges = remember(editedConfig, baselineConfig) {
+    // saved one; comparing the two texts is cheap and does not need a run. An engine comparison has
+    // no editor at all, and always has something to compare.
+    val engineMode = state.mode == CompareMode.ENGINE
+    val configChanges = remember(editedConfig, baselineConfig) {
         MpvBenchConfig.changes(baselineConfig, editedConfig).isNotEmpty()
     }
+    val hasChanges = engineMode || configChanges
     val allChangesLabel = stringResource(R.string.mpv_compare_all_changes)
     val compared = remember(state.compared, allChangesLabel) {
         state.compared.withDisplayLabels(allChangesLabel)
@@ -152,17 +156,22 @@ fun InPlayerCompareOverlay(
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     val onRun: () -> Unit = {
-        val invalid = MpvConfigManager.findInvalidLine(editedConfig)
-        when {
-            invalid != null -> Toast.makeText(
-                context,
-                context.getString(R.string.mpv_config_editor_invalid_line, invalid),
-                Toast.LENGTH_LONG,
-            ).show()
-            // The action stays enabled in this case on purpose: a dead grey button tells the user
-            // nothing, a toast says exactly why nothing will be rendered.
-            !hasChanges -> Toast.makeText(context, R.string.mpv_compare_no_changes, Toast.LENGTH_SHORT).show()
-            else -> controller.run()
+        // An engine comparison has no config to validate: it always renders mpv and ExoPlayer.
+        if (engineMode) {
+            controller.run()
+        } else {
+            val invalid = MpvConfigManager.findInvalidLine(editedConfig)
+            when {
+                invalid != null -> Toast.makeText(
+                    context,
+                    context.getString(R.string.mpv_config_editor_invalid_line, invalid),
+                    Toast.LENGTH_LONG,
+                ).show()
+                // The action stays enabled in this case on purpose: a dead grey button tells the
+                // user nothing, a toast says exactly why nothing will be rendered.
+                !hasChanges -> Toast.makeText(context, R.string.mpv_compare_no_changes, Toast.LENGTH_SHORT).show()
+                else -> controller.run()
+            }
         }
     }
 
@@ -253,6 +262,10 @@ fun InPlayerCompareOverlay(
                                     .weight(1f)
                                     .verticalScroll(rememberScrollState()),
                             ) {
+                                CompareModePicker(
+                                    mode = state.mode,
+                                    onModeChange = controller::setMode,
+                                )
                                 if (selected != null) {
                                     CompareDetails(
                                         compared = compared,
@@ -262,21 +275,27 @@ fun InPlayerCompareOverlay(
                                         onModeChange = { displayMode = it },
                                         zoom = zoom,
                                         onZoomChange = { zoom = it },
+                                        showChangePosition = !engineMode,
                                     )
                                     Spacer(modifier = Modifier.height(4.dp))
                                 }
-                                CompareEditor(
-                                    state = state,
-                                    editedConfig = editedConfig,
-                                    onEditedConfigChange = controller::setEditedConfig,
-                                    hasChanges = hasChanges,
-                                    failedReason = failedReason,
-                                    editorHeight = 72.dp,
-                                )
+                                if (engineMode) {
+                                    EngineHint(failedReason = failedReason)
+                                } else {
+                                    CompareEditor(
+                                        state = state,
+                                        editedConfig = editedConfig,
+                                        onEditedConfigChange = controller::setEditedConfig,
+                                        hasChanges = hasChanges,
+                                        failedReason = failedReason,
+                                        editorHeight = 72.dp,
+                                    )
+                                }
                             }
                             CompareActions(
                                 state = state,
                                 hasChanges = hasChanges,
+                                showApply = !engineMode,
                                 onRun = onRun,
                                 onCancel = controller::cancel,
                                 onApply = onApply,
@@ -293,6 +312,10 @@ fun InPlayerCompareOverlay(
                         zoom = zoom,
                         modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 4.dp),
                     )
+                    CompareModePicker(
+                        mode = state.mode,
+                        onModeChange = controller::setMode,
+                    )
                     if (selected != null) {
                         CompareDetails(
                             compared = compared,
@@ -302,19 +325,25 @@ fun InPlayerCompareOverlay(
                             onModeChange = { displayMode = it },
                             zoom = zoom,
                             onZoomChange = { zoom = it },
+                            showChangePosition = !engineMode,
                         )
                     }
-                    CompareEditor(
-                        state = state,
-                        editedConfig = editedConfig,
-                        onEditedConfigChange = controller::setEditedConfig,
-                        hasChanges = hasChanges,
-                        failedReason = failedReason,
-                        editorHeight = 96.dp,
-                    )
+                    if (engineMode) {
+                        EngineHint(failedReason = failedReason)
+                    } else {
+                        CompareEditor(
+                            state = state,
+                            editedConfig = editedConfig,
+                            onEditedConfigChange = controller::setEditedConfig,
+                            hasChanges = hasChanges,
+                            failedReason = failedReason,
+                            editorHeight = 96.dp,
+                        )
+                    }
                     CompareActions(
                         state = state,
                         hasChanges = hasChanges,
+                        showApply = !engineMode,
                         onRun = onRun,
                         onCancel = controller::cancel,
                         onApply = onApply,
@@ -474,6 +503,7 @@ private fun CompareDetails(
     onModeChange: (CompareDisplayMode) -> Unit,
     zoom: Float,
     onZoomChange: (Float) -> Unit,
+    showChangePosition: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val selected = compared.getOrNull(selectedIndex) ?: return
@@ -517,7 +547,12 @@ private fun CompareDetails(
             }
         }
 
-        ComparisonSummary(compared = selected, index = selectedIndex, total = compared.size)
+        ComparisonSummary(
+            compared = selected,
+            index = selectedIndex,
+            total = compared.size,
+            showChangePosition = showChangePosition,
+        )
 
         if (compared.size > 1) {
             Row(
@@ -588,12 +623,14 @@ private fun CompareEditor(
  * The action row.
  *
  * Pinned to the bottom of its column in landscape: the editor above it scrolls, so the primary
- * action must not be the thing that scrolls off.
+ * action must not be the thing that scrolls off. "Apply" only exists in a configuration comparison:
+ * an engine comparison has no edited file to keep.
  */
 @Composable
 private fun CompareActions(
     state: MpvConfigCompareState,
     hasChanges: Boolean,
+    showApply: Boolean,
     onRun: () -> Unit,
     onCancel: () -> Unit,
     onApply: () -> Unit,
@@ -622,14 +659,72 @@ private fun CompareActions(
                 )
             }
         }
-        Button(
-            enabled = !state.isRunning && state.hasResult && hasChanges,
-            onClick = onApply,
-        ) {
-            Text(text = stringResource(R.string.mpv_compare_apply))
+        if (showApply) {
+            Button(
+                enabled = !state.isRunning && state.hasResult && hasChanges,
+                onClick = onApply,
+            ) {
+                Text(text = stringResource(R.string.mpv_compare_apply))
+            }
         }
     }
 }
+
+/**
+ * Chooses what the next run compares.
+ *
+ * Kept with the other controls instead of the header: landscape is short on height, and a row that
+ * is only useful *before* a run must not take height away from the frame.
+ */
+@Composable
+private fun CompareModePicker(
+    mode: CompareMode,
+    onModeChange: (CompareMode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CompareMode.entries.forEach { entry ->
+            FilterChip(
+                selected = mode == entry,
+                onClick = { onModeChange(entry) },
+                label = { Text(stringResource(entry.labelRes)) },
+            )
+        }
+    }
+}
+
+/** Explains an engine comparison, in place of the config editor it does not have. */
+@Composable
+private fun EngineHint(failedReason: String?, modifier: Modifier = Modifier) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Text(
+            text = stringResource(R.string.mpv_compare_engine_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+        // The frame pane already carries the reason when nothing rendered; this is for the case
+        // where mpv produced a frame and ExoPlayer did not.
+        if (failedReason != null) {
+            Text(
+                text = stringResource(R.string.mpv_compare_some_failed_reason, failedReason),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+    }
+}
+
+private val CompareMode.labelRes: Int
+    get() = when (this) {
+        CompareMode.CONFIG -> R.string.mpv_compare_mode_config
+        CompareMode.ENGINE -> R.string.mpv_compare_mode_engine
+    }
 
 /**
  * "vo=gpu1：该配置无法初始化视频输出（vo=gpu1）" - which change failed, and why.

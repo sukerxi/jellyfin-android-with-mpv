@@ -1,13 +1,13 @@
 package org.jellyfin.mobile.player.mpv.bench
 
 import android.content.Context
-import android.graphics.Bitmap
+import androidx.media3.exoplayer.source.MediaSource
 import timber.log.Timber
 import java.io.File
 import kotlin.math.roundToInt
 
 /**
- * Renders benchmark frames on throwaway mpv instances.
+ * Renders benchmark frames on throwaway mpv instances, or on a throwaway ExoPlayer instance.
  *
  * One instance per candidate (see [MpvBenchInstance]) is what makes the result trustworthy: mpv
  * only reads `mpv.conf` at startup, so a fresh instance is the only way to render "this exact
@@ -15,9 +15,16 @@ import kotlin.math.roundToInt
  * start-up per candidate, which the UI hides behind a progress count.
  *
  * The player instance is never touched, so a comparison cannot leave playback without a surface,
- * with a changed `mpv.conf`, or with an option it did not ask for.
+ * with a changed `mpv.conf`, or with an option it did not ask for. The same holds for the ExoPlayer
+ * candidate, which renders on its own player (see [ExoFrameRenderer]) rather than on the one media3
+ * may be using elsewhere in the app.
  */
-class MpvSceneRendererImpl(private val appContext: Context) : MpvSceneRenderer {
+class MpvSceneRendererImpl(
+    private val appContext: Context,
+    mediaSourceFactory: MediaSource.Factory,
+) : MpvSceneRenderer {
+
+    private val exoRenderer by lazy { ExoFrameRenderer(appContext, mediaSourceFactory) }
 
     override fun render(
         spec: SceneSpec,
@@ -33,7 +40,12 @@ class MpvSceneRendererImpl(private val appContext: Context) : MpvSceneRenderer {
         val (renderWidth, renderHeight) = renderSizeOf(spec)
 
         val frames = candidates.mapIndexed { index, candidate ->
-            val result = renderWithDeadline(spec, candidate, renderWidth, renderHeight, File(root, "run-$index"), index)
+            val result = when (candidate.engine) {
+                RenderEngine.MPV -> renderWithDeadline(spec, candidate, renderWidth, renderHeight, File(root, "run-$index"), index)
+                RenderEngine.EXOPLAYER -> withDeadline(candidate, "exo-bench-$index") {
+                    exoRenderer.render(spec, renderWidth, renderHeight)
+                }
+            }
             onProgress(index + 1, total)
             result.fold(
                 onSuccess = { rendered ->
@@ -48,21 +60,7 @@ class MpvSceneRendererImpl(private val appContext: Context) : MpvSceneRenderer {
         return SceneCapture(spec, frames)
     }
 
-    /** A rendered frame plus the options the instance really ran with. */
-    private data class RenderedFrame(
-        val frame: RawFrame,
-        val effective: Map<String, String>,
-    )
-
-    /**
-     * Renders one candidate on a thread this method is allowed to walk away from.
-     *
-     * Everything [renderOne] does ends in a native call (mpv instance start-up, hardware decoding,
-     * `glReadPixels`) and none of them can be interrupted from Kotlin: `join(timeout)` is the only
-     * way to bound them. Abandoning a thread leaks the instance it is stuck in, which is the lesser
-     * evil - the alternative is a comparison that never reports back, and a UI that therefore stays
-     * disabled until the app is restarted.
-     */
+    /** Renders one mpv candidate on a thread this method is allowed to walk away from. */
     private fun renderWithDeadline(
         spec: SceneSpec,
         candidate: BenchCandidate,
@@ -70,12 +68,25 @@ class MpvSceneRendererImpl(private val appContext: Context) : MpvSceneRenderer {
         renderHeight: Int,
         workspace: File,
         index: Int,
+    ): Result<RenderedFrame> = withDeadline(candidate, "mpv-bench-$index") {
+        renderOne(spec, candidate, renderWidth, renderHeight, workspace)
+    }
+
+    /**
+     * Runs [block] on its own thread and gives up on it after [CANDIDATE_DEADLINE_MILLIS].
+     *
+     * Both engines end in calls that cannot be interrupted from Kotlin (mpv's native instance,
+     * ExoPlayer on another looper), so `join(timeout)` is the only way to bound them. Abandoning a
+     * thread leaks what it holds, which is the lesser evil - the alternative is a comparison that
+     * never reports back, and a UI that therefore stays disabled until the app is restarted.
+     */
+    private fun withDeadline(
+        candidate: BenchCandidate,
+        threadName: String,
+        block: () -> RenderedFrame,
     ): Result<RenderedFrame> {
         var outcome: Result<RenderedFrame>? = null
-        val worker = Thread(
-            { outcome = runCatching { renderOne(spec, candidate, renderWidth, renderHeight, workspace) } },
-            "mpv-bench-$index",
-        ).apply { isDaemon = true }
+        val worker = Thread({ outcome = runCatching(block) }, threadName).apply { isDaemon = true }
         worker.start()
         worker.join(CANDIDATE_DEADLINE_MILLIS)
         if (worker.isAlive) {
@@ -111,7 +122,8 @@ class MpvSceneRendererImpl(private val appContext: Context) : MpvSceneRenderer {
             val bitmap = instance.captureFrame(CAPTURE_TIMEOUT_MILLIS).also {
                 Timber.d("mpv bench: %s frame captured after %d ms", candidate.id, sinceStart())
             }
-            val effective = instance.effectiveOptions() + mapOf("output" to "${renderWidth}x$renderHeight")
+            val effective = instance.effectiveOptions() +
+                mapOf("engine" to "mpv", "output" to "${renderWidth}x$renderHeight")
             Timber.d("mpv bench: %s effective %s", candidate.id, effective)
             bitmap to effective
         }
@@ -131,20 +143,6 @@ class MpvSceneRendererImpl(private val appContext: Context) : MpvSceneRenderer {
         val scale = RENDER_MAX_LONG_SIDE.toFloat() / longestSide
         return (spec.viewportWidth * scale).roundToInt().coerceAtLeast(MIN_RENDER_SIDE) to
             (spec.viewportHeight * scale).roundToInt().coerceAtLeast(MIN_RENDER_SIDE)
-    }
-
-    /**
-     * Copies the bitmap into the flat pixel array the comparison works on.
-     *
-     * The bitmap is recycled right away: a full-screen frame is ~10 MB, and a run holds one per
-     * candidate only as pixels.
-     */
-    private fun Bitmap.toRawFrame(): RawFrame {
-        val pixels = IntArray(width * height)
-        getPixels(pixels, 0, width, 0, 0, width, height)
-        val frame = RawFrame(width, height, pixels)
-        recycle()
-        return frame
     }
 
     private companion object {

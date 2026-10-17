@@ -13,10 +13,12 @@ data class BenchCandidate(
     val id: String,
     /** Short label for the UI: the option line that differs, already formatted for display. */
     val label: String,
-    /** Complete `mpv.conf` content. */
+    /** Complete `mpv.conf` content. Empty for engines that do not read a config. */
     val configText: String,
     /** True for the frame rendered with the configuration playback is using right now. */
     val isBaseline: Boolean = false,
+    /** Renderer that produces this candidate's frame. */
+    val engine: RenderEngine = RenderEngine.MPV,
 )
 
 /**
@@ -43,12 +45,28 @@ object MpvBenchConfig {
     /** Id of the baseline candidate: the saved configuration. */
     const val BASELINE_ID = "baseline"
 
+    /** Id of the candidate rendered by ExoPlayer instead of mpv. */
+    const val EXOPLAYER_ID = "exoplayer"
+
     /** The configuration normal playback is currently using. */
     fun baseline(config: String): BenchCandidate = BenchCandidate(
         id = BASELINE_ID,
         label = "",
         configText = config.trim(),
         isBaseline = true,
+    )
+
+    /**
+     * The same scene rendered by ExoPlayer, for a player-to-player comparison.
+     *
+     * Carries no config text: ExoPlayer does not read `mpv.conf`, and pretending otherwise would
+     * make the candidate look editable in the UI.
+     */
+    fun exoPlayer(): BenchCandidate = BenchCandidate(
+        id = EXOPLAYER_ID,
+        label = "ExoPlayer",
+        configText = "",
+        engine = RenderEngine.EXOPLAYER,
     )
 
     /**

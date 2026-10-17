@@ -294,6 +294,9 @@
     <string name="mpv_compare_capture_scene">取当前画面</string>
     <string name="mpv_compare_capture_scene_in_progress">正在取帧…</string>
     <string name="mpv_compare_scene_info">第 %1$s 帧 · %2$dx%3$d</string>
+    <string name="mpv_compare_mode_config">mpv 配置</string>
+    <string name="mpv_compare_mode_engine">mpv ↔ ExoPlayer</string>
+    <string name="mpv_compare_engine_hint">用当前播放的 mpv 配置与 ExoPlayer 渲染同一帧，比较两个播放器的解码与画面差异。</string>
     <string name="mpv_compare_run">开始对比</string>
     <string name="mpv_compare_rerun">重新对比</string>
     <string name="mpv_compare_running">正在渲染对比帧…</string>

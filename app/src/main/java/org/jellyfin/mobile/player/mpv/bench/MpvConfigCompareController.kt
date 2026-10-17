@@ -14,12 +14,12 @@ import org.jellyfin.mobile.app.AppPreferences
 import timber.log.Timber
 
 /**
- * Drives one configuration comparison.
+ * Drives one comparison: an edited `mpv.conf` against the saved one, or mpv against ExoPlayer.
  *
  * Holds no player and no Compose state: it builds the candidates to render, hands them to an
  * [MpvSceneRenderer] and publishes an immutable [MpvConfigCompareState] for whatever UI is showing
  * it. Comparing an edited configuration against the saved one is therefore decided in exactly one
- * place.
+ * place, and so is comparing two playback engines ([CompareMode.ENGINE]).
  *
  * Nothing here writes `mpv.conf` or touches the player: the only lasting effect a session can have
  * is [commit], which the user has to ask for explicitly.
@@ -84,23 +84,48 @@ class MpvConfigCompareController(
      * Configurations the current input would render: the baseline first, then one per change.
      *
      * Also the "is there anything to compare" question - a single entry means the editor does not
-     * differ from what is playing.
+     * differ from what is playing. In [CompareMode.ENGINE] there is always something to compare:
+     * the candidates are mpv and ExoPlayer, not two versions of the same file.
      */
-    fun candidates(): List<BenchCandidate> = buildList {
-        add(MpvBenchConfig.baseline(baselineConfig))
-        addAll(MpvBenchConfig.changes(baselineConfig, _editedConfig.value))
+    fun candidates(): List<BenchCandidate> = when (_state.value.mode) {
+        CompareMode.CONFIG -> buildList {
+            add(MpvBenchConfig.baseline(baselineConfig))
+            addAll(MpvBenchConfig.changes(baselineConfig, _editedConfig.value))
+        }
+        CompareMode.ENGINE -> listOf(
+            MpvBenchConfig.baseline(baselineConfig),
+            MpvBenchConfig.exoPlayer(),
+        )
     }
 
     /**
-     * Renders the frozen frame under the saved configuration and under every single change the
-     * user made, then publishes the frames and their deltas against the first one.
+     * Switches what the next run compares.
+     *
+     * Nothing is carried over: the frames of one mode do not answer the question of the other, and
+     * keeping them on screen under a different label is what would make a comparison lie.
+     */
+    fun setMode(mode: CompareMode) {
+        if (_state.value.mode == mode) return
+        runJob?.cancel()
+        runJob = null
+        generation++
+        Timber.d("mpv compare: mode switched to %s", mode)
+        _state.value = MpvConfigCompareState(mode = mode, spec = scene)
+    }
+
+    /**
+     * Renders the frozen frame for every candidate of the current mode, then publishes the frames
+     * and their deltas against the first one.
+     *
+     * In [CompareMode.CONFIG] that is the saved configuration plus every single change the user
+     * made; in [CompareMode.ENGINE] it is the mpv frame and the ExoPlayer frame.
      */
     fun run() {
         val currentScene = scene ?: return
         if (_state.value.isRunning) return
 
         val targets = candidates()
-        if (targets.size <= 1) {
+        if (_state.value.mode == CompareMode.CONFIG && targets.size <= 1) {
             // Nothing changed: rendering identical frames would only waste the user's time.
             _state.value = _state.value.copy(
                 isRunning = false,

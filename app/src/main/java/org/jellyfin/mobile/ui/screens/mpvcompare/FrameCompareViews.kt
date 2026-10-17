@@ -233,18 +233,26 @@ fun ComparisonSummary(
     compared: ComparedFrame,
     index: Int,
     total: Int,
+    showChangePosition: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val comparison = compared.comparison
     Column(modifier = modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = stringResource(R.string.mpv_compare_change_position, index + 1, total),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 11.sp,
-            )
+            // An engine comparison has one candidate and no "change", so the position line would be
+            // reading "change 1 of 1" about something that is not a change at all.
+            if (showChangePosition) {
+                Text(
+                    text = stringResource(R.string.mpv_compare_change_position, index + 1, total),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 11.sp,
+                )
+            }
             if (comparison != null) {
-                VerdictChip(comparison.verdict, modifier = Modifier.padding(start = 8.dp))
+                VerdictChip(
+                    comparison.verdict,
+                    modifier = if (showChangePosition) Modifier.padding(start = 8.dp) else Modifier,
+                )
             }
         }
         Text(
@@ -297,7 +305,9 @@ fun ComparisonSummary(
         }
         val source = effective["source"]
         val output = effective["output"]
-        if (source != null && output != null) {
+        // Only mpv has this scale path: the sentence names `dscale`, and an ExoPlayer frame does
+        // not go through mpv's scaler at all.
+        if (source != null && output != null && effective.containsKey("dscale")) {
             Text(
                 text = stringResource(R.string.mpv_compare_scale_path, source, output),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

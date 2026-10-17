@@ -111,9 +111,10 @@ val applicationModule = module {
 
     // Media player helpers
     single { MediaSourceResolver(get()) }
-    // mpv configuration comparison: renders frames on throwaway mpv instances so a comparison never
-    // touches the player's instance, surface or config file.
-    single<MpvSceneRenderer> { MpvSceneRendererImpl(androidApplication()) }
+    // mpv configuration comparison: renders frames on throwaway mpv instances (and, for the engine
+    // comparison, on a throwaway ExoPlayer) so a comparison never touches the player's instance,
+    // surface or config file.
+    single<MpvSceneRenderer> { MpvSceneRendererImpl(androidApplication(), get()) }
     single { DeviceProfileBuilder(get()) }
     single { QualityOptionsProvider() }
     single { MediaSegmentRepository() }

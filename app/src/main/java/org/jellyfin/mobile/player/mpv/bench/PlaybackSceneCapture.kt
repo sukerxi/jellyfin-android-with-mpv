@@ -36,22 +36,21 @@ object PlaybackSceneCapture {
         val mpvPlayer = player as? MpvPlayer ?: return null
         val source = mediaSource ?: return null
         if (viewportWidth <= 0 || viewportHeight <= 0) return null
-        val url = mediaUrl(source) ?: return null
+        // The same conversion the player itself uses, so the benchmark decodes exactly the bytes the
+        // user is watching rather than a re-resolved stream that could differ in bitrate or
+        // container - and the ExoPlayer candidate gets the same MediaItem, including its
+        // authorization, as a bonus.
+        val mediaItem = MpvUtil.convertJellyfinMediaSource(source)
+        val url = mediaItem.localConfiguration?.uri?.toString() ?: return null
+        val videoStream = source.selectedVideoStream
         return SceneSpec(
             sourceUrl = url,
             positionMs = mpvPlayer.currentPosition.coerceAtLeast(0),
             viewportWidth = viewportWidth,
             viewportHeight = viewportHeight,
+            sourceWidth = videoStream?.width ?: 0,
+            sourceHeight = videoStream?.height ?: 0,
+            mediaItem = mediaItem,
         )
     }
-
-    /**
-     * The URL mpv is playing.
-     *
-     * [MpvUtil] is the same conversion the player itself uses, so the benchmark decodes exactly the
-     * bytes the user is watching rather than a re-resolved stream that could differ in bitrate or
-     * container.
-     */
-    private fun mediaUrl(source: JellyfinMediaSource): String? =
-        MpvUtil.convertJellyfinMediaSource(source).localConfiguration?.uri?.toString()
 }
