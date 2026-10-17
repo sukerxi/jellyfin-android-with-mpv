@@ -329,6 +329,8 @@
     <string name="mpv_compare_no_changes">This configuration has no options to compare.</string>
     <string name="mpv_compare_no_result">No result</string>
     <string name="mpv_compare_baseline_missing">The baseline frame (current configuration) could not be rendered; only the changed frame is shown.</string>
+    <string name="mpv_compare_effective">Effective: %1$s</string>
+    <string name="mpv_compare_scale_path">Source %1$s → output %2$s (a smaller output means downscaling, governed by dscale)</string>
     <string name="mpv_compare_delta_identical">Pixels are identical</string>
     <string name="mpv_compare_delta_value">Average difference: %1$d / 255</string>
     <string name="mpv_compare_change_position">Change %1$d of %2$d</string>

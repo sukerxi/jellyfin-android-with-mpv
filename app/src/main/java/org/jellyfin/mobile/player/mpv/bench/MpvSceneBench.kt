@@ -42,6 +42,13 @@ data class SceneFrame(
     val candidate: BenchCandidate,
     val image: RawFrame?,
     val failure: String? = null,
+    /**
+     * What the video output actually ran with, read back from mpv: the scaler options, `hwdec`,
+     * the source size, the render size, and every other option the candidate asked for. A
+     * comparison that comes out identical is otherwise indistinguishable from an option that was
+     * silently overridden.
+     */
+    val effective: Map<String, String> = emptyMap(),
 ) {
     val isSuccess: Boolean get() = image != null
 }

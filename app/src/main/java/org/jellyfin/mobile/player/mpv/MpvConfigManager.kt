@@ -1,6 +1,7 @@
 package org.jellyfin.mobile.player.mpv
 
 import android.content.Context
+import dev.jdtech.mpv.MPVLib
 import timber.log.Timber
 import java.io.File
 
@@ -68,5 +69,84 @@ object MpvConfigManager {
         } catch (e: Exception) {
             Timber.e(e, "Failed to sync custom mpv config")
         }
+    }
+
+    /**
+     * Options that only take effect while mpv starts up.
+     *
+     * They are set before `init()` (either by [MpvCore.baseOptions] or by mpv reading `mpv.conf`
+     * itself), so re-applying them on a live instance would either fail or tear the video output
+     * down in the middle of a render. Their config-file values still apply through mpv's own
+     * config parsing.
+     */
+    private val INIT_ONLY_OPTIONS = setOf(
+        "vo",
+        "gpu-context",
+        "gpu-api",
+        "opengl-es",
+        "config",
+        "config-dir",
+        "include",
+        "input-conf",
+        "input-default-bindings",
+    )
+
+    /** `name = value` (spaces optional, surrounding quotes stripped). */
+    private val ASSIGNMENT_REGEX = Regex("""^\s*([A-Za-z][A-Za-z0-9_-]*)\s*=\s*(.*?)\s*$""")
+
+    /**
+     * Applies [config] on top of everything the app itself set before `init()`.
+     *
+     * mpv gives options passed before initialization (the equivalent of command-line options)
+     * precedence over `mpv.conf`, and [MpvCore.baseOptions] passes `profile=fast`. That profile -
+     * see the table compiled into libmpv - pins `scale=bilinear`, `dscale=bilinear`, `dither=no`,
+     * `sigmoid-upscaling=no` and more. Every one of those lines in the user's config was therefore
+     * silently ignored: `scale=ewa_lanczossharp` rendered exactly like the default, which reads as
+     * "the comparison is broken" when in fact the option never reached the video output.
+     *
+     * Re-applying the config's top-level options after initialization is what makes the user's own
+     * settings win over the profile. Options that can only be set at startup are skipped (see
+     * [INIT_ONLY_OPTIONS]); a `profile=` line is applied through mpv's `apply-profile` command.
+     */
+    fun applyUserConfig(instance: MPVLib, config: String) {
+        topLevelOptions(config).forEach { (name, value) ->
+            when {
+                name == "profile" -> value.split(',')
+                    .map(String::trim)
+                    .filter(String::isNotEmpty)
+                    .forEach { profile ->
+                        runCatching { instance.command(arrayOf("apply-profile", profile)) }
+                            .onFailure { Timber.w(it, "mpv: could not apply profile %s", profile) }
+                    }
+                name in INIT_ONLY_OPTIONS -> Unit
+                else -> runCatching { instance.setOptionString(name, value) }
+                    .onFailure { Timber.w(it, "mpv: could not apply %s=%s", name, value) }
+            }
+        }
+    }
+
+    /**
+     * The `name = value` assignments that are not inside a `[profile]` section.
+     *
+     * Options under a section header belong to that profile and are not active by default, so they
+     * must not be applied to the instance behind the user's back. (`[default]` is the one exception
+     * mpv applies by itself, and it is applied through mpv's own config parsing at startup.)
+     */
+    fun topLevelOptions(config: String): List<Pair<String, String>> {
+        val options = mutableListOf<Pair<String, String>>()
+        var inSection = false
+        for (rawLine in config.lineSequence()) {
+            val line = rawLine.trim()
+            if (SECTION_LINE_REGEX.matches(line)) {
+                inSection = true
+                continue
+            }
+            if (inSection || line.isEmpty() || line.startsWith("#")) continue
+            val match = ASSIGNMENT_REGEX.matchEntire(line) ?: continue
+            val name = match.groupValues[1]
+            val value = match.groupValues[2].removeSurrounding("\"")
+            options += name to value
+        }
+        return options
     }
 }

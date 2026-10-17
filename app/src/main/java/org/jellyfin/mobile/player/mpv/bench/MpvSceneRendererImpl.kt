@@ -36,7 +36,9 @@ class MpvSceneRendererImpl(private val appContext: Context) : MpvSceneRenderer {
             val result = renderWithDeadline(spec, candidate, renderWidth, renderHeight, File(root, "run-$index"), index)
             onProgress(index + 1, total)
             result.fold(
-                onSuccess = { image -> SceneFrame(candidate, image) },
+                onSuccess = { rendered ->
+                    SceneFrame(candidate, rendered.frame, effective = rendered.effective)
+                },
                 onFailure = { error ->
                     Timber.w(error, "mpv bench: rendering %s failed", candidate.id)
                     SceneFrame(candidate, image = null, failure = error.message ?: "渲染失败")
@@ -45,6 +47,12 @@ class MpvSceneRendererImpl(private val appContext: Context) : MpvSceneRenderer {
         }
         return SceneCapture(spec, frames)
     }
+
+    /** A rendered frame plus the options the instance really ran with. */
+    private data class RenderedFrame(
+        val frame: RawFrame,
+        val effective: Map<String, String>,
+    )
 
     /**
      * Renders one candidate on a thread this method is allowed to walk away from.
@@ -62,8 +70,8 @@ class MpvSceneRendererImpl(private val appContext: Context) : MpvSceneRenderer {
         renderHeight: Int,
         workspace: File,
         index: Int,
-    ): Result<RawFrame> {
-        var outcome: Result<RawFrame>? = null
+    ): Result<RenderedFrame> {
+        var outcome: Result<RenderedFrame>? = null
         val worker = Thread(
             { outcome = runCatching { renderOne(spec, candidate, renderWidth, renderHeight, workspace) } },
             "mpv-bench-$index",
@@ -84,7 +92,7 @@ class MpvSceneRendererImpl(private val appContext: Context) : MpvSceneRenderer {
         renderWidth: Int,
         renderHeight: Int,
         workspace: File,
-    ): RawFrame {
+    ): RenderedFrame {
         // A previous run (or a crashed one) may have left files behind; the config file in there
         // would be read by the new instance instead of this candidate's.
         workspace.deleteRecursively()
@@ -94,17 +102,20 @@ class MpvSceneRendererImpl(private val appContext: Context) : MpvSceneRenderer {
         val startedAt = System.currentTimeMillis()
         fun sinceStart(): Long = System.currentTimeMillis() - startedAt
 
-        val bitmap: Bitmap = MpvBenchInstance(appContext, workspace).use { instance ->
+        val (bitmap, effective) = MpvBenchInstance(appContext, workspace).use { instance ->
             instance.open(candidate.configText, renderWidth, renderHeight)
             Timber.d("mpv bench: %s opened (%dx%d) after %d ms", candidate.id, renderWidth, renderHeight, sinceStart())
             instance.load(spec.sourceUrl, spec.positionMs)
             instance.awaitFirstFrame(FIRST_FRAME_TIMEOUT_MILLIS)
             Timber.d("mpv bench: %s first frame after %d ms", candidate.id, sinceStart())
-            instance.captureFrame(CAPTURE_TIMEOUT_MILLIS).also {
+            val bitmap = instance.captureFrame(CAPTURE_TIMEOUT_MILLIS).also {
                 Timber.d("mpv bench: %s frame captured after %d ms", candidate.id, sinceStart())
             }
+            val effective = instance.effectiveOptions() + mapOf("output" to "${renderWidth}x$renderHeight")
+            Timber.d("mpv bench: %s effective %s", candidate.id, effective)
+            bitmap to effective
         }
-        return bitmap.toRawFrame()
+        return RenderedFrame(bitmap.toRawFrame(), effective)
     }
 
     /**

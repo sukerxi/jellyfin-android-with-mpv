@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.view.Surface
 import dev.jdtech.mpv.MPVLib
+import org.jellyfin.mobile.player.mpv.MpvConfigManager
 import org.jellyfin.mobile.player.mpv.MpvCore
 import timber.log.Timber
 import java.io.Closeable
@@ -58,6 +59,9 @@ internal class MpvBenchInstance(
 
     private var mpv: MPVLib? = null
 
+    /** Options the current candidate's config asked for, in config order. See [effectiveOptions]. */
+    private var candidateOptionKeys: List<String> = emptyList()
+
     private val observer = object : MPVLib.EventObserver {
         override fun event(eventId: Int) {
             // Never block here: this runs on mpv's own event thread.
@@ -85,6 +89,13 @@ internal class MpvBenchInstance(
         }
         instance.init()
         instance.addObserver(observer)
+
+        // Same reason as the player (see `MpvConfigManager.applyUserConfig`): mpv.conf is read at
+        // startup, before the base options above - including `profile=fast` - are applied, so
+        // scaler settings from the candidate would be overridden and two different `scale=` values
+        // would render identically. Re-applying them is what makes the comparison able to see them.
+        MpvConfigManager.applyUserConfig(instance, configText)
+        candidateOptionKeys = MpvConfigManager.topLevelOptions(configText).map { it.first }.distinct()
 
         // The benchmark must not play sound, must not draw subtitles or the OSD, and must keep the
         // frame on screen once it is there. These are set after init so no candidate config can
@@ -137,6 +148,31 @@ internal class MpvBenchInstance(
     fun captureFrame(timeoutMillis: Long): Bitmap {
         val reader = frameReader ?: error("渲染目标未初始化")
         return reader.captureFrame(timeoutMillis) ?: error(noFrameReason())
+    }
+
+    /**
+     * Values the video output really ended up with, read back from mpv.
+     *
+     * Read from the instance instead of from the config text on purpose: this is what tells
+     * "the option was applied" apart from "the option was accepted by the file but overridden",
+     * which is the question a pixel-identical comparison raises.
+     *
+     * The scaler trio and `hwdec` are always reported; every other option is reported only when the
+     * candidate set it, so a colour test shows `saturation=-100` next to the frame instead of
+     * leaving it to guesswork whether the value reached the shader.
+     */
+    fun effectiveOptions(): Map<String, String> = buildMap {
+        (REPORTED_OPTIONS + candidateOptionKeys).distinct().forEach { name ->
+            readOption(name)?.let { put(name, it) }
+        }
+        runCatching { mpv?.getPropertyString("hwdec-current") }.getOrNull()
+            ?.takeIf { it.isNotBlank() && it != "no" }
+            ?.let { put("hwdec", it) }
+        val sourceWidth = runCatching { mpv?.getPropertyInt(SOURCE_WIDTH_PROPERTY) }.getOrNull()
+        val sourceHeight = runCatching { mpv?.getPropertyInt(SOURCE_HEIGHT_PROPERTY) }.getOrNull()
+        if (sourceWidth != null && sourceHeight != null && sourceWidth > 0 && sourceHeight > 0) {
+            put("source", "${sourceWidth}x$sourceHeight")
+        }
     }
 
     override fun close() {
@@ -201,6 +237,22 @@ internal class MpvBenchInstance(
         }
     }
 
+    /**
+     * Reads one option back from mpv, as a plain property first and as an option property second.
+     *
+     * The two namespaces overlap but not completely: scaler and video-equalizer settings are plain
+     * properties, while a few output options are only reachable as `options/<name>`. Both are
+     * attempted so a reported line is missing only when the value really cannot be read, never
+     * because of the spelling of the lookup.
+     */
+    private fun readOption(name: String): String? {
+        runCatching { mpv?.getPropertyString(name) }.getOrNull()
+            ?.takeIf(String::isNotBlank)
+            ?.let { return it }
+        return runCatching { mpv?.getPropertyString("options/$name") }.getOrNull()
+            ?.takeIf(String::isNotBlank)
+    }
+
     private fun setProperty(name: String, value: Any) {
         val instance = mpv ?: return
         try {
@@ -235,7 +287,14 @@ internal class MpvBenchInstance(
         const val CONFIG_DIR = "config"
         const val CONFIG_FILE_NAME = "mpv.conf"
 
+        /** Always reported by [effectiveOptions], whatever the candidate asked for. */
+        val REPORTED_OPTIONS = listOf("scale", "dscale", "cscale")
+
         const val MAX_QUEUED_EVENTS = 64
+
+        /** Decoded frame size of the source, as mpv reports it. */
+        const val SOURCE_WIDTH_PROPERTY = "video-params/w"
+        const val SOURCE_HEIGHT_PROPERTY = "video-params/h"
 
         /**
          * Network sources need a generous opening budget; a transcode can take a while to start.

@@ -575,6 +575,11 @@ class MpvCore private constructor(context: Application) : KoinComponent {
         this.mpv = mpv
         baseOptions(context).forEach { (name, value) -> mpv.setOptionString(name, value) }
         mpv.init()
+        // mpv lets pre-init options (its equivalent of command-line options) win over mpv.conf, and
+        // `profile=fast` above is one of them - it would pin scale/dscale/dither to their cheapest
+        // values no matter what the user wrote. Re-applying the config on the live instance is what
+        // makes "自定义 mpv 配置" actually reach the video output.
+        MpvConfigManager.applyUserConfig(mpv, appPreferences.mpvCustomConfig)
 
 //        mpv.setOptionString("idle", "once")
         // mpv.setOptionString("force-window", "yes")

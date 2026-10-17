@@ -397,8 +397,8 @@ private fun FrameArea(
             }
             // A run that produced nothing still has a reason worth showing, and so has a
             // session that has not run yet.
-            state.failure != null -> EmptyState(state.failure!!)
-            state.error != null -> EmptyState(state.error!!)
+            state.failure != null -> EmptyState(state.failure)
+            state.error != null -> EmptyState(state.error)
             else -> EmptyState(stringResource(R.string.mpv_compare_no_result))
         }
     }

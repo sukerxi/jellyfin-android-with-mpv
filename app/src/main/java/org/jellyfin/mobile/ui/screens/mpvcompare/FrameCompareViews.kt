@@ -56,6 +56,9 @@ import kotlin.math.roundToInt
 /** Scale steps offered in the comparison screens. */
 val COMPARE_ZOOM_STEPS = listOf(1f, 2f, 4f)
 
+/** How many `key=value` pairs the "effective" line lists before it gets truncated. */
+private const val MAX_REPORTED_OPTIONS = 6
+
 /** Converts a rendered frame into something Compose can draw. */
 fun RawFrame.toImageBitmap(): ImageBitmap = toBitmap().asImageBitmap()
 
@@ -268,6 +271,40 @@ fun ComparisonSummary(
             fontSize = 12.sp,
             modifier = Modifier.padding(top = 2.dp),
         )
+
+        // What the video output really ran with. An identical result has two very different
+        // explanations - the option is invisible, or the option never reached the output - and this
+        // line is what tells them apart without a logcat session. Every option the candidate set is
+        // listed, so a colour setting shows its actual value (`saturation=-100`) next to the frame.
+        val effective = compared.frame.effective
+        val preferred = listOf("scale", "dscale", "cscale", "hwdec")
+        val options = (
+            preferred.mapNotNull { key -> effective[key]?.let { key to it } } +
+                effective.entries
+                    .filter { it.key !in preferred && it.key != "source" && it.key != "output" }
+                    .map { it.key to it.value }
+            )
+            .take(MAX_REPORTED_OPTIONS)
+            .joinToString(" · ") { (key, value) -> "$key=$value" }
+        if (options.isNotEmpty()) {
+            Text(
+                text = stringResource(R.string.mpv_compare_effective, options),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
+        val source = effective["source"]
+        val output = effective["output"]
+        if (source != null && output != null) {
+            Text(
+                text = stringResource(R.string.mpv_compare_scale_path, source, output),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
     }
 }
 

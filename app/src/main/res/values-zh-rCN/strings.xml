@@ -304,6 +304,8 @@
     <string name="mpv_compare_no_changes">当前配置没有可对比的选项。</string>
     <string name="mpv_compare_no_result">无结果</string>
     <string name="mpv_compare_baseline_missing">基线帧（当前配置）没有渲染出来，下面只显示这处改动后的画面。</string>
+    <string name="mpv_compare_effective">实际生效：%1$s</string>
+    <string name="mpv_compare_scale_path">源 %1$s → 输出 %2$s（输出更小即为缩小，由 dscale 决定）</string>
     <string name="mpv_compare_delta_identical">像素完全一致</string>
     <string name="mpv_compare_delta_value">平均差异：%1$d / 255</string>
     <string name="mpv_compare_change_position">第 %1$d / %2$d 项改动</string>
