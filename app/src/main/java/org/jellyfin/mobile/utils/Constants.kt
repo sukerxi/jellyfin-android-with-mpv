@@ -50,6 +50,7 @@ object Constants {
     const val PREF_STORAGE_LOCATION = "pref_storage_location"
     const val PREF_MEDIA_SEGMENT_ACTIONS = "pref_media_segment_actions"
     const val PREF_MPV_CUSTOM_CONFIG = "pref_mpv_custom_config"
+    const val PREF_MPV_SHOW_COMPARE_ENTRY = "pref_mpv_show_compare_entry"
 
     // Update preferences
     const val PREF_UPDATE_CHANNEL = "pref_update_channel"

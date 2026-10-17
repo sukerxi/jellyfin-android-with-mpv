@@ -80,8 +80,8 @@ data class PlayerControlsState(
      * 继续显示目标位置，避免先跳回 seek 起点、再跳到目标位置的观感回跳。
      */
     val pendingSeekPositionMs: Long? = null,
-    /** Whether the current playback session runs on mpv, i.e. whether a config comparison applies. */
-    val mpvEngine: Boolean = false,
+    /** Whether the configuration comparison entry should be offered (mpv engine, not switched off). */
+    val mpvCompareEnabled: Boolean = false,
 )
 
 /** 下拉菜单渲染所需的全部状态。 */
@@ -447,9 +447,10 @@ private fun BottomBar(
                 contentDescription = stringResource(R.string.playback_info_title),
             )
         }
-        // Only offered for the mpv engine: a configuration comparison is meaningless for ExoPlayer,
-        // and the entry point is hidden rather than disabled so the bar keeps its usual layout.
-        if (state.mpvEngine) {
+        // Only offered for the mpv engine when the user keeps the entry enabled: a configuration
+        // comparison is meaningless for ExoPlayer, and the entry point is hidden rather than
+        // disabled so the bar keeps its usual layout.
+        if (state.mpvCompareEnabled) {
             PlayerMenuAnchor {
                 PlayerIconButton(
                     onClick = actions.onShowCompare,

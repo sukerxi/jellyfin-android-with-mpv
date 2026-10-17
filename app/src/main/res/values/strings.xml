@@ -314,6 +314,8 @@
 
     <!-- mpv 配置对比（A/B） -->
     <string name="mpv_compare_title">MPV configuration comparison</string>
+    <string name="pref_mpv_compare_entry">Show comparison in player</string>
+    <string name="pref_mpv_compare_entry_summary">Adds a compare button to the player controls while MPV is playing</string>
     <string name="mpv_compare_capture_scene">Use current frame</string>
     <string name="mpv_compare_capture_scene_in_progress">Capturing frame…</string>
     <string name="mpv_compare_scene_info">Frame at %1$s · %2$dx%3$d</string>

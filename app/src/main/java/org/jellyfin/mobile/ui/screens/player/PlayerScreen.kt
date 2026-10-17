@@ -31,10 +31,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.State
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -67,6 +68,9 @@ import androidx.media3.ui.PlayerView
 import androidx.media3.ui.compose.state.rememberProgressStateWithTickInterval
 import io.github.peerless2012.ass.media.AssHandler
 import io.github.peerless2012.ass.media.widget.AssSubtitleView
+import java.util.UUID
+import kotlin.math.abs
+import kotlin.math.max
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -82,10 +86,10 @@ import org.jellyfin.mobile.player.mpv.MpvPlayer
 import org.jellyfin.mobile.player.mpv.bench.FrameCompareViewModel
 import org.jellyfin.mobile.player.qualityoptions.QualityOptionsProvider
 import org.jellyfin.mobile.player.source.RemoteJellyfinMediaSource
-import org.jellyfin.mobile.ui.screens.mpvcompare.InPlayerCompareOverlay
 import org.jellyfin.mobile.player.ui.DecoderType
 import org.jellyfin.mobile.player.ui.PlayerFullscreenHelper
 import org.jellyfin.mobile.player.ui.TrickplayHelper
+import org.jellyfin.mobile.ui.screens.mpvcompare.InPlayerCompareOverlay
 import org.jellyfin.mobile.utils.AndroidVersion
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.SmartOrientationListener
@@ -100,9 +104,6 @@ import org.jellyfin.mobile.utils.toast
 import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.MediaSegmentDto
 import org.jellyfin.sdk.model.api.PlayMethod
-import java.util.UUID
-import kotlin.math.abs
-import kotlin.math.max
 
 /**
  * 播放进度的媒体时钟 tick 间隔（毫秒），交给 media3-ui-compose 的
@@ -202,8 +203,11 @@ fun PlayerScreen(
     var unlockButtonVisible by remember { mutableStateOf(false) }
     var expandedMenu by remember { mutableStateOf<PlayerMenuType?>(null) }
     var infoPanelVisible by remember { mutableStateOf(false) }
-    // mpv configuration comparison panel; only reachable while the mpv engine is playing.
+    // mpv configuration comparison panel; only reachable while the mpv engine is playing and the
+    // user keeps the entry enabled.
     var compareVisible by remember { mutableStateOf(false) }
+    val mpvCompareEntryEnabled by appPreferences.mpvShowCompareEntryFlow
+        .collectAsState(initial = appPreferences.mpvShowCompareEntry)
     var episodePickerVisible by remember { mutableStateOf(false) }
     var isFullscreen by remember { mutableStateOf(false) }
     var gestureSurfaceSize by remember { mutableStateOf(IntSize.Zero) }
@@ -983,7 +987,7 @@ fun PlayerScreen(
                     trickplay = trickplayHelper.state,
                     scrubPositionMs = scrubPositionMs,
                     pendingSeekPositionMs = pendingSeekPositionMs,
-                    mpvEngine = player is MpvPlayer,
+                    mpvCompareEnabled = mpvCompareEntryEnabled && player is MpvPlayer,
                 ),
                 menus = PlayerMenusState(
                     expanded = expandedMenu,
