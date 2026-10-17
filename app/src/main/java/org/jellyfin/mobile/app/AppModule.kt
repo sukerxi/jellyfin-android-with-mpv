@@ -43,7 +43,6 @@ import org.jellyfin.mobile.player.interaction.PlaybackController
 import org.jellyfin.mobile.player.interaction.PlaybackLauncher
 import org.jellyfin.mobile.player.interaction.PlayerEvent
 import org.jellyfin.mobile.player.mediasegments.MediaSegmentRepository
-import org.jellyfin.mobile.player.mpv.bench.ConfigRepository
 import org.jellyfin.mobile.player.mpv.bench.MpvSceneRenderer
 import org.jellyfin.mobile.player.mpv.bench.MpvSceneRendererImpl
 import org.jellyfin.mobile.player.qualityoptions.QualityOptionsProvider
@@ -112,9 +111,8 @@ val applicationModule = module {
 
     // Media player helpers
     single { MediaSourceResolver(get()) }
-    // mpv configuration comparison: repository (owns the user's config during a benchmark) and the
-    // scene renderer (drives the offscreen mpv instance).
-    single { ConfigRepository(androidApplication(), get()) }
+    // mpv configuration comparison: renders frames on throwaway mpv instances so a comparison never
+    // touches the player's instance, surface or config file.
     single<MpvSceneRenderer> { MpvSceneRendererImpl(androidApplication()) }
     single { DeviceProfileBuilder(get()) }
     single { QualityOptionsProvider() }

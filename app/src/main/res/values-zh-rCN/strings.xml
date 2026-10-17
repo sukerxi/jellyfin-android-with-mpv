@@ -327,4 +327,8 @@
     <string name="mpv_compare_source_file">从媒体库选择视频</string>
     <string name="mpv_compare_grid_title">选择时间点</string>
     <string name="mpv_compare_grid_loading">正在生成缩略图…</string>
+    <string name="mpv_compare_all_changes">全部改动合计</string>
+    <string name="mpv_compare_progress">正在渲染第 %1$d / %2$d 帧…</string>
+    <string name="mpv_compare_unchanged">编辑的配置与当前配置相同，先改动一项再对比。</string>
+    <string name="mpv_compare_some_failed">有改动渲染失败。</string>
 </resources>

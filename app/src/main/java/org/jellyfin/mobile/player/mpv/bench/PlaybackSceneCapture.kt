@@ -12,8 +12,8 @@ import org.jellyfin.mobile.player.source.JellyfinMediaSource
  * frame I am looking at": the URL, the position and the viewport all come from the session the user
  * is already in, and nothing has to be picked or downloaded again.
  *
- * The capture happens *while playback is still running*: once the benchmark swaps the configuration
- * and decodes its own frames, the session's position keeps moving, so the frozen copy is the only
+ * The capture happens *while playback is still running* (the caller pauses it afterwards): once the
+ * benchmark renders its frames, the session's position keeps moving, so the frozen copy is the only
  * trustworthy reference.
  */
 object PlaybackSceneCapture {
@@ -21,6 +21,8 @@ object PlaybackSceneCapture {
     /**
      * Builds the [SceneSpec] for [mediaSource] playing on [player].
      *
+     * @param viewportWidth width of the video surface in **pixels** (not dp: mpv renders into the
+     * size it is told, so a layout size would produce a frame with a different aspect).
      * @return null when the session cannot be frozen (no mpv player, no media source, an unknown
      * viewport), which the caller reports instead of starting a comparison nothing can be rendered
      * for.

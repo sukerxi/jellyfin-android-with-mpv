@@ -17,11 +17,9 @@ import org.koin.core.component.inject
 import timber.log.Timber
 import java.io.File
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 
 /**
  * Events emitted by [MpvCore]. Observers always run on the main thread.
@@ -190,12 +188,6 @@ object MpvAssetInstaller {
  */
 class MpvCore private constructor(context: Application) : KoinComponent {
     private val mainHandler = Handler(Looper.getMainLooper())
-
-    /**
-     * Application context this instance was created with, kept so [reinitialize] can build a
-     * replacement without a caller having to hand one in again.
-     */
-    private val application: Application = context
 
     /**
      * The preference singleton, injected instead of constructing a second
@@ -400,8 +392,6 @@ class MpvCore private constructor(context: Application) : KoinComponent {
         @Volatile
         private var INSTANCE: MpvCore? = null
 
-        private const val REINITIALIZE_TIMEOUT_SECONDS = 10L
-
         fun initialize(application: Application): MpvCore {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: MpvCore(application).also { INSTANCE = it }
@@ -409,31 +399,42 @@ class MpvCore private constructor(context: Application) : KoinComponent {
         }
 
         /**
-         * Tears the native instance down and creates a fresh one, re-reading `mpv.conf`.
+         * Options every mpv instance owned by this app is created with.
          *
-         * Creating a libmpv instance is the only way to pick up configuration file changes and to
-         * undo an applied profile. Used by the mpv configuration benchmark; playback-adjacent code
-         * must keep using [initialize].
+         * Shared with the configuration benchmark, which creates its own throwaway instance (see
+         * `MpvBenchInstance`): a comparison is only meaningful if the throwaway instance decodes and
+         * renders under the same base options as the player. That is also the reason this cannot be
+         * inlined into [initializeNative] any more - two copies of the list would silently drift.
          *
-         * Runs entirely on the IPC executor, so the ordering against every other libmpv call is
-         * preserved and callers never touch the native instance while it is being replaced.
+         * @param configDir directory mpv reads `mpv.conf` from; the player uses the app's files
+         * directory, the benchmark its own scratch directory.
          */
-        fun reinitialize() {
-            val future = CompletableFuture<Unit>()
-            ipcExecutor.execute {
-                try {
-                    val previous = INSTANCE ?: error("MpvCore is not initialized")
-                    previous.mpv?.destroy()
-                    previous.mpv = null
-                    INSTANCE = null
-                    MpvCore(previous.application).also { INSTANCE = it }
-                    future.complete(Unit)
-                } catch (e: Exception) {
-                    Timber.e(e, "Failed to reinitialize mpv")
-                    future.completeExceptionally(e)
-                }
-            }
-            future.get(REINITIALIZE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        fun baseOptions(context: Context, configDir: File = context.filesDir): List<Pair<String, String>> {
+            // Limit demuxer cache since the defaults are too high for mobile devices
+            val cacheMegs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) 64 else 32
+            val cacheBytes = "${cacheMegs * 1024 * 1024}"
+            return listOf(
+                "config" to "yes",
+                "config-dir" to configDir.path,
+                "profile" to "fast",
+                "hwdec" to "auto",
+                "hwdec-codecs" to "h264,hevc,mpeg4,mpeg2video,vp8,vp9,av1",
+                "gpu-context" to "android", // auto
+                "opengl-es" to "yes",
+                "ao" to "audiotrack,opensles",
+                "input-default-bindings" to "yes",
+                "demuxer-max-bytes" to cacheBytes,
+                "demuxer-max-back-bytes" to cacheBytes,
+                "vd-lavc-film-grain" to "cpu",
+                "ytdl" to "no",
+                "cache-pause-initial" to "yes",
+                "vo" to "gpu_next,gpu",
+                "save-position-on-quit" to "no",
+                // Keep the file loaded and pause on the last frame at EOF. Without this, seeking
+                // to (or past) the end unloads the file and playback can no longer be revived by
+                // seeking back, and natural EOF is indistinguishable from an overshooting seek.
+                "keep-open" to "yes",
+            )
         }
 
         /**
@@ -572,31 +573,7 @@ class MpvCore private constructor(context: Application) : KoinComponent {
         MpvConfigManager.syncConfigFile(context, appPreferences.mpvCustomConfig)
         val mpv = MPVLib.create(context) ?: error("Failed to create native mpv instance")
         this.mpv = mpv
-        // Limit demuxer cache since the defaults are too high for mobile devices
-        val cacheMegs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) 64 else 32
-        val cacheBytes = "${cacheMegs * 1024 * 1024}"
-        listOf(
-            "config" to "yes",
-            "config-dir" to context.filesDir.path,
-            "profile" to "fast",
-            "hwdec" to "auto",
-            "hwdec-codecs" to "h264,hevc,mpeg4,mpeg2video,vp8,vp9,av1",
-            "gpu-context" to "android", // auto
-            "opengl-es" to "yes",
-            "ao" to "audiotrack,opensles",
-            "input-default-bindings" to "yes",
-            "demuxer-max-bytes" to cacheBytes,
-            "demuxer-max-back-bytes" to cacheBytes,
-            "vd-lavc-film-grain" to "cpu",
-            "ytdl" to "no",
-            "cache-pause-initial" to "yes",
-            "vo" to "gpu_next,gpu",
-            "save-position-on-quit" to "no",
-            // Keep the file loaded and pause on the last frame at EOF. Without this, seeking
-            // to (or past) the end unloads the file and playback can no longer be revived by
-            // seeking back, and natural EOF is indistinguishable from an overshooting seek.
-            "keep-open" to "yes",
-        ).forEach { (name, value) -> mpv.setOptionString(name, value) }
+        baseOptions(context).forEach { (name, value) -> mpv.setOptionString(name, value) }
         mpv.init()
 
 //        mpv.setOptionString("idle", "once")

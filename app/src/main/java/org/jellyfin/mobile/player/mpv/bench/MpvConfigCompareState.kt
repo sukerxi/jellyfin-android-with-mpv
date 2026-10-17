@@ -7,7 +7,7 @@ package org.jellyfin.mobile.player.mpv.bench
  * image processing and the processing free of Compose.
  */
 data class ComparedFrame(
-    val candidate: ConfigCandidate,
+    val candidate: BenchCandidate,
     val frame: SceneFrame,
     /** Delta against the baseline, or null when either frame failed to render. */
     val comparison: FrameComparison?,
@@ -16,48 +16,30 @@ data class ComparedFrame(
 /**
  * Everything a comparison screen needs.
  *
+ * The deltas are computed once, when a run finishes (see [MpvConfigCompareController]), and not
+ * while the UI reads this: comparing two full-screen frames is a per-pixel loop over millions of
+ * pixels, and recomputing it on every recomposition stalled the screen.
+ *
  * @param spec frozen scene, null before a scene has been captured
  * @param baseline the frame rendered with the configuration the user had before the run
- * @param compared every chunk of the edited configuration, in file order
+ * @param compared every change of the edited configuration, in config-file order
+ * @param failure first reason a frame could not be rendered, for runs that produced nothing
  */
 data class MpvConfigCompareState(
     val spec: SceneSpec? = null,
     val isRunning: Boolean = false,
+    /** Frames finished so far and the number of frames this run will render. */
+    val completed: Int = 0,
+    val total: Int = 0,
     val error: String? = null,
-    val capture: SceneCapture? = null,
+    val baseline: RawFrame? = null,
+    val compared: List<ComparedFrame> = emptyList(),
+    val failure: String? = null,
 ) {
-    /** The baseline frame of the last run, if it rendered. */
-    val baseline: SceneFrame?
-        get() = capture?.frames?.firstOrNull { it.candidate.id == ConfigCandidate.ID_BASELINE && it.isSuccess }
-
-    /**
-     * The last run's candidates expressed for display, baseline excluded. A failed candidate is
-     * kept in the list so the UI can report which change broke rendering.
-     */
-    val compared: List<ComparedFrame>
-        get() {
-            val currentCapture = capture ?: return emptyList()
-            val baselineFrame = currentCapture.frames
-                .firstOrNull { it.candidate.id == ConfigCandidate.ID_BASELINE }
-                ?.image
-            return currentCapture.frames
-                .filter { it.candidate.id != ConfigCandidate.ID_BASELINE }
-                .map { frame ->
-                    ComparedFrame(
-                        candidate = frame.candidate,
-                        frame = frame,
-                        comparison = if (baselineFrame != null && frame.image != null) {
-                            FrameComparison.compare(baselineFrame, frame.image)
-                        } else {
-                            null
-                        },
-                    )
-                }
-        }
+    /** Whether the baseline frame rendered, i.e. whether there is something to compare against. */
+    val hasResult: Boolean get() = baseline != null
 
     /** Whether at least one change produced a visually different frame. */
     val hasVisibleDifference: Boolean
         get() = compared.any { it.comparison?.verdict == FrameComparison.Verdict.VISIBLE }
-
-    val totalCount: Int get() = compared.size
 }

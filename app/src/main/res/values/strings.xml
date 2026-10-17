@@ -352,4 +352,8 @@
     <string name="mpv_compare_source_file">Pick a video from the library</string>
     <string name="mpv_compare_grid_title">Pick a moment</string>
     <string name="mpv_compare_grid_loading">Rendering thumbnails…</string>
+    <string name="mpv_compare_all_changes">All changes together</string>
+    <string name="mpv_compare_progress">Rendering frame %1$d of %2$d…</string>
+    <string name="mpv_compare_unchanged">The edited configuration matches the saved one. Change an option to compare it.</string>
+    <string name="mpv_compare_some_failed">Some changes could not be rendered.</string>
 </resources>

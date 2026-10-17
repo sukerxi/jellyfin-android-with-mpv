@@ -1119,6 +1119,16 @@ fun PlayerScreen(
             InPlayerCompareOverlay(
                 viewModel = viewModel,
                 compareViewModel = compareViewModel,
+                // The comparison renders the frame at the size the video is actually drawn at, in
+                // pixels. The surface view is that size; the screen in dp is not.
+                viewportSize = {
+                    val surfaceView = playerViewHolder[0]?.videoSurfaceView
+                    if (surfaceView == null) {
+                        IntSize.Zero
+                    } else {
+                        IntSize(surfaceView.width, surfaceView.height)
+                    }
+                },
                 onDismiss = { compareVisible = false },
             )
         }

@@ -1,8 +1,6 @@
 package org.jellyfin.mobile.player.mpv.bench
 
 import android.graphics.Bitmap
-import java.io.File
-import java.io.FileOutputStream
 import kotlin.math.abs
 
 /**
@@ -122,43 +120,5 @@ data class FrameComparison(
             }
             return RawFrame(width, height, pixels)
         }
-    }
-}
-
-/**
- * Persists rendered frames and the comparison results derived from them.
- *
- * Everything lives in the app's cache: a benchmark is a throwaway artifact, and the user's own
- * storage must not accumulate screenshots from it.
- */
-class MpvFrameStore(private val root: File) {
-
-    /** Writes [frame] as a PNG and returns the file, or null when writing failed. */
-    fun save(name: String, frame: RawFrame): File? = try {
-        root.mkdirs()
-        val file = File(root, "$name.png")
-        FileOutputStream(file).use { output ->
-            frame.toBitmap().compress(Bitmap.CompressFormat.PNG, 100, output)
-        }
-        file
-    } catch (e: Exception) {
-        null
-    }
-
-    /** Reads back a frame written by [save], or null when the file is missing or unreadable. */
-    fun load(file: File): RawFrame? = try {
-        val bitmap = android.graphics.BitmapFactory.decodeFile(file.path) ?: return null
-        val pixels = IntArray(bitmap.width * bitmap.height)
-        bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
-        val frame = RawFrame(bitmap.width, bitmap.height, pixels)
-        bitmap.recycle()
-        frame
-    } catch (e: Exception) {
-        null
-    }
-
-    /** Deletes every stored frame (called when a benchmark is replaced or the UI is left). */
-    fun clear() {
-        root.listFiles()?.forEach { it.delete() }
     }
 }

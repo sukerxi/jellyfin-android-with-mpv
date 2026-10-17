@@ -249,11 +249,11 @@ class MpvPlayer(
 
     private val surfaceHolderCallback = object : SurfaceHolder.Callback {
         override fun surfaceCreated(holder: SurfaceHolder) {
-            attachSurface(holder.surface)
+            attachSurface(holder.surface, attachedSurfaceView)
         }
 
         override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-            MpvCore.setProperty("android-surface-size", "${width}x${height}")
+            updateSurfaceSize(width, height)
         }
 
         override fun surfaceDestroyed(holder: SurfaceHolder) {
@@ -264,7 +264,7 @@ class MpvPlayer(
     }
 
     /** Hands [surface] to mpv. Repeated calls for the surface already attached are no-ops. */
-    private fun attachSurface(surface: Surface?) {
+    private fun attachSurface(surface: Surface?, surfaceView: SurfaceView?) {
         if (surface == null || attachedSurface === surface) return
         // mpv holds a single video output: drop the previous one before replacing it.
         if (attachedSurface != null) {
@@ -274,6 +274,21 @@ class MpvPlayer(
         attachedSurface = surface
         MpvCore.attachSurface(surface)
         MpvCore.setProperty("vid", "auto")
+        // Report the size on (re)attach instead of trusting the last surfaceChanged: that callback
+        // is only guaranteed for size *changes*, and a stale android-surface-size changes the
+        // aspect of the picture (mpv scales into the size it was told), it does not just blur it.
+        surfaceView?.let { updateSurfaceSize(it.width, it.height) }
+    }
+
+    /**
+     * Tells mpv how large the video surface currently is, in pixels.
+     *
+     * The value must be the surface size in pixels - never a layout size in dp: mpv renders into
+     * the size it is told and the platform stretches that buffer onto the real surface.
+     */
+    private fun updateSurfaceSize(width: Int, height: Int) {
+        if (width <= 0 || height <= 0) return
+        MpvCore.setProperty("android-surface-size", "${width}x${height}")
     }
 
     /** Takes the current surface away from mpv, if there is one. */
@@ -366,7 +381,7 @@ class MpvPlayer(
             attachedSurfaceView = surfaceView
             surfaceView.holder.addCallback(surfaceHolderCallback)
         }
-        attachSurface(surfaceView.holder.surface)
+        attachSurface(surfaceView.holder.surface, surfaceView)
         return Futures.immediateFuture(null)
     }
 
