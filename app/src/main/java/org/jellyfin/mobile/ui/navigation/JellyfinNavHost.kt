@@ -165,6 +165,8 @@ fun JellyfinNavHost(
                     playerScreenClosedRequested = false
                     playerVisible = false
                 },
+                closeRequested = playerScreenClosedRequested,
+                onCloseRequestHandled = { playerScreenClosedRequested = false },
             )
         }
     }

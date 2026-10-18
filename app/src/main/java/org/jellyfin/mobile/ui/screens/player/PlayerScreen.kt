@@ -4,6 +4,7 @@ import android.app.PictureInPictureParams
 import android.content.res.Configuration
 import android.graphics.Rect
 import android.view.View
+import android.view.Window
 import android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
@@ -293,6 +294,7 @@ fun PlayerScreen(
     }
 
     fun unlockScreen() {
+        locked = false
         hideUnlockButton()
         if (activity.isAutoRotateOn()) {
             activity.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
@@ -859,6 +861,16 @@ fun PlayerScreen(
                 playerView.player = null
                 playerView.subtitleView?.removeAllViews()
                 playerViewHolder[0] = null
+                // The video output is a SurfaceView: it punches a hole into the window and is
+                // composited from its own SurfaceControl, outside the WebView's layer. Both
+                // the hole and the Surface are only reclaimed by the *next* window traversal,
+                // and a removal that happens while one is already running has its
+                // requestLayout dropped by ViewRootImpl - the hole then stays on screen,
+                // covered by an empty Surface, so returning to the (still alive) WebView
+                // shows a black page until a touch forces another redraw. Ask for one more
+                // traversal after the view is gone, which also repaints the WebView that was
+                // sitting underneath the hole.
+                forceWindowRedraw(window)
             },
             modifier = Modifier
                 .fillMaxSize()
@@ -1137,6 +1149,34 @@ fun PlayerScreen(
         }
     }
 }
+
+/**
+ * 在播放器浮层移除后补一次窗口遍历。
+ *
+ * 视频输出是 SurfaceView：它从窗口里挖洞，由独立 [android.view.SurfaceControl]
+ * 直接合成，不经过 WebView 所在的绘制层。洞与 Surface 都要等窗口的**下一次**遍历
+ * 才回收；若这次移除正好发生在一次遍历过程中，ViewRootImpl 会丢弃随之而来的
+ * requestLayout，洞便留在原处，盖住底下（从未被销毁的）WebView —— 表现就是返回后
+ * 全黑，碰一下屏幕触发重绘才恢复。
+ *
+ * 这里在视图已经离开窗口之后排一次遍历：SurfaceView 的洞被收回，原先被压住的
+ * WebView 同时重绘一帧。
+ */
+private fun forceWindowRedraw(window: Window) {
+    val decorView = window.decorView
+    // 两次：第一次紧跟移除，覆盖"移除发生在遍历中途、requestLayout 被丢弃"的情况；
+    // 第二次稍晚一点，兜住窗口此刻不可见 / 正在转场导致第一次遍历被跳过的情况。
+    // 窗口已经干净时两者都只是空转。
+    for (delayMs in longArrayOf(0L, WINDOW_REDRAW_RETRY_MS)) {
+        decorView.postDelayed({
+            decorView.requestLayout()
+            decorView.invalidate()
+        }, delayMs)
+    }
+}
+
+/** [forceWindowRedraw] 的二次兜底延迟。 */
+private const val WINDOW_REDRAW_RETRY_MS = 80L
 
 /**
  * LiveData → Compose State。
