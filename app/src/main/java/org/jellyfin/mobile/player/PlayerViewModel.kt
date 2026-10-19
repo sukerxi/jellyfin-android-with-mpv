@@ -74,6 +74,7 @@ import org.jellyfin.mobile.utils.extensions.start
 import org.jellyfin.mobile.utils.extensions.width
 import org.jellyfin.mobile.utils.getVolumeLevelPercent
 import org.jellyfin.mobile.utils.getVolumeRange
+import org.jellyfin.mobile.utils.isOnCellularNetwork
 import org.jellyfin.mobile.utils.logTracks
 import org.jellyfin.mobile.utils.seekToOffset
 import org.jellyfin.mobile.utils.setPlaybackState
@@ -352,6 +353,37 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     }
 
     /**
+     * 「播放缓冲区大小」档位在 mpv 侧的落地参数：(cache-secs 秒, demuxer-max-bytes 字节)。
+     *
+     * 与 ExoPlayer 共用同一个偏好，但 mpv 的预读时长与字节上限要成对下发——cache-secs 单独
+     * 设置会被 demuxer-max-bytes 截断，档位差异在高码率下就会看不出来。蜂窝网络下各档位自动
+     * 降一档（自动档收紧到 32 MB）以节省流量；「自动 + WiFi」不下发任何值，保持 mpv.conf /
+     * 内置默认。
+     */
+    private fun resolveMpvBufferLimits(): Pair<Double?, Long?> {
+        val cellular = getApplication<Application>().isOnCellularNetwork
+        return when (appPreferences.exoPlayerNetworkBuffer) {
+            Constants.NETWORK_BUFFER_LARGE -> if (cellular) {
+                Constants.MPV_BUFFER_CACHE_SECS_LARGE_MOBILE to Constants.MPV_BUFFER_MAX_BYTES_LARGE_MOBILE
+            } else {
+                Constants.MPV_BUFFER_CACHE_SECS_LARGE to Constants.MPV_BUFFER_MAX_BYTES_LARGE
+            }
+
+            Constants.NETWORK_BUFFER_EXTRA_LARGE -> if (cellular) {
+                Constants.MPV_BUFFER_CACHE_SECS_EXTRA_LARGE_MOBILE to Constants.MPV_BUFFER_MAX_BYTES_EXTRA_LARGE_MOBILE
+            } else {
+                Constants.MPV_BUFFER_CACHE_SECS_EXTRA_LARGE to Constants.MPV_BUFFER_MAX_BYTES_EXTRA_LARGE
+            }
+
+            else -> if (cellular) {
+                null to Constants.MPV_BUFFER_MAX_BYTES_AUTO_MOBILE
+            } else {
+                null to null
+            }
+        }
+    }
+
+    /**
      * Whether the ExoPlayer based engine renders SSA/ASS subtitles itself instead of
      * letting the server burn them into the video stream.
      *
@@ -431,7 +463,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
 
     private fun buildMpvPlayer(analyticsCollector: AnalyticsCollector): MpvPlayer {
         val application: Application = getApplication()
-        return MpvPlayer(application, Looper.getMainLooper()).apply {
+        return MpvPlayer(application, Looper.getMainLooper(), bufferLimitsProvider = ::resolveMpvBufferLimits).apply {
             setDecoderProcessor(
                 { _decoderType.value ?: DecoderType.HARDWARE },
                 { _detectedDecoderType.postValue(it) },

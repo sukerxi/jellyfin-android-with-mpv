@@ -74,9 +74,16 @@ class QueueManager(
      * Handle initial playback options from fragment.
      * Start of a playback session that can contain one or multiple played videos.
      *
+     * [maxStreamingBitrateOverride] 非空时优先于 web 偏好（移动网络播放确认会传入用户选择的
+     * 低码率上限），使服务端转码到该码率以下；后续队列项与重试都会沿用该 media source 上的值。
+     *
      * @return an error of type [PlayerException] or null on success.
      */
-    suspend fun initializePlaybackQueue(playOptions: PlayOptions, preferences: PlayerWebPreferences? = null): PlayerException? {
+    suspend fun initializePlaybackQueue(
+        playOptions: PlayOptions,
+        preferences: PlayerWebPreferences? = null,
+        maxStreamingBitrateOverride: Int? = null,
+    ): PlayerException? {
         currentQueue = playOptions.ids
         currentQueueIndex = playOptions.startIndex
         resetPlaybackFallback()
@@ -94,7 +101,7 @@ class QueueManager(
         // error and leaves instead of leaving the user on a black screen.
         if (viewModel.playerOrNull == null) return PlayerException.PlayerNotAvailable()
 
-        val maxStreamingBitrate = preferences?.let {
+        val maxStreamingBitrate = maxStreamingBitrateOverride ?: preferences?.let {
             withContext(Dispatchers.IO) {
                 runCatching {
                     val endpoint by apiClient.systemApi.getEndpointInfo()

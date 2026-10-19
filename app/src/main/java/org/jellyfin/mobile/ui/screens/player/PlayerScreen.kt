@@ -16,6 +16,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.displayCutout
@@ -24,11 +25,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -83,6 +86,7 @@ import org.jellyfin.mobile.player.PlayerException
 import org.jellyfin.mobile.player.PlayerViewModel
 import org.jellyfin.mobile.player.interaction.PlaybackController
 import org.jellyfin.mobile.player.interaction.PlaybackLauncher
+import org.jellyfin.mobile.player.interaction.PlaybackRequest
 import org.jellyfin.mobile.player.mpv.MpvPlayer
 import org.jellyfin.mobile.player.mpv.bench.FrameCompareViewModel
 import org.jellyfin.mobile.player.qualityoptions.QualityOptionsProvider
@@ -100,6 +104,7 @@ import org.jellyfin.mobile.utils.extensions.isLandscape
 import org.jellyfin.mobile.utils.extensions.keepScreenOn
 import org.jellyfin.mobile.utils.extensions.lockOrientation
 import org.jellyfin.mobile.utils.isAutoRotateOn
+import org.jellyfin.mobile.utils.isOnCellularNetwork
 import org.jellyfin.mobile.utils.koinInject
 import org.jellyfin.mobile.utils.toast
 import org.jellyfin.sdk.model.api.BaseItemDto
@@ -221,6 +226,8 @@ fun PlayerScreen(
     var episodeItemMap by remember { mutableStateOf<Map<UUID, BaseItemDto>?>(null) }
     var episodeItemsLoaded by remember { mutableStateOf(false) }
     var unlockHideJob by remember { mutableStateOf<Job?>(null) }
+    // 移动网络播放确认：蜂窝网络下待用户选择的播放请求；非空时展示确认弹窗且尚未开始播放。
+    var pendingMobileDataRequest by remember { mutableStateOf<PlaybackRequest?>(null) }
 
     val playerViewHolder = remember { arrayOfNulls<PlayerView>(1) }
     val trickplayHelper = remember(context) { TrickplayHelper(context) }
@@ -356,6 +363,35 @@ fun PlayerScreen(
 
     // region effects
 
+    /**
+     * 真正开始播放：确保播放器已就绪后初始化播放队列。
+     *
+     * [maxStreamingBitrateOverride] 非空时为移动网络播放：该码率上限会下发到服务端，
+     * 强制转码到该码率以下，避免直连原画质偷跑流量。
+     */
+    suspend fun startPlayback(request: PlaybackRequest, maxStreamingBitrateOverride: Int?) {
+        if (viewModel.playerOrNull == null) {
+            viewModel.setupPlayer()
+        }
+        val error = viewModel.queueManager.initializePlaybackQueue(
+            request.playOptions,
+            request.preferences,
+            maxStreamingBitrateOverride,
+        )
+        if (error != null) {
+            // Nothing will ever start playing; show why and leave instead of
+            // staying on an empty black screen.
+            val messageRes = when (error) {
+                is PlayerException.InvalidPlayOptions -> R.string.player_error_invalid_play_options
+                is PlayerException.NetworkFailure -> R.string.player_error_network_failure
+                is PlayerException.UnsupportedContent -> R.string.player_error_unsupported_content
+                is PlayerException.PlayerNotAvailable -> R.string.player_error_unspecific_exception
+            }
+            context.toast(messageRes)
+            closePlayer()
+        }
+    }
+
     // Handle playback options and start playback (once per composition).
     // The ViewModel lives in the activity's store, so it outlives this screen; the player
     // does not (see [closePlayer]). Every session therefore has to build its own player -
@@ -368,21 +404,14 @@ fun PlayerScreen(
             closePlayer()
             return@LaunchedEffect
         }
-        if (viewModel.playerOrNull == null) {
-            viewModel.setupPlayer()
-        }
-        val error = viewModel.queueManager.initializePlaybackQueue(request.playOptions, request.preferences)
-        if (error != null) {
-            // Nothing will ever start playing; show why and leave instead of
-            // staying on an empty black screen.
-            val messageRes = when (error) {
-                is PlayerException.InvalidPlayOptions -> R.string.player_error_invalid_play_options
-                is PlayerException.NetworkFailure -> R.string.player_error_network_failure
-                is PlayerException.UnsupportedContent -> R.string.player_error_unsupported_content
-                is PlayerException.PlayerNotAvailable -> R.string.player_error_unspecific_exception
-            }
-            context.toast(messageRes)
-            closePlayer()
+
+        // 移动网络（蜂窝）下的远程播放：开启提示时先等用户选择，否则直接按设定码率播放。
+        // 本地下载播放不经过网络，不受影响。
+        val mobileDataPlayback = request.playOptions.playFromDownloads != true && context.isOnCellularNetwork
+        if (mobileDataPlayback && appPreferences.mobileDataPlaybackPrompt) {
+            pendingMobileDataRequest = request
+        } else {
+            startPlayback(request, if (mobileDataPlayback) appPreferences.mobileDataMaxBitrate else null)
         }
     }
 
@@ -1145,6 +1174,56 @@ fun PlayerScreen(
                 onSelect = { position -> viewModel.selectQueueItem(position) },
                 onDismiss = { episodePickerVisible = false },
                 controlsBounds = controlsPadding,
+            )
+        }
+
+        // 移动网络播放确认：默认推荐低码率播放，也可选择继续原画质或取消（退出播放器返回网页）。
+        pendingMobileDataRequest?.let { request ->
+            val mobileDataBitrate = appPreferences.mobileDataMaxBitrate
+            AlertDialog(
+                onDismissRequest = {
+                    pendingMobileDataRequest = null
+                    closePlayer()
+                },
+                title = { Text(stringResource(R.string.mobile_data_playback_dialog_title)) },
+                text = {
+                    Text(
+                        stringResource(
+                            R.string.mobile_data_playback_dialog_message,
+                            formatBitrate(mobileDataBitrate.toDouble()),
+                        ),
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            pendingMobileDataRequest = null
+                            scope.launch { startPlayback(request, mobileDataBitrate) }
+                        },
+                    ) {
+                        Text(stringResource(R.string.mobile_data_playback_play_low_bitrate))
+                    }
+                },
+                dismissButton = {
+                    Row {
+                        TextButton(
+                            onClick = {
+                                pendingMobileDataRequest = null
+                                scope.launch { startPlayback(request, null) }
+                            },
+                        ) {
+                            Text(stringResource(R.string.mobile_data_playback_play_original))
+                        }
+                        TextButton(
+                            onClick = {
+                                pendingMobileDataRequest = null
+                                closePlayer()
+                            },
+                        ) {
+                            Text(stringResource(android.R.string.cancel))
+                        }
+                    }
+                },
             )
         }
     }

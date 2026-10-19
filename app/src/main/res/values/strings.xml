@@ -181,6 +181,18 @@
     <string name="network_buffer_large_description">Larger buffer, may help on moderate or variable connections</string>
     <string name="network_buffer_extra_large">Extra large</string>
     <string name="network_buffer_extra_large_description">Maximum buffer, intended for slow or satellite connections</string>
+    <string name="pref_playback_buffer_mobile_note">Mobile networks automatically use one step lower to save data.</string>
+
+    <string name="pref_mobile_data_prompt_title">Confirm before playing on mobile data</string>
+    <string name="pref_mobile_data_prompt_summary">Ask before starting playback over a cellular connection to avoid unexpected data usage. When off, playback starts at the bitrate below without asking.</string>
+    <string name="pref_mobile_data_bitrate_title">Mobile data playback quality</string>
+    <string name="mobile_data_bitrate_480p">480p - 1.5 Mbps</string>
+    <string name="mobile_data_bitrate_720p">720p - 4 Mbps</string>
+    <string name="mobile_data_bitrate_1080p">1080p - 10 Mbps</string>
+    <string name="mobile_data_playback_dialog_title">Mobile data playback</string>
+    <string name="mobile_data_playback_dialog_message">You are currently on a mobile network. Continuing may use a lot of data, so playing at the lower bitrate (%1$s) is recommended.</string>
+    <string name="mobile_data_playback_play_low_bitrate">Play at lower bitrate</string>
+    <string name="mobile_data_playback_play_original">Play at original quality</string>
 
     <string name="external_player_app">External player app</string>
     <string name="external_player_mpv">MPV Player</string>

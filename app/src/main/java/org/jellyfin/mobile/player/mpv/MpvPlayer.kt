@@ -33,6 +33,11 @@ import kotlin.math.abs
 class MpvPlayer(
     application: Application,
     looper: Looper,
+    /**
+     * demuxer 预读上限：预读时长（cache-secs，秒）与字节上限（demuxer-max-bytes，字节）。
+     * 每次加载媒体前下发；为 null 的项不下发，保持 mpv.conf / 内置默认值。
+     */
+    private val bufferLimitsProvider: () -> Pair<Double?, Long?> = { null to null },
 ) : SimpleBasePlayer(looper) {
 
     /**
@@ -506,6 +511,10 @@ class MpvPlayer(
             options += "sub-files-set=$externalSubtitleFiles"
         }
         options += "start=+%.3f".format(Locale.ROOT, startPositionMs / 1000.0)
+
+        // 「播放缓冲区大小」设置：在文件加载前下发 demuxer 预读上限（排队先于下面的
+        // loadfile 执行），蜂窝网络下已是降档后的值。
+        bufferLimitsProvider().let { MpvCore.setDemuxerBufferLimits(it.first, it.second) }
 
         MpvCore.command(
             arrayOf(

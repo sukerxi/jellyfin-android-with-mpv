@@ -45,6 +45,31 @@ object Constants {
     const val NETWORK_BUFFER_AUTO = "auto"
     const val NETWORK_BUFFER_LARGE = "large"
     const val NETWORK_BUFFER_EXTRA_LARGE = "extra_large"
+
+    /**
+     * 「播放缓冲区大小」档位在 mpv 侧的落地参数：预读时长（cache-secs，秒）与 demuxer 缓存
+     * 上限（demuxer-max-bytes，字节）。蜂窝网络下各档位自动降一档，减少移动流量消耗。
+     */
+    const val MPV_BUFFER_CACHE_SECS_LARGE = 120.0
+    const val MPV_BUFFER_CACHE_SECS_EXTRA_LARGE = 240.0
+    const val MPV_BUFFER_CACHE_SECS_LARGE_MOBILE = 60.0
+    const val MPV_BUFFER_CACHE_SECS_EXTRA_LARGE_MOBILE = 120.0
+
+    const val MPV_BUFFER_MAX_BYTES_AUTO_MOBILE = 32L * 1024 * 1024
+    const val MPV_BUFFER_MAX_BYTES_LARGE = 128L * 1024 * 1024
+    const val MPV_BUFFER_MAX_BYTES_LARGE_MOBILE = 64L * 1024 * 1024
+    const val MPV_BUFFER_MAX_BYTES_EXTRA_LARGE = 256L * 1024 * 1024
+    const val MPV_BUFFER_MAX_BYTES_EXTRA_LARGE_MOBILE = 128L * 1024 * 1024
+    const val PREF_MOBILE_DATA_PLAYBACK_PROMPT = "pref_mobile_data_playback_prompt"
+    const val PREF_MOBILE_DATA_MAX_BITRATE = "pref_mobile_data_max_bitrate"
+
+    /** 移动网络降码率可选档位（bps），与默认清晰度列表中的同档位一致。 */
+    const val MOBILE_DATA_BITRATE_480P = 1_500_000
+    const val MOBILE_DATA_BITRATE_720P = 4_000_000
+    const val MOBILE_DATA_BITRATE_1080P = 10_000_000
+
+    /** 移动网络播放默认码率上限（bps），即 720p / 4 Mbps。 */
+    const val MOBILE_DATA_MAX_BITRATE_DEFAULT = MOBILE_DATA_BITRATE_720P
     const val PREF_EXTERNAL_PLAYER_APP = "pref_external_player_app"
     const val PREF_SUBTITLE_STYLE = "pref_subtitle_style"
     const val PREF_STORAGE_LOCATION = "pref_storage_location"

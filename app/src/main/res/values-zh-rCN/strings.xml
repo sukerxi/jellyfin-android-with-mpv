@@ -186,6 +186,18 @@
     <string name="network_buffer_large_description">较大的缓冲区，可能有助于改善一般或不稳定的网络连接</string>
     <string name="network_buffer_extra_large">特大</string>
     <string name="network_buffer_extra_large_description">最大缓冲区，适用于慢速连接或卫星连接</string>
+    <string name="pref_playback_buffer_mobile_note">移动网络下会自动收紧一档，以减少流量消耗</string>
+
+    <string name="pref_mobile_data_prompt_title">移动网络播放前提示</string>
+    <string name="pref_mobile_data_prompt_summary">蜂窝网络下开始播放前先确认，避免流量偷跑；关闭后不再询问，直接按下方的码率播放。</string>
+    <string name="pref_mobile_data_bitrate_title">移动网络播放码率</string>
+    <string name="mobile_data_bitrate_480p">480p - 1.5 Mbps</string>
+    <string name="mobile_data_bitrate_720p">720p - 4 Mbps</string>
+    <string name="mobile_data_bitrate_1080p">1080p - 10 Mbps</string>
+    <string name="mobile_data_playback_dialog_title">移动网络播放</string>
+    <string name="mobile_data_playback_dialog_message">当前为移动网络，继续播放可能消耗较多流量，建议以低码率（%1$s）播放。</string>
+    <string name="mobile_data_playback_play_low_bitrate">低码率播放</string>
+    <string name="mobile_data_playback_play_original">继续原画质</string>
     <string name="media_service_car_section_playlists">播放列表</string>
     <string name="downloading_title">正在下载%1$s</string>
     <string name="download_cancel">取消</string>

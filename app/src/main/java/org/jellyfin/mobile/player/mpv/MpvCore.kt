@@ -491,6 +491,18 @@ class MpvCore private constructor(context: Application) : KoinComponent {
             }
         }
 
+        /**
+         * 下发 demuxer 预读上限：时长（cache-secs，仅对网络流生效）与字节上限（demuxer-max-bytes）。
+         *
+         * 两者成对控制预读量：mpv 的 cache-secs 默认极大，实际预读受 demuxer-max-bytes 截断，
+         * 因此只改时长在高码率下看不出差异。传 null 表示该项不下发，保持 mpv.conf /
+         * [baseOptions] 的值。调用排队在 ipcExecutor 上，先于 loadfile 执行。
+         */
+        fun setDemuxerBufferLimits(cacheSecs: Double?, maxBytes: Long?) {
+            cacheSecs?.let { setProperty("cache-secs", it) }
+            maxBytes?.let { setProperty("demuxer-max-bytes", it) }
+        }
+
         fun subscribe(eventListener: (MpvEvent) -> Unit) {
             eventListeners.add(eventListener)
         }

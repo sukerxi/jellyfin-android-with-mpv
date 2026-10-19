@@ -95,6 +95,10 @@ fun SettingsScreen(
         .collectAsState(initial = appPreferences.exoPlayerDirectPlayAss)
     val networkBuffer by appPreferences.exoPlayerNetworkBufferFlow
         .collectAsState(initial = appPreferences.exoPlayerNetworkBuffer)
+    val mobileDataPlaybackPrompt by appPreferences.mobileDataPlaybackPromptFlow
+        .collectAsState(initial = appPreferences.mobileDataPlaybackPrompt)
+    val mobileDataMaxBitrate by appPreferences.mobileDataMaxBitrateFlow
+        .collectAsState(initial = appPreferences.mobileDataMaxBitrate)
     val externalPlayerApp by appPreferences.externalPlayerAppFlow
         .collectAsState(initial = appPreferences.externalPlayerApp)
     val mpvCustomConfig by appPreferences.mpvCustomConfigFlow
@@ -253,6 +257,43 @@ fun SettingsScreen(
                     checked = doubleTapPause,
                     onCheckedChange = { appPreferences.exoPlayerDoubleTapPause = it },
                 )
+                // 「播放缓冲区大小」：ExoPlayer 用它设置缓冲时长，mpv 用它设置 demuxer 预读
+                // 时长与缓存上限；蜂窝网络下两个引擎都会自动收紧一档。
+                val networkBufferOptions = listOf(
+                    ChoiceItem(
+                        Constants.NETWORK_BUFFER_AUTO,
+                        R.string.network_buffer_auto,
+                        R.string.network_buffer_auto_description,
+                    ),
+                    ChoiceItem(
+                        Constants.NETWORK_BUFFER_LARGE,
+                        R.string.network_buffer_large,
+                        R.string.network_buffer_large_description,
+                    ),
+                    ChoiceItem(
+                        Constants.NETWORK_BUFFER_EXTRA_LARGE,
+                        R.string.network_buffer_extra_large,
+                        R.string.network_buffer_extra_large_description,
+                    ),
+                )
+                val networkBufferSummary = listOfNotNull(
+                    networkBufferOptions.find { it.key == networkBuffer }?.let { stringResource(it.titleRes) },
+                    stringResource(R.string.pref_playback_buffer_mobile_note),
+                ).joinToString(" · ")
+                SingleSelectPreferenceRow(
+                    title = stringResource(R.string.pref_exoplayer_network_buffer),
+                    summary = networkBufferSummary,
+                    items = networkBufferOptions,
+                    selectedKey = networkBuffer,
+                    onClick = {
+                        choiceDialog = ChoiceDialogState(
+                            title = context.getString(R.string.pref_exoplayer_network_buffer),
+                            items = networkBufferOptions,
+                            selectedKey = networkBuffer,
+                            onSelect = { appPreferences.exoPlayerNetworkBuffer = it as String },
+                        )
+                    },
+                )
             }
 
             when (playerType) {
@@ -266,36 +307,6 @@ fun SettingsScreen(
                         summary = stringResource(R.string.pref_exoplayer_direct_play_ass_description),
                         checked = directPlayAss,
                         onCheckedChange = { appPreferences.exoPlayerDirectPlayAss = it },
-                    )
-                    val networkBufferOptions = listOf(
-                        ChoiceItem(
-                            Constants.NETWORK_BUFFER_AUTO,
-                            R.string.network_buffer_auto,
-                            R.string.network_buffer_auto_description,
-                        ),
-                        ChoiceItem(
-                            Constants.NETWORK_BUFFER_LARGE,
-                            R.string.network_buffer_large,
-                            R.string.network_buffer_large_description,
-                        ),
-                        ChoiceItem(
-                            Constants.NETWORK_BUFFER_EXTRA_LARGE,
-                            R.string.network_buffer_extra_large,
-                            R.string.network_buffer_extra_large_description,
-                        ),
-                    )
-                    SingleSelectPreferenceRow(
-                        title = stringResource(R.string.pref_exoplayer_network_buffer),
-                        items = networkBufferOptions,
-                        selectedKey = networkBuffer,
-                        onClick = {
-                            choiceDialog = ChoiceDialogState(
-                                title = context.getString(R.string.pref_exoplayer_network_buffer),
-                                items = networkBufferOptions,
-                                selectedKey = networkBuffer,
-                                onSelect = { appPreferences.exoPlayerNetworkBuffer = it as String },
-                            )
-                        },
                     )
                 }
                 VideoPlayerType.MPV_PLAYER -> {
@@ -318,6 +329,34 @@ fun SettingsScreen(
                     )
                 }
                 else -> Unit
+            }
+
+            // 移动网络（蜂窝）播放：是否先弹窗确认，以及确认降码率时使用的档位。
+            if (isIntegratedPlayer) {
+                SwitchPreferenceRow(
+                    title = stringResource(R.string.pref_mobile_data_prompt_title),
+                    summary = stringResource(R.string.pref_mobile_data_prompt_summary),
+                    checked = mobileDataPlaybackPrompt,
+                    onCheckedChange = { appPreferences.mobileDataPlaybackPrompt = it },
+                )
+                val mobileDataBitrateOptions = listOf(
+                    ChoiceItem(Constants.MOBILE_DATA_BITRATE_480P, R.string.mobile_data_bitrate_480p),
+                    ChoiceItem(Constants.MOBILE_DATA_BITRATE_720P, R.string.mobile_data_bitrate_720p),
+                    ChoiceItem(Constants.MOBILE_DATA_BITRATE_1080P, R.string.mobile_data_bitrate_1080p),
+                )
+                SingleSelectPreferenceRow(
+                    title = stringResource(R.string.pref_mobile_data_bitrate_title),
+                    items = mobileDataBitrateOptions,
+                    selectedKey = mobileDataMaxBitrate,
+                    onClick = {
+                        choiceDialog = ChoiceDialogState(
+                            title = context.getString(R.string.pref_mobile_data_bitrate_title),
+                            items = mobileDataBitrateOptions,
+                            selectedKey = mobileDataMaxBitrate,
+                            onSelect = { key -> (key as? Int)?.let { appPreferences.mobileDataMaxBitrate = it } },
+                        )
+                    },
+                )
             }
 
             if (playerType == VideoPlayerType.EXTERNAL_PLAYER) {

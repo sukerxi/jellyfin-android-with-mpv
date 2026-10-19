@@ -208,6 +208,28 @@ class AppPreferences(context: Context) {
     val exoPlayerNetworkBufferFlow: Flow<String> =
         preferenceFlow(KEY_EXOPLAYER_NETWORK_BUFFER, Constants.NETWORK_BUFFER_AUTO)
 
+    /**
+     * 移动网络（蜂窝）下开始播放前是否弹窗确认，避免流量偷跑。
+     *
+     * 关闭后不再询问，直接按下方的码率上限播放。
+     */
+    var mobileDataPlaybackPrompt: Boolean
+        get() = snapshot[KEY_MOBILE_DATA_PLAYBACK_PROMPT] ?: true
+        set(value) = persistValue(KEY_MOBILE_DATA_PLAYBACK_PROMPT, value)
+    val mobileDataPlaybackPromptFlow: Flow<Boolean> =
+        preferenceFlow(KEY_MOBILE_DATA_PLAYBACK_PROMPT, true)
+
+    /**
+     * 移动网络播放时使用的码率上限（bps）。默认 720p / 4 Mbps。
+     *
+     * 该值会作为服务端转码的 maxStreamingBitrate 下发，因此会强制走转码而不是直连。
+     */
+    var mobileDataMaxBitrate: Int
+        get() = snapshot[KEY_MOBILE_DATA_MAX_BITRATE] ?: Constants.MOBILE_DATA_MAX_BITRATE_DEFAULT
+        set(value) = persistValue(KEY_MOBILE_DATA_MAX_BITRATE, value)
+    val mobileDataMaxBitrateFlow: Flow<Int> =
+        preferenceFlow(KEY_MOBILE_DATA_MAX_BITRATE, Constants.MOBILE_DATA_MAX_BITRATE_DEFAULT)
+
     @ExternalPlayerPackage
     var externalPlayerApp: String
         get() = snapshot[KEY_EXTERNAL_PLAYER_APP] ?: ExternalPlayerPackage.SYSTEM_DEFAULT
@@ -313,6 +335,10 @@ class AppPreferences(context: Context) {
             booleanPreferencesKey(Constants.PREF_EXOPLAYER_DIRECT_PLAY_ASS)
         private val KEY_EXOPLAYER_NETWORK_BUFFER =
             stringPreferencesKey(Constants.PREF_EXOPLAYER_NETWORK_BUFFER)
+        private val KEY_MOBILE_DATA_PLAYBACK_PROMPT =
+            booleanPreferencesKey(Constants.PREF_MOBILE_DATA_PLAYBACK_PROMPT)
+        private val KEY_MOBILE_DATA_MAX_BITRATE =
+            intPreferencesKey(Constants.PREF_MOBILE_DATA_MAX_BITRATE)
         private val KEY_EXTERNAL_PLAYER_APP =
             stringPreferencesKey(Constants.PREF_EXTERNAL_PLAYER_APP)
         private val KEY_MPV_CUSTOM_CONFIG = stringPreferencesKey(Constants.PREF_MPV_CUSTOM_CONFIG)

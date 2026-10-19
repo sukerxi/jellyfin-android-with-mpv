@@ -111,6 +111,17 @@
     <string name="pref_exoplayer_direct_play_ass">使用原生 SSA/ASS 字幕算繪</string>
     <string name="playback_info_native_ass_rendering">裝置端算繪 SSA/ASS</string>
     <string name="pref_exoplayer_direct_play_ass_description">在裝置端依字幕本身的樣式、位置與特效算繪 SSA/ASS 字幕，伺服器不再將其燒錄進畫面。僅對直接播放生效：影片無需轉碼時才會採用此方式。用戶端算繪未必能完整呈現所有特效。</string>
+    <string name="pref_playback_buffer_mobile_note">行動網路下會自動收緊一檔，以減少流量消耗</string>
+    <string name="pref_mobile_data_prompt_title">行動網路播放前提示</string>
+    <string name="pref_mobile_data_prompt_summary">行動網路下開始播放前先確認，避免流量超額；關閉後不再詢問，直接按下方的位元率播放。</string>
+    <string name="pref_mobile_data_bitrate_title">行動網路播放位元率</string>
+    <string name="mobile_data_bitrate_480p">480p - 1.5 Mbps</string>
+    <string name="mobile_data_bitrate_720p">720p - 4 Mbps</string>
+    <string name="mobile_data_bitrate_1080p">1080p - 10 Mbps</string>
+    <string name="mobile_data_playback_dialog_title">行動網路播放</string>
+    <string name="mobile_data_playback_dialog_message">目前為行動網路，繼續播放可能消耗較多流量，建議以低位元率（%1$s）播放。</string>
+    <string name="mobile_data_playback_play_low_bitrate">低位元率播放</string>
+    <string name="mobile_data_playback_play_original">繼續原畫質</string>
     <string name="pref_subtitle_style">自定義字幕樣式</string>
     <string name="pref_subtitle_style_summary">您可以在Android設定中更改字幕樣式</string>
     <string name="wifi_only_summary">媒體將僅通過WiFi下載。</string>

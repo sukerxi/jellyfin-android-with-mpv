@@ -6,6 +6,8 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.provider.Settings
 import android.provider.Settings.System.ACCELEROMETER_ROTATION
@@ -87,6 +89,20 @@ fun Context.createMediaNotificationChannel(notificationManager: NotificationMana
 
 val Context.isLowRamDevice: Boolean
     get() = getSystemService<ActivityManager>()!!.isLowRamDevice
+
+/**
+ * 当前活动网络是否为蜂窝移动网络。
+ *
+ * 用于移动网络播放确认：只有真正走蜂窝数据时才需要提示/降码率。WiFi（含连接远程服务器的
+ * WiFi）不计入——无论是同局域网直连还是外网 WiFi 访问，都不会消耗移动流量。
+ */
+val Context.isOnCellularNetwork: Boolean
+    get() {
+        val connectivityManager = getSystemService<ConnectivityManager>() ?: return false
+        val activeNetwork = connectivityManager.activeNetwork ?: return false
+        val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork) ?: return false
+        return capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+    }
 
 fun Uri.extractId(): String {
     val uri = toString()
