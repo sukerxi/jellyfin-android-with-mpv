@@ -574,6 +574,9 @@ fun PlayerScreen(
             activity.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             playerFullscreenHelper.disableFullscreen()
             window.brightness = BRIGHTNESS_OVERRIDE_NONE
+            // 窗口常亮标志必须显式清除，否则播放中退出后 FLAG_KEEP_SCREEN_ON 会残留，
+            // 导致主界面等非播放场景屏幕也不熄屏
+            window.keepScreenOn = false
         }
     }
 
