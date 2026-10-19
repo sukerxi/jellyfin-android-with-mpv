@@ -8,3 +8,14 @@ build
 /captures
 .externalNativeBuild
 .cxx
+
+# Local tooling and agent scratch directories
+/.trae
+/.workbuddy
+
+# Local debug / investigation artifacts (not for the repo)
+/_*.py
+/logcat_full.txt
+/ui_dump.xml
+/regression-*/
+/perf-review-*.md
