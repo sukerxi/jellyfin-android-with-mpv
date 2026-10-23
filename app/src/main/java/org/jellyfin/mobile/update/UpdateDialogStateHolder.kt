@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import org.jellyfin.mobile.app.AppPreferences
+import java.util.UUID
 
 /**
  * 更新相关对话框的跨页面状态层，供 MainActivity 自动检查与设置页手动检查共用，
@@ -17,13 +18,18 @@ class UpdateDialogStateHolder(
      */
     class UpdatePrompt(val info: UpdateInfo, val allowDismiss: Boolean)
 
+    /**
+     * 前台下载进度对话框对应的版本信息与 WorkManager 任务 ID。
+     */
+    class ProgressState(val info: UpdateInfo, val workId: UUID)
+
     var prompt by mutableStateOf<UpdatePrompt?>(null)
         private set
 
     /**
-     * 前台下载进度对话框对应的版本信息；null 表示不展示。
+     * 前台下载进度对话框状态；null 表示不展示。
      */
-    var progressInfo by mutableStateOf<UpdateInfo?>(null)
+    var progressState by mutableStateOf<ProgressState?>(null)
         private set
 
     var installPermissionVisible by mutableStateOf(false)
@@ -42,13 +48,13 @@ class UpdateDialogStateHolder(
         prompt = null
     }
 
-    fun showProgress(info: UpdateInfo) {
+    fun showProgress(info: UpdateInfo, workId: UUID) {
         prompt = null
-        progressInfo = info
+        progressState = ProgressState(info, workId)
     }
 
     fun hideProgress() {
-        progressInfo = null
+        progressState = null
     }
 
     fun showInstallPermission() {

@@ -6,6 +6,7 @@ package org.jellyfin.mobile.update
  * @param versionName 与 BuildConfig.VERSION_NAME 同格式的语义版本（如 3.0.0-a661b02b）
  * @param changelog   提交记录等更新内容（纯文本，可能为空）
  * @param channel     来源渠道，见 [UpdateChannel]
+ * @param digest      APK 的 SHA-256 校验值（形如 `sha256:...`），来源未提供时为空
  */
 data class UpdateInfo(
     val versionName: String,
@@ -15,6 +16,7 @@ data class UpdateInfo(
     val fileName: String,
     val changelog: String,
     val channel: String,
+    val digest: String = "",
 )
 
 object UpdateChannel {

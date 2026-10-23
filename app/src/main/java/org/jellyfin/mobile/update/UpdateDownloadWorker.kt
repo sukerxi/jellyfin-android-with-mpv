@@ -34,6 +34,8 @@ import org.jellyfin.mobile.utils.AndroidVersion
 import timber.log.Timber
 import java.io.File
 import java.io.IOException
+import java.security.MessageDigest
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /**
@@ -54,6 +56,7 @@ class UpdateDownloadWorker(
         private const val KEY_DOWNLOAD_URL = "downloadUrl"
         private const val KEY_FILE_NAME = "fileName"
         private const val KEY_VERSION_NAME = "versionName"
+        private const val KEY_DIGEST = "digest"
 
         const val KEY_PROGRESS = "progress"
         const val KEY_TOTAL = "total"
@@ -61,15 +64,19 @@ class UpdateDownloadWorker(
 
         private const val BUFFER_SIZE = 64 * 1024
         private const val MAX_PROGRESS_REFRESH_MS = 500L
+        private const val MAX_ATTEMPTS = 3
 
         /**
          * 将 APK 下载到缓存目录（应用被杀死后由 WorkManager 继续执行）。
+         *
+         * @return 本次任务的唯一 ID，供 [observeProgress] 精确观察，避免读到历史任务状态
          */
-        fun enqueue(context: Context, info: UpdateInfo) {
+        fun enqueue(context: Context, info: UpdateInfo): UUID {
             val inputData = Data.Builder()
                 .putString(KEY_DOWNLOAD_URL, info.downloadUrl)
                 .putString(KEY_FILE_NAME, info.fileName)
                 .putString(KEY_VERSION_NAME, info.versionName)
+                .putString(KEY_DIGEST, info.digest)
                 .build()
 
             val request = OneTimeWorkRequestBuilder<UpdateDownloadWorker>()
@@ -88,6 +95,7 @@ class UpdateDownloadWorker(
                 ExistingWorkPolicy.REPLACE,
                 request,
             )
+            return request.id
         }
 
         fun cancel(context: Context) {
@@ -96,13 +104,12 @@ class UpdateDownloadWorker(
         }
 
         /**
-         * 观察下载进度（用于应用内对话框）。返回 progress(0..100)，total<=0 时为 -1（不确定）。
+         * 观察指定任务的下载进度（用于应用内对话框）。返回 progress(0..100)，total<=0 时为 -1（不确定）。
          */
-        fun observeProgress(context: Context): Flow<DownloadProgress> =
+        fun observeProgress(context: Context, workId: UUID): Flow<DownloadProgress> =
             WorkManager.getInstance(context)
-                .getWorkInfosForUniqueWorkFlow(UNIQUE_NAME)
-                .map { infos ->
-                    val info = infos.firstOrNull()
+                .getWorkInfoByIdFlow(workId)
+                .map { info ->
                     when {
                         info == null -> DownloadProgress.Idle
                         info.state == WorkInfo.State.SUCCEEDED -> DownloadProgress.Success
@@ -147,6 +154,7 @@ class UpdateDownloadWorker(
     private val downloadUrl get() = inputData.getString(KEY_DOWNLOAD_URL) ?: ""
     private val fileName get() = inputData.getString(KEY_FILE_NAME) ?: "update.apk"
     private val versionName get() = inputData.getString(KEY_VERSION_NAME) ?: ""
+    private val digest get() = inputData.getString(KEY_DIGEST) ?: ""
 
     private val builder by lazy {
         NotificationCompat.Builder(applicationContext, NOTIFICATION_CHANNEL_ID).apply {
@@ -177,26 +185,33 @@ class UpdateDownloadWorker(
 
         val target = apkFile(applicationContext, fileName)
         return try {
-            download(url, target)
+            download(url, target, digest)
             showInstallNotification(target)
             Result.success()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Timber.e(e, "Update download failed")
             notificationManager?.cancel(DOWNLOAD_NOTIFICATION_ID)
-            showFailedNotification()
-            Result.failure()
+            if (runAttemptCount + 1 < MAX_ATTEMPTS) {
+                Timber.w(e, "Update download failed, retrying (attempt ${runAttemptCount + 1}/$MAX_ATTEMPTS)")
+                Result.retry()
+            } else {
+                Timber.e(e, "Update download failed after $MAX_ATTEMPTS attempts")
+                showFailedNotification()
+                Result.failure()
+            }
         }
     }
 
-    private suspend fun download(url: String, target: File) = withContext(Dispatchers.IO) {
+    private suspend fun download(url: String, target: File, digest: String) = withContext(Dispatchers.IO) {
         val request = Request.Builder().url(url).build()
         okHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("Unexpected response ${response.code}")
 
             val total = response.body?.contentLength() ?: -1L
             val temp = File(target.parentFile, target.name + ".part")
+            val expectedSha256 = digest.substringAfter("sha256:", "").takeIf { it.isNotBlank() }
+            val messageDigest = expectedSha256?.let { MessageDigest.getInstance("SHA-256") }
 
             response.body?.byteStream()?.use { input ->
                 temp.outputStream().use { output ->
@@ -208,6 +223,7 @@ class UpdateDownloadWorker(
                     while (input.read(buffer).also { bytesRead = it } != -1) {
                         coroutineContext.ensureActive()
                         output.write(buffer, 0, bytesRead)
+                        messageDigest?.update(buffer, 0, bytesRead)
                         downloaded += bytesRead
 
                         val now = System.currentTimeMillis()
@@ -216,10 +232,26 @@ class UpdateDownloadWorker(
                             updateProgress(downloaded, total)
                         }
                     }
+
+                    if (total > 0 && downloaded != total) {
+                        temp.delete()
+                        throw IOException("Incomplete download: $downloaded/$total")
+                    }
                 }
             } ?: throw IOException("Empty response body")
 
-            temp.renameTo(target)
+            if (expectedSha256 != null && messageDigest != null) {
+                val actual = messageDigest.digest().toHexString()
+                if (!actual.equals(expectedSha256, ignoreCase = true)) {
+                    temp.delete()
+                    throw IOException("APK checksum mismatch")
+                }
+            }
+
+            if (!temp.renameTo(target)) {
+                temp.delete()
+                throw IOException("Unable to move downloaded APK")
+            }
             updateProgress(target.length(), target.length())
         }
     }
@@ -300,3 +332,6 @@ sealed interface DownloadProgress {
     data object Failed : DownloadProgress
     data class Running(val percent: Int, val downloaded: Long, val total: Long) : DownloadProgress
 }
+
+private fun ByteArray.toHexString(): String =
+    joinToString("") { byte -> (byte.toInt() and 0xFF).toString(16).padStart(2, '0') }

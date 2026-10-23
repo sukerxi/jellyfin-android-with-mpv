@@ -128,14 +128,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun maybeCheckForUpdates() {
+        if (!updateChecker.isSupported) return
         if (!appPreferences.autoCheckUpdates) return
         val now = System.currentTimeMillis()
         if (now - appPreferences.lastUpdateCheckTime < AUTO_UPDATE_CHECK_INTERVAL_MS) return
-        appPreferences.lastUpdateCheckTime = now
 
         lifecycleScope.launch {
             when (val result = updateChecker.check()) {
                 is UpdateCheckResult.UpdateAvailable -> {
+                    // 仅在检查成功后记录时间，失败（如网络不可用）下次启动可重试
+                    appPreferences.lastUpdateCheckTime = System.currentTimeMillis()
                     if (appPreferences.silentUpdateDownload) {
                         UpdateDownloadWorker.enqueue(this@MainActivity, result.info)
                     } else if (!isFinishing && !isDestroyed) {
@@ -145,7 +147,9 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
-                else -> Unit
+                UpdateCheckResult.UpToDate ->
+                    appPreferences.lastUpdateCheckTime = System.currentTimeMillis()
+                is UpdateCheckResult.Error -> Unit
             }
         }
     }

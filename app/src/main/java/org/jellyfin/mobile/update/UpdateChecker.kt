@@ -20,6 +20,14 @@ class UpdateChecker(
     /** 当前构建对应的更新渠道。 */
     val currentChannel: String get() = BuildConfig.UPDATE_CHANNEL
 
+    /**
+     * 是否支持应用内更新。
+     *
+     * debug 包的 applicationId 带 `.debug` 后缀，release APK 无法覆盖安装，
+     * 因此 debug 构建不参与更新检查，避免提示一个永远装不上的版本。
+     */
+    val isSupported: Boolean get() = !BuildConfig.DEBUG
+
     private fun sourceFor(channel: String): ReleaseSource =
         if (channel == UpdateChannel.GITHUB) gitHubSource else cnbSource
 

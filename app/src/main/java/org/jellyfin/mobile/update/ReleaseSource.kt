@@ -1,6 +1,7 @@
 package org.jellyfin.mobile.update
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -41,26 +42,28 @@ private fun parseReleaseJson(
 ): UpdateInfo? {
     val release = json.parseToJsonElement(payload).jsonObject
 
-    val name = release["name"]?.jsonPrimitive?.content.orEmpty()
-    val tag = release["tag_name"]?.jsonPrimitive?.content.orEmpty()
+    // 使用 contentOrNull：JSON 中显式为 null 的字段不会退化成字符串 "null"
+    val name = release["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
+    val tag = release["tag_name"]?.jsonPrimitive?.contentOrNull.orEmpty()
     val versionName = VERSION_IN_NAME.find(name)?.groupValues?.get(1) ?: tag
     if (versionName.isBlank()) return null
 
     val apk = release["assets"]?.jsonArray?.firstOrNull { asset ->
-        (asset.jsonObject["name"]?.jsonPrimitive?.content ?: "").endsWith(".apk")
+        (asset.jsonObject["name"]?.jsonPrimitive?.contentOrNull ?: "").endsWith(".apk")
     }?.jsonObject ?: return null
 
-    val downloadUrl = apk["browser_download_url"]?.jsonPrimitive?.content ?: return null
-    val fileName = apk["name"]?.jsonPrimitive?.content ?: "update.apk"
+    val downloadUrl = apk["browser_download_url"]?.jsonPrimitive?.contentOrNull ?: return null
+    val fileName = apk["name"]?.jsonPrimitive?.contentOrNull ?: "update.apk"
 
     return UpdateInfo(
         versionName = versionName,
         tag = tag,
-        releaseUrl = release["html_url"]?.jsonPrimitive?.content ?: fallbackReleaseUrl,
+        releaseUrl = release["html_url"]?.jsonPrimitive?.contentOrNull ?: fallbackReleaseUrl,
         downloadUrl = downloadUrl,
         fileName = fileName,
-        changelog = normalizeBody(release["body"]?.jsonPrimitive?.content.orEmpty()),
+        changelog = normalizeBody(release["body"]?.jsonPrimitive?.contentOrNull.orEmpty()),
         channel = channel,
+        digest = apk["digest"]?.jsonPrimitive?.contentOrNull.orEmpty(),
     )
 }
 

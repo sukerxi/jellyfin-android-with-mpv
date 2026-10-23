@@ -467,37 +467,39 @@ fun SettingsScreen(
                 },
             )
 
-            // Updates
-            SettingsCategoryHeader(title = stringResource(R.string.pref_category_update))
+            // Updates（debug 包无法被 release APK 覆盖安装，不展示更新设置）
+            if (updateChecker.isSupported) {
+                SettingsCategoryHeader(title = stringResource(R.string.pref_category_update))
 
-            val channelName = if (updateChecker.currentChannel == UpdateChannel.GITHUB) {
-                stringResource(R.string.update_channel_github)
-            } else {
-                stringResource(R.string.update_channel_cnb)
+                val channelName = if (updateChecker.currentChannel == UpdateChannel.GITHUB) {
+                    stringResource(R.string.update_channel_github)
+                } else {
+                    stringResource(R.string.update_channel_cnb)
+                }
+                ClickPreferenceRow(
+                    title = stringResource(R.string.pref_update_channel),
+                    summary = stringResource(R.string.pref_update_channel_summary, channelName),
+                    enabled = false,
+                    onClick = {},
+                )
+                SwitchPreferenceRow(
+                    title = stringResource(R.string.pref_auto_check_updates),
+                    summary = stringResource(R.string.pref_auto_check_updates_summary),
+                    checked = autoCheckUpdates,
+                    onCheckedChange = { appPreferences.autoCheckUpdates = it },
+                )
+                SwitchPreferenceRow(
+                    title = stringResource(R.string.pref_silent_download),
+                    summary = stringResource(R.string.pref_silent_download_summary),
+                    checked = silentUpdateDownload,
+                    onCheckedChange = { appPreferences.silentUpdateDownload = it },
+                )
+                ClickPreferenceRow(
+                    title = stringResource(R.string.pref_check_update),
+                    summary = stringResource(R.string.pref_check_update_summary),
+                    onClick = { checkForUpdates() },
+                )
             }
-            ClickPreferenceRow(
-                title = stringResource(R.string.pref_update_channel),
-                summary = stringResource(R.string.pref_update_channel_summary, channelName),
-                enabled = false,
-                onClick = {},
-            )
-            SwitchPreferenceRow(
-                title = stringResource(R.string.pref_auto_check_updates),
-                summary = stringResource(R.string.pref_auto_check_updates_summary),
-                checked = autoCheckUpdates,
-                onCheckedChange = { appPreferences.autoCheckUpdates = it },
-            )
-            SwitchPreferenceRow(
-                title = stringResource(R.string.pref_silent_download),
-                summary = stringResource(R.string.pref_silent_download_summary),
-                checked = silentUpdateDownload,
-                onCheckedChange = { appPreferences.silentUpdateDownload = it },
-            )
-            ClickPreferenceRow(
-                title = stringResource(R.string.pref_check_update),
-                summary = stringResource(R.string.pref_check_update_summary),
-                onClick = { checkForUpdates() },
-            )
         }
     }
 

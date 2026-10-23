@@ -6,6 +6,7 @@ import android.os.Build
 import android.provider.Settings
 import android.widget.Toast
 import org.jellyfin.mobile.R
+import java.util.UUID
 
 /**
  * 应用更新相关的纯逻辑入口：下载任务调度、安装权限判断、安装界面调起。
@@ -16,10 +17,11 @@ class UpdateManager {
 
     /**
      * 调度 APK 后台下载（应用被杀死后由 WorkManager 继续执行）。
+     *
+     * @return 本次下载任务的唯一 ID，用于精确观察进度
      */
-    fun enqueueDownload(context: Context, info: UpdateInfo) {
+    fun enqueueDownload(context: Context, info: UpdateInfo): UUID =
         UpdateDownloadWorker.enqueue(context, info)
-    }
 
     fun cancelDownload(context: Context) {
         UpdateDownloadWorker.cancel(context)
@@ -86,8 +88,9 @@ class UpdateManager {
     /**
      * 规范化 release 正文用于对话框展示：
      * - 去掉与对话框"更新内容："标题重复的 markdown 标题（如 "## 更新内容（提交记录）"）；
-     * - 去掉自动构建样板标题（"## Jellyfin Android ..."）；
-     * - 把 markdown 转成纯文本：标题转普通行、反引号去除、链接保留文字。
+     * - 去掉自动构建样板标题（"## Jellyfin Android ..."）与 GitHub 自动生成的 "Full Changelog" 行；
+     * - 把 markdown 转成纯文本：标题转普通行、反引号去除、链接保留文字；
+     * - 去掉 GitHub 自动生成提交行里的裸链接与 "by @user in" 署名。
      */
     fun formatChangelog(raw: String): String {
         if (raw.isBlank()) return ""
@@ -95,8 +98,11 @@ class UpdateManager {
             .map { it.trimEnd() }
             .filter { line ->
                 val t = line.trim()
-                !(t.startsWith("#") &&
-                    (t.contains("更新内容") || t.contains("Jellyfin Android", ignoreCase = true)))
+                val isRepeatedTitle = t.startsWith("#") &&
+                    (t.contains("更新内容") || t.contains("Jellyfin Android", ignoreCase = true))
+                val isFullChangelog = t.startsWith("**Full Changelog**", ignoreCase = true) ||
+                    t.startsWith("Full Changelog", ignoreCase = true)
+                !isRepeatedTitle && !isFullChangelog
             }
             .map { line ->
                 line
@@ -104,6 +110,11 @@ class UpdateManager {
                     .replace("`", "")
                     .replace(Regex("""\*\*([^*]+)\*\*"""), "$1")
                     .replace(Regex("""\[([^\]]+)\]\([^)]+\)"""), "$1")
+                    // GitHub 自动生成的提交行：「* 标题 by @user in https://github.com/...」
+                    .replace(Regex("""\s+by\s+@[\w.-]+\s+in\s+https?://\S+"""), "")
+                    .replace(Regex("""\s+in\s+https?://\S+"""), "")
+                    .replace(Regex("""https?://\S+"""), "")
+                    .trimEnd()
             }
         // 压掉连续空行
         val sb = StringBuilder()

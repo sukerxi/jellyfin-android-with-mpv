@@ -34,6 +34,7 @@ import org.jellyfin.mobile.update.UpdateDownloadWorker
 import org.jellyfin.mobile.update.UpdateInfo
 import org.jellyfin.mobile.update.UpdateManager
 import org.jellyfin.mobile.utils.koinInject
+import java.util.UUID
 
 /**
  * 挂在根 Compose 宿主上的更新对话框集合：
@@ -54,8 +55,8 @@ fun UpdateDialogHost(
                 if (!updateManager.hasInstallPermission(context)) {
                     holder.showInstallPermission()
                 }
-                updateManager.enqueueDownload(context, prompt.info)
-                holder.showProgress(prompt.info)
+                val workId = updateManager.enqueueDownload(context, prompt.info)
+                holder.showProgress(prompt.info, workId)
             },
             onDownloadInBackground = {
                 updateManager.enqueueDownload(context, prompt.info)
@@ -67,16 +68,17 @@ fun UpdateDialogHost(
         )
     }
 
-    holder.progressInfo?.let { info ->
+    holder.progressState?.let { state ->
         UpdateProgressDialog(
-            info = info,
+            info = state.info,
+            workId = state.workId,
             onCancel = {
                 updateManager.cancelDownload(context)
                 holder.hideProgress()
             },
             onSuccess = {
                 holder.hideProgress()
-                updateManager.launchInstall(context, info)
+                updateManager.launchInstall(context, state.info)
             },
             onFailed = {
                 holder.hideProgress()
@@ -164,6 +166,7 @@ private fun UpdateAvailableDialog(
 @Composable
 private fun UpdateProgressDialog(
     info: UpdateInfo,
+    workId: UUID,
     onCancel: () -> Unit,
     onSuccess: () -> Unit,
     onFailed: () -> Unit,
@@ -172,8 +175,8 @@ private fun UpdateProgressDialog(
     var state by remember { mutableStateOf<DownloadProgress>(DownloadProgress.Idle) }
     var finished by remember { mutableStateOf(false) }
 
-    LaunchedEffect(info) {
-        UpdateDownloadWorker.observeProgress(context).collect { progress ->
+    LaunchedEffect(workId) {
+        UpdateDownloadWorker.observeProgress(context, workId).collect { progress ->
             when (progress) {
                 is DownloadProgress.Running -> state = progress
                 DownloadProgress.Success -> if (!finished) {
