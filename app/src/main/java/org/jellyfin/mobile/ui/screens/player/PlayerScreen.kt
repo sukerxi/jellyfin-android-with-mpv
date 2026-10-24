@@ -8,7 +8,6 @@ import android.view.Window
 import android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -94,6 +93,8 @@ import org.jellyfin.mobile.player.source.RemoteJellyfinMediaSource
 import org.jellyfin.mobile.player.ui.DecoderType
 import org.jellyfin.mobile.player.ui.PlayerFullscreenHelper
 import org.jellyfin.mobile.player.ui.TrickplayHelper
+import org.jellyfin.mobile.ui.navigation.BackNavigationDispatcher
+import org.jellyfin.mobile.ui.navigation.RegisterBackHandler
 import org.jellyfin.mobile.ui.screens.mpvcompare.InPlayerCompareOverlay
 import org.jellyfin.mobile.utils.AndroidVersion
 import org.jellyfin.mobile.utils.Constants
@@ -146,8 +147,7 @@ private const val LOADING_INDICATOR_HIDE_DELAY_MS = 400L
 @Composable
 fun PlayerScreen(
     onClose: () -> Unit,
-    closeRequested: Boolean = false,
-    onCloseRequestHandled: () -> Unit = {},
+    backDispatcher: BackNavigationDispatcher,
     viewModel: PlayerViewModel = viewModel(),
     compareViewModel: FrameCompareViewModel = viewModel(),
     playbackLauncher: PlaybackLauncher = koinInject(),
@@ -428,15 +428,6 @@ fun PlayerScreen(
             // released the player. Dismiss without running the close path again.
             playbackEnded.value = true
             onClose()
-        }
-    }
-
-    // Back press forwarded from the overlay host (it sits outside this screen). The player
-    // screen has to be the one closing, as only it runs PlayerViewModel.onPlayerClosed().
-    LaunchedEffect(closeRequested) {
-        if (closeRequested) {
-            closePlayer()
-            onCloseRequestHandled()
         }
     }
 
@@ -833,11 +824,10 @@ fun PlayerScreen(
         gestureHandler.handleConfiguration()
     }
 
-    // Back closes open panels/menus first, and always consumes the press while the player
-    // screen is up: the web app's back handler (WebViewScreen) stays enabled behind the
-    // overlay (the WebView is retained), and while locked it would otherwise send the app
-    // to the background behind the lock screen instead of closing the player.
-    BackHandler {
+    // 返回键交给宿主（唯一的仲裁点）派发，本屏只声明"按下返回时怎么处理"。
+    // 浮层在网页之上，所以它的返回语义永远优先于 webapp 的 SPA 后退：
+    // 先关面板/菜单，再关闭播放器；锁屏时吞掉按键（解锁按钮才是出口）。
+    backDispatcher.RegisterBackHandler {
         when {
             infoPanelVisible || episodePickerVisible || expandedMenu != null || compareVisible -> {
                 expandedMenu = null

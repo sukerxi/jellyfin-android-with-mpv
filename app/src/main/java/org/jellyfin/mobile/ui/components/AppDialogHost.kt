@@ -60,7 +60,7 @@ fun AppDialogHost(
         )
     }
 
-    // WebView 版本过旧（WebViewScreen 检查）
+    // WebView 版本过旧（WebViewHost 检查）
     webViewDialogState.outdatedRequest?.let { request ->
         WebViewOutdatedDialog(
             request = request,

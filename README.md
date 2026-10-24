@@ -26,7 +26,7 @@
 - **播放器对比层（mpv-compare）**
   用独立 mpv 实例渲染指定帧并回读像素，与基线帧逐像素比较，输出差异值、差异图与缩放结果，不打断当前播放。
 - **界面与偏好**
-  全部界面由 Compose 承载，偏好设置使用 Preferences DataStore；播放器是覆盖在导航之上的全屏浮层，避免推入新路由时销毁 WebView。
+  全部界面由 Compose 承载，偏好设置使用 Preferences DataStore；网页不是导航目的地的内容，而是与主界面同寿命的常驻宿主（路由切换只切可见性），播放器则是覆盖在一切之上的全屏浮层。
 
 由于 MpvPlayer 与官方使用的 ExoPlayer 实现了相同的 `Player` 接口，上层播放逻辑对两者基本透明。
 
@@ -65,7 +65,7 @@ This is a fork of the official [Jellyfin Android](https://github.com/jellyfin/je
 - **mpv-compare layer**
   Renders a chosen frame with independent mpv instances, reads the pixels back and compares them against the baseline frame pixel by pixel, producing a difference score, difference image and zoomed results without interrupting ongoing playback.
 - **UI and preferences**
-  All screens are built with Compose, preferences live in Preferences DataStore, and the player is a full-screen overlay above the navigation graph so pushing a new route cannot destroy the WebView.
+  All screens are built with Compose and preferences live in Preferences DataStore. The web page is not a navigation destination but a host that lives as long as the activity (route changes only toggle its visibility), and the player is a full-screen overlay above everything.
 
 Since MpvPlayer implements the same `Player` interface as the ExoPlayer used in the official Jellyfin Android client, the playback logic above it is largely transparent to either engine.
 

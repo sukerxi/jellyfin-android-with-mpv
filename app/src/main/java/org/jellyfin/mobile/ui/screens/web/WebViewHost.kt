@@ -6,14 +6,15 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.graphics.Rect
 import android.net.Uri
+import android.os.PowerManager
 import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient.FileChooserParams
 import android.webkit.WebView
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
@@ -34,8 +35,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,6 +46,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.getSystemService
 import androidx.core.view.doOnNextLayout
 import androidx.webkit.WebViewAssetLoader.AssetsPathHandler
 import androidx.webkit.WebViewCompat
@@ -67,15 +71,29 @@ import org.jellyfin.mobile.utils.koinInject
 import org.jellyfin.mobile.webapp.JellyfinWebChromeClient
 import org.jellyfin.mobile.webapp.JellyfinWebViewClient
 import org.jellyfin.mobile.webapp.WebappFunctionChannel
-import org.jellyfin.mobile.webapp.WebViewRetainer
-import android.os.PowerManager
-import androidx.core.content.getSystemService
 import timber.log.Timber
 
+/**
+ * 常驻的网页宿主。
+ *
+ * 网页不再是某个导航目的地的内容，而是覆盖在导航层**之下**、与主界面同寿命的宿主：
+ * 进入设置/下载页只是关掉它的可见性，返回时再打开。
+ *
+ * 为什么必须常驻：WebView 一旦脱离窗口（目的地销毁组合），Chromium 侧会停止出帧并
+ * 丢掉最后一帧；重新挂回窗口时补帧请求又常常落在窗口还不可见的时刻被丢弃，于是停在
+ * 空帧上 —— 表现就是"从设置页返回后网页全黑，点一下屏幕才恢复"。可见性变化
+ * （[View.setVisibility]）是 Chromium 明确监听、能确定性恢复出帧的信号，所以路由
+ * 进出只切可见性，绝不让 WebView detach/re-attach。
+ *
+ * 页面状态（SPA 路由、滚动位置、JS 上下文）也因此不需要"保留/复用"逻辑：实例与
+ * 页面同寿命，只有切换服务器时才随 [server] 的 id 整体重建（旧实例在 onRelease 销毁）。
+ */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun WebViewScreen(
+fun WebViewHost(
     server: ServerEntity,
+    state: WebViewHostState,
+    visible: Boolean,
     mainViewModel: MainViewModel,
     onSelectServer: (error: Boolean) -> Unit,
     appPreferences: AppPreferences = koinInject(),
@@ -83,18 +101,54 @@ fun WebViewScreen(
     webViewDialogState: WebViewDialogState = koinInject(),
     nativePlayer: NativePlayer = koinInject(),
     mediaSegments: MediaSegments = koinInject(),
-    webViewRetainer: WebViewRetainer = koinInject(),
+) {
+    // WebView、已加载的页面和连接状态都属于当前这台服务器：换服必须整体重建，
+    // 由旧组合的 onRelease 销毁旧实例。
+    key(server.id) {
+        WebViewHostContent(
+            server = server,
+            state = state,
+            visible = visible,
+            mainViewModel = mainViewModel,
+            onSelectServer = onSelectServer,
+            appPreferences = appPreferences,
+            webappFunctionChannel = webappFunctionChannel,
+            webViewDialogState = webViewDialogState,
+            nativePlayer = nativePlayer,
+            mediaSegments = mediaSegments,
+        )
+    }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun WebViewHostContent(
+    server: ServerEntity,
+    state: WebViewHostState,
+    visible: Boolean,
+    mainViewModel: MainViewModel,
+    onSelectServer: (error: Boolean) -> Unit,
+    appPreferences: AppPreferences,
+    webappFunctionChannel: WebappFunctionChannel,
+    webViewDialogState: WebViewDialogState,
+    nativePlayer: NativePlayer,
+    mediaSegments: MediaSegments,
 ) {
     val context = LocalContext.current
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val scope = rememberCoroutineScope()
 
-    // Connection state lives in the retainer so it survives navigating away and back
-    // (e.g. to the player): the WebView is retained with its loaded page and must not
-    // fall back to "not connected", which would break the webapp back-press handling.
-    val connected = webViewRetainer.connected
-    var showLoading by remember(server.id) { mutableStateOf(false) }
-    var showBatterySnackbar by remember(server.id) { mutableStateOf(false) }
+    // 在组合期读取，保证连接状态变化能驱动重组（AndroidView 的 update 不宜作为状态订阅点）。
+    val connected = state.connected
+
+    var showLoading by remember { mutableStateOf(false) }
+    var showBatterySnackbar by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // Plain holder: written from AndroidView factory (must not touch snapshot state there)
+    val webViewHolder = remember { arrayOfNulls<WebView>(1) }
+    // 每个 WebView 实例只在首次出现（连接成功）时淡入一次；之后路由进出只切可见性，
+    // 不再给 WebView 套 alpha 动画（alpha 层合成是另一类黑帧来源）。
+    val shownOnce = remember { booleanArrayOf(false) }
 
     // External file chooser
     var fileChooserCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
@@ -106,7 +160,7 @@ fun WebViewScreen(
     }
 
     // External video player apps
-    lateinit var externalPlayerLauncher: androidx.activity.result.ActivityResultLauncher<Intent>
+    lateinit var externalPlayerLauncher: ActivityResultLauncher<Intent>
     val externalPlayer = remember {
         ExternalPlayer(context) { intent -> externalPlayerLauncher.launch(intent) }
     }
@@ -118,22 +172,15 @@ fun WebViewScreen(
 
     val assetsPathHandler = remember { AssetsPathHandler(context) }
 
-    // Plain holder: written from AndroidView factory (must not touch snapshot state there)
-    val webViewHolder = remember { arrayOfNulls<WebView>(1) }
-    // Whether the factory reused a retained WebView (plain flag, synced into state below)
-    val webViewReused = remember(server.id) { booleanArrayOf(false) }
-
-    val timeoutRunnable = remember(server.id) {
+    val timeoutRunnable = remember {
         Runnable {
-            webViewRetainer.markDisconnected()
+            state.connected = false
             onSelectServer(true)
         }
     }
-    val showLoadingRunnable = remember(server.id) {
-        Runnable { showLoading = true }
-    }
+    val showLoadingRunnable = remember { Runnable { showLoading = true } }
 
-    val jellyfinWebViewClient = remember(server.id) {
+    val jellyfinWebViewClient = remember {
         object : JellyfinWebViewClient(
             scope,
             server,
@@ -148,21 +195,20 @@ fun WebViewScreen(
                 webView.post {
                     webView.removeCallbacks(timeoutRunnable)
                     webView.removeCallbacks(showLoadingRunnable)
-                    webViewRetainer.markConnected()
+                    state.connected = true
                     showLoading = false
-                    webView.fadeIn()
                     showBatterySnackbar = true
                 }
             }
 
             override fun onErrorReceived() {
-                webViewRetainer.markDisconnected()
+                state.connected = false
                 onSelectServer(true)
             }
         }
     }
 
-    // 绑定客户端与 JS 桥。客户端属于当前组合，复用保留的 WebView 时必须重新绑定。
+    // 绑定客户端与 JS 桥
     fun WebView.setupClients() {
         webViewClient = jellyfinWebViewClient
         webChromeClient = JellyfinWebChromeClient(
@@ -204,113 +250,75 @@ fun WebViewScreen(
                 .fillMaxSize()
                 .systemBarsPadding(),
             factory = { ctx ->
-                // Reuse the WebView retained while navigating to another route (e.g. the
-                // player) so returning lands on the page the user left instead of reloading
-                // the server's start page. Clients belong to this composition and must be
-                // rebound; the loaded page itself is kept as-is.
-                val reused = webViewRetainer.obtain(server.id)
-                if (reused != null) {
-                    webViewReused[0] = true
-                    reused.apply {
-                        (parent as? ViewGroup)?.removeView(this)
-                        layoutParams = ViewGroup.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                        )
-                        // Visibility is kept as-is: a page that already faded in stays
-                        // visible, one that never connected stays hidden until it does.
-                        webViewHolder[0] = this
-                        setupClients()
+                WebView(ctx).apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+                    // 先隐藏，等 webapp 连接成功的第一次出现再淡入
+                    visibility = View.INVISIBLE
+                    webViewHolder[0] = this
+                    setupGestureExclusions()
+                    initialize()
+                }
+            },
+            update = { webView ->
+                // 只有 WEB 路由在栈顶、且页面已连接时才显示。播放器浮层不改变路由，
+                // 网页保持可见：播放中 webapp 要继续上报进度，也不能吃
+                // document.visibilityState=hidden 的定时器节流。
+                //
+                // INVISIBLE -> VISIBLE 是 Chromium 明确响应的信号（AwContents 收到后
+                // 通知渲染侧 WasShown 并重出新帧），也是这里唯一依赖的补帧机制。
+                val show = visible && connected
+                when {
+                    !show -> webView.visibility = View.INVISIBLE
+                    !shownOnce[0] -> {
+                        shownOnce[0] = true
+                        webView.fadeIn()
                     }
-                } else {
-                    webViewReused[0] = false
-                    WebView(ctx).apply {
-                        layoutParams = ViewGroup.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                        )
-                        visibility = View.INVISIBLE
-                        webViewHolder[0] = this
-
-                        // Setup exclusion rects for gestures
-                        if (AndroidVersion.isAtLeastQ) {
-                            @Suppress("MagicNumber")
-                            doOnNextLayout {
-                                // Maximum allowed exclusion rect height is 200dp,
-                                // offsetting 100dp from the center in both directions
-                                // uses the maximum available space
-                                val verticalCenter = measuredHeight / 2
-                                val offset = resources.dip(100)
-
-                                // Arbitrary, currently 2x minimum touch target size
-                                val exclusionWidth = resources.dip(96)
-
-                                systemGestureExclusionRects = listOf(
-                                    Rect(
-                                        0,
-                                        verticalCenter - offset,
-                                        exclusionWidth,
-                                        verticalCenter + offset,
-                                    ),
-                                )
-                            }
-                        }
-
-                        initialize()
-                    }
+                    else -> webView.visibility = View.VISIBLE
                 }
             },
             onRelease = { webView ->
                 webView.removeCallbacks(timeoutRunnable)
                 webView.removeCallbacks(showLoadingRunnable)
                 webViewHolder[0] = null
-                // Retain instead of destroy: navigating to another route (player, settings,
-                // downloads) disposes this composition, and recreating the WebView would
-                // reload the start page. The retainer destroys it on server switch / app exit.
-                webViewRetainer.retain(server.id, webView)
+                // 常驻宿主只会在换服或应用退出时被释放，实例寿命到此为止。
+                webView.destroy()
             },
         )
 
-        // Loading overlay
-        AnimatedVisibility(visible = showLoading, modifier = Modifier.align(Alignment.Center)) {
-            Column(
-                modifier = Modifier.systemBarsPadding(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                CircularProgressIndicator()
-                Spacer(modifier = Modifier.height(16.dp))
-                Button(onClick = {
-                    webViewHolder[0]?.let { webView ->
-                        webView.removeCallbacks(timeoutRunnable)
-                        webView.stopLoading()
+        // 浮层与提示只在宿主可见时挂载，否则会画在设置页/下载页上面。
+        if (visible) {
+            // Loading overlay
+            AnimatedVisibility(visible = showLoading, modifier = Modifier.align(Alignment.Center)) {
+                Column(
+                    modifier = Modifier.systemBarsPadding(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    CircularProgressIndicator()
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(onClick = {
+                        webViewHolder[0]?.let { webView ->
+                            webView.removeCallbacks(timeoutRunnable)
+                            webView.stopLoading()
+                        }
+                        showLoading = false
+                        onSelectServer(false)
+                    }) {
+                        Text(text = stringResource(R.string.button_use_different_server))
                     }
-                    showLoading = false
-                    onSelectServer(false)
-                }) {
-                    Text(text = stringResource(R.string.button_use_different_server))
                 }
             }
+
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .systemBarsPadding(),
+            )
         }
-
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .systemBarsPadding(),
-        )
-    }
-
-    // A freshly created WebView starts out disconnected. A reused (retained) one keeps
-    // the connection state it had when the user navigated away, so returning from e.g. the
-    // player still routes back presses into the webapp instead of popping the nav stack.
-    LaunchedEffect(server.id) {
-        if (!webViewReused[0]) webViewRetainer.markDisconnected()
-    }
-
-    // While connected let the webapp handle back presses (NavigationHelper.goBack)
-    BackHandler(enabled = connected) {
-        webappFunctionChannel.goBack()
     }
 
     // Process JS functions called from other components (e.g. the PlayerService)
@@ -360,5 +368,32 @@ fun WebViewScreen(
         onDispose {
             webViewDialogState.dismiss()
         }
+    }
+}
+
+/**
+ * 把屏幕左侧边缘的返回手势区域让给 app。
+ *
+ * 网页横向滚动与系统返回手势在左边缘上重叠，不作排除时右滑返回会误触发。
+ */
+private fun WebView.setupGestureExclusions() {
+    if (!AndroidVersion.isAtLeastQ) return
+    doOnNextLayout {
+        // Maximum allowed exclusion rect height is 200dp,
+        // offsetting 100dp from the center in both directions uses the maximum available space
+        val verticalCenter = measuredHeight / 2
+        val offset = resources.dip(100)
+
+        // Arbitrary, currently 2x minimum touch target size
+        val exclusionWidth = resources.dip(96)
+
+        systemGestureExclusionRects = listOf(
+            Rect(
+                0,
+                verticalCenter - offset,
+                exclusionWidth,
+                verticalCenter + offset,
+            ),
+        )
     }
 }

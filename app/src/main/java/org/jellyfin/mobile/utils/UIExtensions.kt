@@ -47,16 +47,24 @@ fun View.applyWindowInsetsAsMargins() {
     }
 }
 
+/**
+ * 淡入到可见（幂等：已经可见且不透明时不做任何事）。
+ *
+ * 不使用 `withLayer()`：给 WebView 套硬件图层会让整层内容失效，
+ * 正是"从其它路由返回后页面全黑"的一类原因；动画结束再显式把 alpha 落到终态，
+ * 避免动画被打断（组合销毁）时停在中间透明度。
+ */
 fun View.fadeIn() {
+    if (isVisible && alpha == 1f) return
+    animate().cancel()
     alpha = 0f
     isVisible = true
-    animate().apply {
-        alpha(1f)
-        @Suppress("MagicNumber")
-        duration = 300L
-        interpolator = LinearOutSlowInInterpolator()
-        withLayer()
-    }
+    animate()
+        .alpha(1f)
+        .setDuration(300L)
+        .setInterpolator(LinearOutSlowInInterpolator())
+        .withEndAction { alpha = 1f }
+        .start()
 }
 
 inline fun Resources.dip(px: Int) = (px * displayMetrics.density).toInt()

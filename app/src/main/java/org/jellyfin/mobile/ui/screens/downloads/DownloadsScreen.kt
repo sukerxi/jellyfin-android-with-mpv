@@ -1,6 +1,5 @@
 package org.jellyfin.mobile.ui.screens.downloads
 
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -56,12 +55,15 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.downloads.DownloadsViewModel
+import org.jellyfin.mobile.ui.navigation.BackNavigationDispatcher
+import org.jellyfin.mobile.ui.navigation.RegisterBackHandler
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DownloadsScreen(
     viewModel: DownloadsViewModel = viewModel(),
     onBackPressed: () -> Unit = {},
+    backDispatcher: BackNavigationDispatcher,
 ) {
     val downloads by viewModel.downloads.collectAsState()
     val storageLocation by viewModel.storageLocation.collectAsState()
@@ -76,8 +78,12 @@ fun DownloadsScreen(
         if (uri != null) viewModel.changeStorageLocation(uri)
     }
 
-    BackHandler(enabled = selectionMode) {
-        selection.clear()
+    // 多选模式下的返回只退选择，不退出页面；交给宿主的返回链统一仲裁，
+    // 这样"多选 > 导航栈弹出"的优先级不再依赖各自 BackHandler 的注册顺序。
+    if (selectionMode) {
+        backDispatcher.RegisterBackHandler {
+            selection.clear()
+        }
     }
 
     if (showDeleteConfirm) {

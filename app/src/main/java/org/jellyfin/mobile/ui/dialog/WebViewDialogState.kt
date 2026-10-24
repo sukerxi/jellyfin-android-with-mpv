@@ -6,7 +6,7 @@ import androidx.compose.runtime.setValue
 
 /**
  * WebView 相关对话框（当前为"WebView 版本过旧"）的状态桥：
- * WebViewScreen 发起请求，根 Compose 宿主渲染。
+ * WebViewHost 发起请求，根 Compose 宿主渲染。
  */
 class WebViewDialogState {
 
