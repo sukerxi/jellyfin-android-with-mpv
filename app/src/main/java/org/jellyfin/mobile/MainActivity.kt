@@ -20,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
@@ -136,12 +137,15 @@ class MainActivity : ComponentActivity() {
                 is UpdateCheckResult.UpdateAvailable -> {
                     // 仅在检查成功后记录时间，失败（如网络不可用）下次启动可重试
                     appPreferences.lastUpdateCheckTime = System.currentTimeMillis()
-                    if (appPreferences.silentUpdateDownload) {
+                    // 通知被禁用时静默下载不会有任何可见反馈，回退到对话框
+                    val canDownloadSilently = appPreferences.silentUpdateDownload &&
+                        NotificationManagerCompat.from(this@MainActivity).areNotificationsEnabled()
+                    if (canDownloadSilently) {
                         UpdateDownloadWorker.enqueue(this@MainActivity, result.info)
                     } else if (!isFinishing && !isDestroyed) {
                         updateDialogState.requestUpdate(
                             result.info,
-                            allowDismiss = true,
+                            allowIgnore = true,
                         )
                     }
                 }

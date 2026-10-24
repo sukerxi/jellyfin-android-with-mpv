@@ -68,7 +68,8 @@ fun UpdateDialogHost(
         )
     }
 
-    holder.progressState?.let { state ->
+    // 权限引导优先展示；关闭后再显示进度，避免两个对话框叠在一起
+    holder.progressState?.takeIf { !holder.installPermissionVisible }?.let { state ->
         UpdateProgressDialog(
             info = state.info,
             workId = state.workId,
@@ -112,9 +113,8 @@ private fun UpdateAvailableDialog(
     val changelog = remember(info.changelog) { updateManager.formatChangelog(info.changelog) }
 
     AlertDialog(
-        onDismissRequest = {
-            if (prompt.allowDismiss) onDismiss()
-        },
+        // 返回键与点击外部始终可以关闭；"忽略此版本"只是额外选项
+        onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.update_available_title)) },
         text = {
             SelectionContainer {
@@ -150,9 +150,13 @@ private fun UpdateAvailableDialog(
         },
         dismissButton = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (prompt.allowDismiss) {
+                if (prompt.allowIgnore) {
                     TextButton(onClick = onIgnore) {
                         Text(stringResource(R.string.update_ignore))
+                    }
+                } else {
+                    TextButton(onClick = onDismiss) {
+                        Text(stringResource(android.R.string.cancel))
                     }
                 }
                 TextButton(onClick = onDownloadInBackground) {

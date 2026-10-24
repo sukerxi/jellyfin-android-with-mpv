@@ -282,7 +282,7 @@ tasks {
 
     // Testing
     withType<Test> {
-        useJUnit()
+        useJUnitPlatform()
         testLogging {
             events(
                 org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED,

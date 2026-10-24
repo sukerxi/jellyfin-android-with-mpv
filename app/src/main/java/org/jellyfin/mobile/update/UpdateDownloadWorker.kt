@@ -181,9 +181,23 @@ class UpdateDownloadWorker(
         if (url.isBlank()) return Result.failure()
 
         ensureChannel(applicationContext)
-        setForeground(getForegroundInfo())
 
         val target = apkFile(applicationContext, fileName)
+        // 上次已下载完成但用户还没安装：直接复用，避免静默模式每 24 小时重复下载整个 APK
+        if (isCachedApkValid(target, digest)) {
+            showInstallNotification(target)
+            return Result.success()
+        }
+
+        try {
+            setForeground(getForegroundInfo())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Android 12+ 在受限场景下会禁止启动前台服务；继续尝试普通后台下载
+            Timber.w(e, "Unable to run update download in foreground, continuing in background")
+        }
+
         return try {
             download(url, target, digest)
             showInstallNotification(target)
@@ -200,6 +214,28 @@ class UpdateDownloadWorker(
                 showFailedNotification()
                 Result.failure()
             }
+        }
+    }
+
+    /**
+     * 判断缓存里是否已有完整 APK：有校验值时校验 SHA-256，无校验值时仅检查文件非空。
+     */
+    private fun isCachedApkValid(file: File, digest: String): Boolean {
+        if (!file.exists() || file.length() <= 0) return false
+        val expected = digest.substringAfter("sha256:", "").takeIf { it.isNotBlank() } ?: return true
+        return try {
+            val messageDigest = MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val buffer = ByteArray(BUFFER_SIZE)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read == -1) break
+                    messageDigest.update(buffer, 0, read)
+                }
+            }
+            messageDigest.digest().toHexString().equals(expected, ignoreCase = true)
+        } catch (_: Exception) {
+            false
         }
     }
 

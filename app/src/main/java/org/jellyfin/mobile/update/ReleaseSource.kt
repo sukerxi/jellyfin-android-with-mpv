@@ -7,6 +7,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.jellyfin.mobile.BuildConfig
 import java.io.IOException
 
 /**
@@ -28,16 +29,20 @@ private val VERSION_IN_NAME = Regex("""\(([^)]+)\)""")
 
 /**
  * GitHub 与 CNB 的 release JSON 结构一致，统一解析：
- * - `name` 形如 `3.0.0-49 (3.0.0-c7a636a4)`，括号内为 versionName，解析失败回退 `tag_name`；
- * - APK 取 assets 中第一个 `.apk` 文件；
- * - `body` 为更新说明（markdown 文本）。
+ * - `name` 形如 `3.0.0-49 (3.0.0-c7a636a4)`，括号内为 versionName，解析失败回退 `tag_name`
+ *   （正式发版的 tag 可能带 `v` 前缀，需去掉后与 BuildConfig.VERSION_NAME 比较）；
+ * - APK 优先取与当前构建 flavor 匹配的资产，避免正式发版同时附带 libre / proprietary 时选错；
+ * - `body` 为更新说明（markdown 文本）；
+ * - 校验值优先用 GitHub 的 `digest`，回退 CNB 的 `hash_algo`/`hash_value`。
  *
+ * @param preferProprietary 当前构建是否为 proprietary flavor，用于在多 APK 发布中挑选资产
  * @param normalizeBody 渠道特有的正文预处理（如 CNB 的 `<br>` 换行）
  */
-private fun parseReleaseJson(
+internal fun parseReleaseJson(
     payload: String,
     channel: String,
     fallbackReleaseUrl: String,
+    preferProprietary: Boolean = BuildConfig.IS_PROPRIETARY,
     normalizeBody: (String) -> String = { it },
 ): UpdateInfo? {
     val release = json.parseToJsonElement(payload).jsonObject
@@ -45,15 +50,28 @@ private fun parseReleaseJson(
     // 使用 contentOrNull：JSON 中显式为 null 的字段不会退化成字符串 "null"
     val name = release["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
     val tag = release["tag_name"]?.jsonPrimitive?.contentOrNull.orEmpty()
-    val versionName = VERSION_IN_NAME.find(name)?.groupValues?.get(1) ?: tag
+    val versionName = (VERSION_IN_NAME.find(name)?.groupValues?.get(1) ?: tag)
+        .removePrefix("v")
+        .trim()
     if (versionName.isBlank()) return null
 
-    val apk = release["assets"]?.jsonArray?.firstOrNull { asset ->
-        (asset.jsonObject["name"]?.jsonPrimitive?.contentOrNull ?: "").endsWith(".apk")
-    }?.jsonObject ?: return null
+    val flavor = if (preferProprietary) "proprietary" else "libre"
+    val apks = release["assets"]?.jsonArray
+        ?.map { it.jsonObject }
+        ?.filter { (it["name"]?.jsonPrimitive?.contentOrNull ?: "").endsWith(".apk", ignoreCase = true) }
+        .orEmpty()
+    val apk = apks.firstOrNull {
+        (it["name"]?.jsonPrimitive?.contentOrNull ?: "").contains(flavor, ignoreCase = true)
+    } ?: apks.firstOrNull() ?: return null
 
     val downloadUrl = apk["browser_download_url"]?.jsonPrimitive?.contentOrNull ?: return null
     val fileName = apk["name"]?.jsonPrimitive?.contentOrNull ?: "update.apk"
+    val digest = apk["digest"]?.jsonPrimitive?.contentOrNull.orEmpty().ifBlank {
+        // CNB 的资产信息用 hash_algo/hash_value 描述校验值
+        val algo = apk["hash_algo"]?.jsonPrimitive?.contentOrNull?.lowercase()
+        val value = apk["hash_value"]?.jsonPrimitive?.contentOrNull
+        if (algo == "sha256" && !value.isNullOrBlank()) "sha256:$value" else ""
+    }
 
     return UpdateInfo(
         versionName = versionName,
@@ -63,7 +81,7 @@ private fun parseReleaseJson(
         fileName = fileName,
         changelog = normalizeBody(release["body"]?.jsonPrimitive?.contentOrNull.orEmpty()),
         channel = channel,
-        digest = apk["digest"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+        digest = digest,
     )
 }
 

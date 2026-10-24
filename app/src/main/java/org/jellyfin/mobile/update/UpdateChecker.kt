@@ -1,5 +1,6 @@
 package org.jellyfin.mobile.update
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jellyfin.mobile.BuildConfig
@@ -43,16 +44,19 @@ class UpdateChecker(
                 val info = sourceFor(channel).fetchLatest()
                     ?: return@withContext UpdateCheckResult.Error("Unable to parse release info")
 
-                if (info.versionName == BuildConfig.VERSION_NAME) {
+                val remoteVersion = info.versionName.trim()
+                if (remoteVersion == BuildConfig.VERSION_NAME) {
                     return@withContext UpdateCheckResult.UpToDate
                 }
 
                 // 用户选择过"忽略此版本"则视为已最新（仅自动检查时生效）
-                if (!ignoreDismissed && appPreferences.dismissedUpdateVersion == info.versionName) {
+                if (!ignoreDismissed && appPreferences.dismissedUpdateVersion == remoteVersion) {
                     return@withContext UpdateCheckResult.UpToDate
                 }
 
                 UpdateCheckResult.UpdateAvailable(info)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Timber.e(e, "Update check failed (channel=$channel)")
                 UpdateCheckResult.Error(e.message)

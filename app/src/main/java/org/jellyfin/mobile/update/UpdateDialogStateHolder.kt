@@ -15,8 +15,10 @@ class UpdateDialogStateHolder(
 ) {
     /**
      * 待展示的"发现新版本"提示；null 表示不展示。
+     *
+     * @param allowIgnore 是否提供"忽略此版本"选项；自动检查允许忽略并记住该版本，手动检查不提供
      */
-    class UpdatePrompt(val info: UpdateInfo, val allowDismiss: Boolean)
+    class UpdatePrompt(val info: UpdateInfo, val allowIgnore: Boolean)
 
     /**
      * 前台下载进度对话框对应的版本信息与 WorkManager 任务 ID。
@@ -35,8 +37,8 @@ class UpdateDialogStateHolder(
     var installPermissionVisible by mutableStateOf(false)
         private set
 
-    fun requestUpdate(info: UpdateInfo, allowDismiss: Boolean) {
-        prompt = UpdatePrompt(info, allowDismiss)
+    fun requestUpdate(info: UpdateInfo, allowIgnore: Boolean) {
+        prompt = UpdatePrompt(info, allowIgnore)
     }
 
     fun dismissPrompt() {

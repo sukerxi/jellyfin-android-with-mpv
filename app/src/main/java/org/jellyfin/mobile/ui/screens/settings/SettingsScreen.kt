@@ -138,7 +138,7 @@ fun SettingsScreen(
                 is UpdateCheckResult.UpToDate ->
                     Toast.makeText(context, R.string.update_up_to_date, Toast.LENGTH_SHORT).show()
                 is UpdateCheckResult.UpdateAvailable ->
-                    updateDialogState.requestUpdate(result.info, allowDismiss = false)
+                    updateDialogState.requestUpdate(result.info, allowIgnore = false)
                 is UpdateCheckResult.Error ->
                     Toast.makeText(context, R.string.update_check_failed, Toast.LENGTH_SHORT).show()
             }
