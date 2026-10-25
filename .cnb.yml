@@ -575,24 +575,6 @@
       # 失败时最常见的原因是 PAT 缺少 workflow 权限，被 GitHub 拒绝推送 .github/workflows/，
       # 报错形如：refusing to allow a Personal Access Token to create or update workflow。
       allowFailure: true
-    # 一次性迁移（验证后删除）：GitHub 默认分支切到 main，旧 master 改名 archive/master。
-    # 顺序很关键：先切默认分支，再改名，避免中途失败后 GitHub 默认分支停在归档分支。
-    - name: 迁移 GitHub 默认分支
-      image: curlimages/curl:latest
-      allowFailure: true
-      script: |
-        set -e
-        api="https://api.github.com/repos/sukerxi/jellyfin-android-with-mpv"
-        auth="Authorization: Bearer ${GH_TOKEN}"
-        accept="Accept: application/vnd.github+json"
-        echo "设置 GitHub 默认分支为 main"
-        curl -fsS -X PATCH -H "$accept" -H "$auth" \
-          -d '{"default_branch":"main"}' "$api" > /dev/null
-        echo "归档旧 master -> archive/master"
-        code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H "$accept" -H "$auth" \
-          -d '{"new_name":"archive/master"}' "$api/branches/master/rename" || echo 000)
-        echo "rename 返回 HTTP $code（404/422 表示已归档或不存在）"
-        [ "$code" = 201 ] || [ "$code" = 404 ] || [ "$code" = 422 ]
 
 # ============================== 事件绑定 ==============================
 
