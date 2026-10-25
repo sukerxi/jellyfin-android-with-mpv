@@ -2,6 +2,11 @@ name: jellyfin-android release
 
 on:
   workflow_dispatch:
+    inputs:
+      ref:
+        description: 发版分支
+        required: false
+        default: main
 
 # 创建 Release 需要 contents 写权限
 permissions:
@@ -9,7 +14,7 @@ permissions:
 
 # 同一时间只允许一个发布任务，排队执行而不是互相抢占
 concurrency:
-  group: release-master
+  group: release-main
   cancel-in-progress: false
 
 jobs:
@@ -22,8 +27,9 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: sukerxi/jellyfin-android-with-mpv
-          # 使用手动触发时选择的 ref（默认 master），这样需要时可以直接从分支发版
-          ref: ${{ github.ref }}
+          # 默认取手动输入的 main，需要时可用其他分支发版。
+          # 不用 github.ref 兜底默认分支：GitHub 默认分支可能仍是归档的旧 master。
+          ref: ${{ inputs.ref || 'main' }}
           fetch-depth: 0 # 必须获取完整历史，否则 git rev-parse 可能失败
 
       - name: Setup Java

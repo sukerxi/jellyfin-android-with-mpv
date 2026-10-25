@@ -2,19 +2,18 @@
 # GitHub Actions 配置全部保留不变；本文件仅在 CNB 平台生效。
 #
 # 流水线对应关系：
-#   .github/workflows/app-build.yaml       -> ci 流水线（assembleDebug），master / release-* push 与所有 PR
+#   .github/workflows/app-build.yaml       -> ci 流水线（assembleDebug），main push 与所有 PR
 #   .github/workflows/app-test.yaml        -> ci 流水线（./gradlew test）
 #   .github/workflows/app-lint.yaml        -> ci 流水线（./gradlew detekt lint；SARIF 上传为 GitHub 专有，未迁移）
 #   .github/workflows/gradlew-validate.yaml-> 依赖 GitHub 官方 Action，CNB 无等价物，未迁移
-#   .github/workflows/release.yml          -> nightly-release 流水线（「发布 Nightly」按钮手动触发；master push 不再触发）
+#   .github/workflows/release.yml          -> nightly-release 流水线（main push 自动触发，也可用「发布 Nightly」按钮手动触发）
 #   .github/workflows/app-publish.yaml     -> release 流水线（推送 v* tag 触发）
 #   .github/workflows/repo-*.yaml          -> GitHub 机器人（triage/stale/merge-conflict），与 CNB 无关，未迁移
 #
-# 手动按钮定义见 .cnb/web_trigger.yml（在 master 分支详情页显示）。
+# 手动按钮定义见 .cnb/web_trigger.yml（在 main 分支详情页显示）。
 #
 # Nightly 发版（对应 release.yml）:
-#   触发方式：「发布 Nightly」按钮手动触发（master push 不再自动触发构建）。
-#   refactor/jetpack-compose 分支 push 仍会自动发版，分支详情页按钮同样可用。
+#   触发方式：main push 自动发版；main 分支详情页「发布 Nightly」按钮也可手动触发。
 #   每次发版：版本号 3.0.0-<提交短哈希>，自动创建唯一 tag
 #   3.0.0-<CNB 构建号> 与 CNB Release，并上传 libre release APK + version.txt 作为附件。
 #
@@ -40,11 +39,11 @@
 #   在密钥仓库增加 deploy.yml（REPO_HOST / REPO_USER / REPO_KEY 私钥），
 #   并在 release 流水线的 imports 中追加该文件；未配置时自动跳过。
 #
-# 同步到 GitHub（master push 即触发，见 sync-github 流水线）：
+# 同步到 GitHub（main push 即触发，见 sync-github 流水线）：
 #   需在密钥仓库（sukerxi/secrets main 分支）创建 github.yml：
 #     GH_USERNAME: <GitHub 用户名>
 #     GH_TOKEN: <GitHub PAT>
-#   目标仓库需已存在（空仓库即可），force push 使 GitHub master 与 CNB master 保持一致。
+#   目标仓库需已存在（空仓库即可），force push 使 GitHub main 与 CNB main 保持一致。
 #
 #   【Token 权限】本仓库会推送 .github/workflows/ 下的文件，PAT 必须带 workflow 权限：
 #     - 经典 PAT（classic）：勾选 repo + workflow 两个 scope
@@ -247,7 +246,7 @@
   # 必须用 wait: true 排队：`lock: true` 是非等待锁，锁被占用时后触发的构建会在
   # Prepare 阶段直接失败（见 cnb-k5v-1k4f86k2a）。
   # 单次构建约 3~5 分钟，等待上限设为 600s，可覆盖 1~2 个构建排队；
-  # 等待超时同样会失败，因此应避免密集连推 refactor/jetpack-compose（同步 GitHub 的流水线走独立锁，不受影响）。
+  # 等待超时同样会失败，因此应避免密集连推 main（同步 GitHub 的流水线走独立锁，不受影响）。
   lock:
     key: nightly-release
     wait: true
@@ -549,9 +548,9 @@
 
         echo "清理完成：删除 $total_deleted 条，跳过 $total_skipped 条，保留最近 $KEEP 条"
 
-# ============================== 同步 master 到 GitHub ==============================
+# ============================== 同步 main 到 GitHub ==============================
 
-# push 即同步：master 每次推送后用 git-sync 插件强推到 GitHub 镜像仓库（仅 master 分支）。
+# push 即同步：main 每次推送后用 git-sync 插件强推到 GitHub 镜像仓库（仅 main 分支）。
 # 与 nightly-release 并行执行，同步失败不影响发版。
 # 独立锁 key 保证多次连续推送串行同步（避免并发 force push 互相覆盖），且不与 nightly 抢锁。
 .sync-github-pipeline: &sync-github-pipeline
@@ -563,32 +562,31 @@
   imports:
     - https://cnb.cool/sukerxi/secrets/-/blob/main/github.yml
   stages:
-    - name: Sync master to GitHub
+    - name: Sync main to GitHub
       image: tencentcom/git-sync
       settings:
         target_url: https://github.com/sukerxi/jellyfin-android-with-mpv.git
         auth_type: https
         username: ${GH_USERNAME}
         password: ${GH_TOKEN}
-        branch: master
+        branch: main
         force: true
-      # 该 Job 失败不阻断流水线（镜像同步是旁路，不应把整条 master 流水线拖红）。
+      # 该 Job 失败不阻断流水线（镜像同步是旁路，不应把整条 main 流水线拖红）。
       # 失败时最常见的原因是 PAT 缺少 workflow 权限，被 GitHub 拒绝推送 .github/workflows/，
       # 报错形如：refusing to allow a Personal Access Token to create or update workflow。
       allowFailure: true
 
 # ============================== 事件绑定 ==============================
 
-master:
+main:
   push:
-    # master push 不再触发构建：Nightly 发版改为「发布 Nightly」按钮手动触发
-    #（见下方 web_trigger_release）。
-    # 每次推送 master 实时同步到 GitHub 镜像仓库（同步不是构建，保留 push 触发）
+    # 每次推送 main：自动发一个 Nightly Release，并实时同步到 GitHub 镜像仓库
+    - *nightly-pipeline
     - *sync-github-pipeline
-  # master 分支详情页「发布 Nightly」按钮（对应 release.yml 的 workflow_dispatch）
+  # main 分支详情页「发布 Nightly」按钮（对应 release.yml 的 workflow_dispatch）
   web_trigger_release:
     - *nightly-pipeline
-  # master 分支详情页「清理旧 Release」按钮（手动验证用，与定时任务同一流水线）
+  # main 分支详情页「清理旧 Release」按钮（手动验证用，与定时任务同一流水线）
   web_trigger_prune:
     - *prune-pipeline
   # 每天 04:00（Asia/Shanghai）定时清理，只保留最近 10 条 Release。
@@ -596,16 +594,6 @@ master:
   # 执行身份为最后修改本 crontab 配置并推送的用户，CNB_TOKEN 限本仓库。
   "crontab: 0 4 * * *":
     - *prune-pipeline
-
-# refactor/jetpack-compose 分支同样支持 Nightly 发版：
-#   push 自动发一个 Nightly Release；分支详情页「发布 Nightly」按钮手动触发。
-# 与 master 共用 nightly-release 锁，两分支并发推送时串行发版；
-# Tag 形如 3.0.0-<CNB 构建号> 全局唯一，不受分支影响，prune-releases 也能正常清理。
-"refactor/jetpack-compose":
-  push:
-    - *nightly-pipeline
-  web_trigger_release:
-    - *nightly-pipeline
 
 # 所有 PR：编译校验（此前 PR 上没有流水线，问题只能等合并后才暴露）
 "**":

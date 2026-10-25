@@ -1,6 +1,6 @@
 # Jellyfin Android — MPV 播放支持
 
-这是官方 [Jellyfin Android](https://github.com/jellyfin/jellyfin-android) 客户端的一个分支版本，增强了视频播放功能。当前分支（`refactor/jetpack-compose`）完成了界面层的 Jetpack Compose 重构，并在此基础上继续扩展了播放相关能力。
+这是官方 [Jellyfin Android](https://github.com/jellyfin/jellyfin-android) 客户端的一个分支版本，增强了视频播放功能。主分支（`main`）完成了界面层的 Jetpack Compose 重构，并在此基础上继续扩展了播放相关能力。
 
 ## 主要改进
 
@@ -39,7 +39,7 @@
 
 # Jellyfin Android — MPV Playback Support
 
-This is a fork of the official [Jellyfin Android](https://github.com/jellyfin/jellyfin-android) client with improved video playback. The current branch (`refactor/jetpack-compose`) rebuilds the UI in Jetpack Compose and extends the playback features on top of the MPV integration.
+This is a fork of the official [Jellyfin Android](https://github.com/jellyfin/jellyfin-android) client with improved video playback. The main branch (`main`) rebuilds the UI in Jetpack Compose and extends the playback features on top of the MPV integration.
 
 ## Key Improvements
 

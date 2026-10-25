@@ -3,7 +3,7 @@ name: Repo / Label merge conflict
 on:
   push:
     branches:
-      - master
+      - main
   pull_request_target:
     types:
       - synchronize
