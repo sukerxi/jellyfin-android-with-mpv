@@ -69,6 +69,7 @@
 
     <string name="player_error_invalid_play_options">Unable to resolve playback info</string>
     <string name="player_error_network_failure">Unable to load media info from server</string>
+    <string name="player_error_connection_lost">Playback interrupted: lost the connection to the server</string>
     <string name="player_error_unsupported_content">Media cannot be played by this device</string>
     <string name="player_error_unspecific_exception">Something went wrong with the player</string>
     <string name="playback_info_play_method">Play method: %s</string>
@@ -121,6 +122,39 @@
     <string name="playback_quality">Quality</string>
     <string name="playback_decoder">Decoder</string>
     <string name="playback_fullscreen">Fullscreen</string>
+    <string name="playback_unlock_screen">Unlock screen</string>
+    <string name="playback_more">More</string>
+    <!-- 菜单项标题与当前值：「清晰度 · 自动」 -->
+    <string name="playback_menu_item_with_value">%1$s · %2$s</string>
+    <string name="back">Back</string>
+    <string name="retry">Retry</string>
+    <!-- 播放失败卡片：留在播放器内说明原因并给出口，取代「toast + 立刻退出」 -->
+    <string name="player_error_title">Playback failed</string>
+    <string name="player_error_detail_hint">You can retry, or go back and pick another quality.</string>
+    <!-- 网页宿主连接错误分级：可重试（网络/超时/5xx）与不可恢复（证书）分开提示 -->
+    <string name="web_error_title_retryable">Cannot reach the server</string>
+    <string name="web_error_title_fatal">Connection failed</string>
+    <string name="web_error_message_timeout">The server did not respond in time. Check the address and your network, then retry.</string>
+    <string name="web_error_message_http">The server returned an error (%1$d).</string>
+    <string name="web_error_message_ssl">The secure connection to the server could not be established.</string>
+    <string name="web_error_message_generic">The page could not be loaded.</string>
+    <!-- 选服页自动发现：不再常转圈，给出空态与重试 -->
+    <string name="server_discovery_searching">Searching for servers…</string>
+    <string name="server_discovery_empty">No servers found yet</string>
+    <string name="server_discovery_empty_hint">Make sure this device and the Jellyfin server are on the same network, or enter the address manually.</string>
+    <string name="server_discovery_rescan">Search again</string>
+    <!-- mpv 配置编辑器：未保存拦截、清空确认、行内错误 -->
+    <string name="mpv_config_editor_discard_title">Discard changes?</string>
+    <string name="mpv_config_editor_discard_message">Your edits have not been saved. Going back now will lose them.</string>
+    <string name="mpv_config_editor_discard">Discard</string>
+    <string name="mpv_config_editor_keep_editing">Keep editing</string>
+    <string name="mpv_config_editor_reset_title">Clear the configuration?</string>
+    <string name="mpv_config_editor_reset_message">This removes every line of the custom configuration. You can still undo by not saving.</string>
+    <string name="delete">Delete</string>
+    <string name="more_options">More options</string>
+    <string name="playback_info_play_method_direct_play">Direct play</string>
+    <string name="playback_info_play_method_direct_stream">Direct stream</string>
+    <string name="playback_info_play_method_transcode">Transcode</string>
     <string name="close">Close</string>
     <string name="menu_item_none">None</string>
     <string name="menu_item_auto">Auto</string>

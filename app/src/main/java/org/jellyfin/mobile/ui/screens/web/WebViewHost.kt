@@ -17,19 +17,20 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -60,6 +61,7 @@ import org.jellyfin.mobile.bridge.MediaSegments
 import org.jellyfin.mobile.bridge.NativeInterface
 import org.jellyfin.mobile.bridge.NativePlayer
 import org.jellyfin.mobile.data.entity.ServerEntity
+import org.jellyfin.mobile.ui.components.SnackbarController
 import org.jellyfin.mobile.ui.dialog.WebViewDialogState
 import org.jellyfin.mobile.utils.AndroidVersion
 import org.jellyfin.mobile.utils.Constants
@@ -70,6 +72,7 @@ import org.jellyfin.mobile.utils.isOutdated
 import org.jellyfin.mobile.utils.koinInject
 import org.jellyfin.mobile.webapp.JellyfinWebChromeClient
 import org.jellyfin.mobile.webapp.JellyfinWebViewClient
+import org.jellyfin.mobile.webapp.WebLoadFailure
 import org.jellyfin.mobile.webapp.WebappFunctionChannel
 import timber.log.Timber
 
@@ -98,6 +101,7 @@ fun WebViewHost(
     onSelectServer: (error: Boolean) -> Unit,
     appPreferences: AppPreferences = koinInject(),
     webappFunctionChannel: WebappFunctionChannel = koinInject(),
+    snackbarController: SnackbarController = koinInject(),
     webViewDialogState: WebViewDialogState = koinInject(),
     nativePlayer: NativePlayer = koinInject(),
     mediaSegments: MediaSegments = koinInject(),
@@ -113,6 +117,7 @@ fun WebViewHost(
             onSelectServer = onSelectServer,
             appPreferences = appPreferences,
             webappFunctionChannel = webappFunctionChannel,
+            snackbarController = snackbarController,
             webViewDialogState = webViewDialogState,
             nativePlayer = nativePlayer,
             mediaSegments = mediaSegments,
@@ -130,6 +135,7 @@ private fun WebViewHostContent(
     onSelectServer: (error: Boolean) -> Unit,
     appPreferences: AppPreferences,
     webappFunctionChannel: WebappFunctionChannel,
+    snackbarController: SnackbarController,
     webViewDialogState: WebViewDialogState,
     nativePlayer: NativePlayer,
     mediaSegments: MediaSegments,
@@ -142,7 +148,9 @@ private fun WebViewHostContent(
 
     var showLoading by remember { mutableStateOf(false) }
     var showBatterySnackbar by remember { mutableStateOf(false) }
-    val snackbarHostState = remember { SnackbarHostState() }
+    // 主框架加载失败（断网/5xx/证书/超时）。非 null 时用覆盖层替代网页，
+    // 可重试的错误原地重试，不可恢复的（证书）只给「换个服务器」。
+    var loadFailure by remember { mutableStateOf<WebLoadFailure?>(null) }
 
     // Plain holder: written from AndroidView factory (must not touch snapshot state there)
     val webViewHolder = remember { arrayOfNulls<WebView>(1) }
@@ -175,10 +183,23 @@ private fun WebViewHostContent(
     val timeoutRunnable = remember {
         Runnable {
             state.connected = false
-            onSelectServer(true)
+            // 超时不再直接清服务器会话：先让用户就地重试
+            loadFailure = WebLoadFailure(WebLoadFailure.Kind.TIMEOUT)
         }
     }
     val showLoadingRunnable = remember { Runnable { showLoading = true } }
+
+    fun reloadWebapp() {
+        val webView = webViewHolder[0] ?: return
+        loadFailure = null
+        showLoading = false
+        state.connected = false
+        webView.removeCallbacks(timeoutRunnable)
+        webView.removeCallbacks(showLoadingRunnable)
+        webView.loadUrl("${server.hostname.trimEnd('/')}/")
+        webView.postDelayed(timeoutRunnable, Constants.INITIAL_CONNECTION_TIMEOUT)
+        webView.postDelayed(showLoadingRunnable, Constants.SHOW_PROGRESS_BAR_DELAY)
+    }
 
     val jellyfinWebViewClient = remember {
         object : JellyfinWebViewClient(
@@ -197,13 +218,24 @@ private fun WebViewHostContent(
                     webView.removeCallbacks(showLoadingRunnable)
                     state.connected = true
                     showLoading = false
+                    loadFailure = null
                     showBatterySnackbar = true
                 }
             }
 
-            override fun onErrorReceived() {
-                state.connected = false
-                onSelectServer(true)
+            override fun onLoadFailed(failure: WebLoadFailure) {
+                val webView = webViewHolder[0]
+                if (webView == null) {
+                    onSelectServer(failure.retryable)
+                    return
+                }
+                webView.post {
+                    webView.removeCallbacks(timeoutRunnable)
+                    webView.removeCallbacks(showLoadingRunnable)
+                    state.connected = false
+                    showLoading = false
+                    loadFailure = failure
+                }
             }
         }
     }
@@ -290,6 +322,15 @@ private fun WebViewHostContent(
 
         // 浮层与提示只在宿主可见时挂载，否则会画在设置页/下载页上面。
         if (visible) {
+            // 主框架加载失败：整屏替换，给出原因与出口
+            loadFailure?.let { failure ->
+                WebViewLoadErrorOverlay(
+                    failure = failure,
+                    onRetry = { reloadWebapp() },
+                    onSelectOtherServer = { onSelectServer(false) },
+                )
+            }
+
             // Loading overlay
             AnimatedVisibility(visible = showLoading, modifier = Modifier.align(Alignment.Center)) {
                 Column(
@@ -312,12 +353,6 @@ private fun WebViewHostContent(
                 }
             }
 
-            SnackbarHost(
-                hostState = snackbarHostState,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .systemBarsPadding(),
-            )
         }
     }
 
@@ -345,28 +380,97 @@ private fun WebViewHostContent(
             showBatterySnackbar = false
             return@LaunchedEffect
         }
-        val result = snackbarHostState.showSnackbar(
-            message = batteryMessage,
-            actionLabel = okLabel,
-            withDismissAction = false,
-            duration = SnackbarDuration.Indefinite,
-        )
         showBatterySnackbar = false
-        if (result == SnackbarResult.ActionPerformed) {
-            try {
-                context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-            } catch (e: ActivityNotFoundException) {
-                Timber.e(e)
-            }
+        snackbarController.show(
+            text = batteryMessage,
+            actionLabel = okLabel,
+            duration = SnackbarDuration.Indefinite,
+            action = {
+                try {
+                    context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                } catch (e: ActivityNotFoundException) {
+                    Timber.e(e)
+                }
 
-            // Ignore after the user interacted with the snackbar at least once
-            appPreferences.ignoreBatteryOptimizations = true
-        }
+                // Ignore after the user interacted with the snackbar at least once
+                appPreferences.ignoreBatteryOptimizations = true
+            },
+        )
     }
 
     DisposableEffect(Unit) {
         onDispose {
             webViewDialogState.dismiss()
+        }
+    }
+}
+
+/**
+ * 网页加载失败整屏提示。
+ *
+ * 与旧的「一句 toast + 退回选服页」相比：
+ * - 可重试的失败（断网、超时、5xx、部分 4xx）就地给「重试」，不必重新选服务器；
+ * - 不可恢复的失败（证书）才引导换服务器，并明确说明原因；
+ * - 保留服务器地址，用户能确认自己连的是哪台机器。
+ */
+@Composable
+private fun WebViewLoadErrorOverlay(
+    failure: WebLoadFailure,
+    onRetry: () -> Unit,
+    onSelectOtherServer: () -> Unit,
+) {
+    val message = when (failure.kind) {
+        WebLoadFailure.Kind.TIMEOUT -> stringResource(R.string.web_error_message_timeout)
+        WebLoadFailure.Kind.SSL -> stringResource(R.string.web_error_message_ssl)
+        WebLoadFailure.Kind.HTTP -> stringResource(
+            R.string.web_error_message_http,
+            failure.httpStatus ?: 0,
+        )
+        WebLoadFailure.Kind.NETWORK -> stringResource(R.string.web_error_message_generic)
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .systemBarsPadding(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = stringResource(
+                    if (failure.retryable) R.string.web_error_title_retryable else R.string.web_error_title_fatal,
+                ),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (!failure.description.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = failure.description.orEmpty(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(modifier = Modifier.height(20.dp))
+            if (failure.retryable) {
+                Button(onClick = onRetry) {
+                    Text(text = stringResource(R.string.retry))
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+            TextButton(onClick = onSelectOtherServer) {
+                Text(text = stringResource(R.string.button_use_different_server))
+            }
         }
     }
 }

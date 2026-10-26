@@ -3,6 +3,8 @@ package org.jellyfin.mobile.ui.screens.player
 import android.view.LayoutInflater
 import android.view.ViewGroup
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -24,10 +26,12 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -117,6 +121,11 @@ class PlayerControlsActions(
     val onScrubStart: () -> Unit,
     val onScrubMove: (Long) -> Unit,
     val onScrubStop: (Long) -> Unit,
+    /**
+     * 控件层上发生的任意一次触摸。宿主用它重置自动隐藏计时：按下按钮后计时重新开始，
+     * 不会出现「刚点完一个菜单，手指还停在屏幕上，控件已经淡出」。
+     */
+    val onUserInteraction: () -> Unit,
 )
 
 /** DefaultTimeBar 的 scrub 监听转发（字段由 SideEffect 保持最新）。 */
@@ -150,10 +159,22 @@ fun PlayerControls(
     actions: PlayerControlsActions,
     modifier: Modifier = Modifier,
 ) {
+    // actions 每次重组都是新实例（位置每 200ms 变一次），用 rememberUpdatedState 取最新回调，
+    // pointerInput 的 key 保持稳定，避免手势进行中被取消重启。
+    val onUserInteraction by rememberUpdatedState(actions.onUserInteraction)
+
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(ControlsScrim),
+            .background(ControlsScrim)
+            // 非消费型观察者：任何一次按下都算「用户还在操作」，交给宿主重置自动隐藏计时。
+            // 不用 clickable，避免吞掉下面按钮/进度条的点击。
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    onUserInteraction()
+                }
+            },
     ) {
         // Top bar: back button + title
         Row(
@@ -166,7 +187,7 @@ fun PlayerControls(
             IconButton(onClick = actions.onBack, modifier = Modifier.size(48.dp)) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = null,
+                    contentDescription = stringResource(R.string.back),
                     modifier = Modifier.size(24.dp),
                     tint = ControlsText,
                 )
@@ -177,14 +198,16 @@ fun PlayerControls(
                 fontSize = 16.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(start = 4.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 4.dp, end = 8.dp),
             )
         }
 
         // Center controls: previous / previous chapter / play-pause / next chapter / next
         Row(
             modifier = Modifier.align(Alignment.Center),
-            horizontalArrangement = Arrangement.spacedBy(24.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             PlayerIconButton(
@@ -346,23 +369,24 @@ private fun BottomBar(
     actions: PlayerControlsActions,
     modifier: Modifier = Modifier,
 ) {
+    val qualityLabel = menus.qualities.firstOrNull { it.selected }?.title
+    val decoderLabel = menus.decoders.firstOrNull { it.selected }?.title
+
+    // 入口数量随「有字幕 / 有队列」变化（4~6 个），所以用等分权重而不是固定宽度的顺序排列：
+    // 固定宽度在 320~360dp 的竖屏上会把末尾按钮压成 0 宽——既看不见也点不到。等分之后
+    // 每个入口至少拿到「可用宽度 / 6」，最窄的竖屏也能保持 ≥48dp 的触控宽度。
     Row(
-        modifier = modifier.padding(start = 8.dp, end = 8.dp, bottom = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(0.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        PlayerMenuAnchor {
-            PlayerIconButton(
-                onClick = actions.onLockScreen,
-                iconRes = R.drawable.ic_screen_lock_white_24dp,
-                contentDescription = stringResource(R.string.playback_lock_screen),
-            )
-        }
-        PlayerMenuAnchor {
+        PlayerMenuAnchor(modifier = Modifier.weight(1f)) {
             PlayerIconButton(
                 onClick = { actions.onMenuExpand(PlayerMenuType.AUDIO) },
                 iconRes = R.drawable.ic_music_note_white_24dp,
                 contentDescription = stringResource(R.string.playback_audio_streams),
+                modifier = Modifier.fillMaxWidth(),
             )
             AudioTracksMenu(
                 expanded = menus.expanded == PlayerMenuType.AUDIO,
@@ -372,7 +396,7 @@ private fun BottomBar(
             )
         }
         if (state.subtitleCount > 0) {
-            PlayerMenuAnchor {
+            PlayerMenuAnchor(modifier = Modifier.weight(1f)) {
                 PlayerIconButton(
                     onClick = {
                         // A single track toggles directly, multiple tracks open the menu
@@ -388,6 +412,7 @@ private fun BottomBar(
                         R.drawable.ic_subtitles_off_white_24dp
                     },
                     contentDescription = stringResource(R.string.playback_subtitles),
+                    modifier = Modifier.fillMaxWidth(),
                 )
                 if (state.subtitleCount > 1) {
                     SubtitleTracksMenu(
@@ -399,11 +424,12 @@ private fun BottomBar(
                 }
             }
         }
-        PlayerMenuAnchor {
+        PlayerMenuAnchor(modifier = Modifier.weight(1f)) {
             PlayerIconButton(
                 onClick = { actions.onMenuExpand(PlayerMenuType.SPEED) },
                 iconRes = R.drawable.ic_slow_motion_video_white_24dp,
                 contentDescription = stringResource(R.string.playback_speed),
+                modifier = Modifier.fillMaxWidth(),
             )
             SpeedMenu(
                 expanded = menus.expanded == PlayerMenuType.SPEED,
@@ -412,63 +438,17 @@ private fun BottomBar(
                 onDismiss = { actions.onMenuExpand(null) },
             )
         }
-        if (state.qualityAvailable) {
-            PlayerMenuAnchor {
-                PlayerIconButton(
-                    onClick = { actions.onMenuExpand(PlayerMenuType.QUALITY) },
-                    iconRes = R.drawable.ic_settings_white_24dp,
-                    contentDescription = stringResource(R.string.playback_quality),
-                )
-                QualityMenu(
-                    expanded = menus.expanded == PlayerMenuType.QUALITY,
-                    items = menus.qualities,
-                    onSelect = actions.onQualitySelected,
-                    onDismiss = { actions.onMenuExpand(null) },
-                )
-            }
-        }
-        PlayerMenuAnchor {
-            PlayerIconButton(
-                onClick = { actions.onMenuExpand(PlayerMenuType.DECODER) },
-                iconRes = R.drawable.ic_video_settings_white_24dp,
-                contentDescription = stringResource(R.string.playback_decoder),
-            )
-            DecoderMenu(
-                expanded = menus.expanded == PlayerMenuType.DECODER,
-                items = menus.decoders,
-                onSelect = actions.onDecoderSelected,
-                onDismiss = { actions.onMenuExpand(null) },
-            )
-        }
-        PlayerMenuAnchor {
-            PlayerIconButton(
-                onClick = actions.onShowInfo,
-                iconRes = R.drawable.ic_info_white_24dp,
-                contentDescription = stringResource(R.string.playback_info_title),
-            )
-        }
-        // Only offered for the mpv engine when the user keeps the entry enabled: a configuration
-        // comparison is meaningless for ExoPlayer, and the entry point is hidden rather than
-        // disabled so the bar keeps its usual layout.
-        if (state.mpvCompareEnabled) {
-            PlayerMenuAnchor {
-                PlayerIconButton(
-                    onClick = actions.onShowCompare,
-                    iconRes = R.drawable.ic_compare_white_24dp,
-                    contentDescription = stringResource(R.string.mpv_compare_title),
-                )
-            }
-        }
         if (state.queueSize > 1) {
-            PlayerMenuAnchor {
+            PlayerMenuAnchor(modifier = Modifier.weight(1f)) {
                 PlayerIconButton(
                     onClick = actions.onShowEpisodes,
                     iconRes = R.drawable.ic_playlist,
                     contentDescription = stringResource(R.string.episode_picker_title),
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
-        PlayerMenuAnchor {
+        PlayerMenuAnchor(modifier = Modifier.weight(1f)) {
             PlayerIconButton(
                 onClick = actions.onToggleFullscreen,
                 iconRes = if (state.isFullscreen) {
@@ -477,6 +457,42 @@ private fun BottomBar(
                     R.drawable.ic_fullscreen_enter_white_32dp
                 },
                 contentDescription = stringResource(R.string.playback_fullscreen),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        // 「更多」：清晰度 / 解码器 / 播放信息 / 对比 / 锁屏。子菜单同样从这个锚点展开，
+        // 层级变化与用户看到的菜单来源一致。清晰度只在服务端播放时出现，其当前值直接写在
+        // 标题里，不必为了确认状态再打开一次子菜单。
+        PlayerMenuAnchor(modifier = Modifier.weight(1f)) {
+            PlayerIconButton(
+                onClick = { actions.onMenuExpand(PlayerMenuType.MORE) },
+                iconRes = R.drawable.ic_more_vert_white_24dp,
+                contentDescription = stringResource(R.string.playback_more),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            MoreMenu(
+                expanded = menus.expanded == PlayerMenuType.MORE,
+                qualityLabel = qualityLabel.takeIf { state.qualityAvailable },
+                decoderLabel = decoderLabel,
+                compareAvailable = state.mpvCompareEnabled,
+                onOpenQuality = { actions.onMenuExpand(PlayerMenuType.QUALITY) },
+                onOpenDecoder = { actions.onMenuExpand(PlayerMenuType.DECODER) },
+                onShowInfo = actions.onShowInfo,
+                onShowCompare = actions.onShowCompare,
+                onLockScreen = actions.onLockScreen,
+                onDismiss = { actions.onMenuExpand(null) },
+            )
+            QualityMenu(
+                expanded = menus.expanded == PlayerMenuType.QUALITY,
+                items = menus.qualities,
+                onSelect = actions.onQualitySelected,
+                onDismiss = { actions.onMenuExpand(null) },
+            )
+            DecoderMenu(
+                expanded = menus.expanded == PlayerMenuType.DECODER,
+                items = menus.decoders,
+                onSelect = actions.onDecoderSelected,
+                onDismiss = { actions.onMenuExpand(null) },
             )
         }
     }
@@ -496,11 +512,13 @@ private fun PlayerIconButton(
     contentDescription: String?,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    buttonSize: Dp = 42.dp,
+    // 48dp 是 Material 的最小触控目标；旧值 42dp 在竖屏上点起来偏小
+    buttonSize: Dp = 48.dp,
     iconSize: Dp = 26.dp,
 ) {
     IconButton(
         onClick = onClick,
+        // 调用方传 fillMaxWidth 时宽度会撑满所在槽位（底栏等分布局），高度固定为 buttonSize
         modifier = modifier.size(buttonSize),
         enabled = enabled,
     ) {

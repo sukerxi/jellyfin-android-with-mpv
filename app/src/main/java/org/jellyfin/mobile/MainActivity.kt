@@ -20,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
@@ -30,6 +31,7 @@ import org.jellyfin.mobile.player.cast.Chromecast
 import org.jellyfin.mobile.player.cast.IChromecast
 import org.jellyfin.mobile.player.interaction.PlaybackController
 import org.jellyfin.mobile.ui.components.AppDialogHost
+import org.jellyfin.mobile.ui.components.AppSnackbarHost
 import org.jellyfin.mobile.ui.navigation.JellyfinNavHost
 import org.jellyfin.mobile.ui.theme.JellyfinTheme
 import org.jellyfin.mobile.update.UpdateCheckResult
@@ -95,6 +97,11 @@ class MainActivity : ComponentActivity() {
                 ) {
                     Box(modifier = Modifier.fillMaxSize()) {
                         JellyfinNavHost(mainViewModel = mainViewModel)
+
+                        // 全局提示：所有界面共用一个宿主，避免各屏各自 toast
+                        AppSnackbarHost(
+                            modifier = Modifier.align(Alignment.BottomCenter),
+                        )
 
                         // 全局 Compose 对话框宿主（更新/蓝牙权限/WebView 提示）
                         AppDialogHost(

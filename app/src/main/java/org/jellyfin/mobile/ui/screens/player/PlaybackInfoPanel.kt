@@ -91,6 +91,10 @@ private data class PlaybackInfoLabels(
     val sectionAudio: String,
     val sectionSubtitle: String,
     val labelPlayMethod: String,
+    /** 播放方式的本地化文案：枚举名直接上屏（DIRECTPLAY / TRANSCODE）对用户没有意义。 */
+    val playMethodDirectPlay: String,
+    val playMethodDirectStream: String,
+    val playMethodTranscode: String,
     val labelEngine: String,
     val labelTranscodeReason: String,
     val transcodeReasonUnknown: String,
@@ -124,6 +128,9 @@ private fun rememberPlaybackInfoLabels(): PlaybackInfoLabels = PlaybackInfoLabel
     sectionAudio = stringResource(R.string.playback_info_audio),
     sectionSubtitle = stringResource(R.string.playback_info_subtitle),
     labelPlayMethod = stringResource(R.string.playback_info_label_play_method),
+    playMethodDirectPlay = stringResource(R.string.playback_info_play_method_direct_play),
+    playMethodDirectStream = stringResource(R.string.playback_info_play_method_direct_stream),
+    playMethodTranscode = stringResource(R.string.playback_info_play_method_transcode),
     labelEngine = stringResource(R.string.playback_info_label_engine),
     labelTranscodeReason = stringResource(R.string.playback_info_label_transcode_reason),
     transcodeReasonUnknown = stringResource(R.string.playback_info_transcode_reason_unknown),
@@ -187,7 +194,15 @@ private fun buildPlaybackInfoModel(
 
     // ---- Overview ----
     val overviewRows = mutableListOf<PlaybackInfoRow>()
-    overviewRows += PlaybackInfoRow(labels.labelPlayMethod, mediaSource.playMethod.toString())
+    // 枚举名不能直接上屏：面板里其他行都是本地化中文，DIRECTPLAY / TRANSCODE 混在里面
+    // 既看不懂，也和「转码原因」那一行的解释对不上。
+    val playMethodLabel = when (mediaSource.playMethod) {
+        PlayMethod.DIRECT_PLAY -> labels.playMethodDirectPlay
+        PlayMethod.DIRECT_STREAM -> labels.playMethodDirectStream
+        PlayMethod.TRANSCODE -> labels.playMethodTranscode
+        else -> mediaSource.playMethod.toString()
+    }
+    overviewRows += PlaybackInfoRow(labels.labelPlayMethod, playMethodLabel)
     buildEngineInfo(player, decoderType, mediaSource, appPreferences, labels).takeUnless(String::isBlank)?.let { engine ->
         overviewRows += PlaybackInfoRow(labels.labelEngine, engine)
     }

@@ -29,6 +29,44 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
 
+/**
+ * 网页宿主加载主框架失败的原因。
+ *
+ * 区分「可重试」与「不可恢复」是本类的核心职责：原实现把断网、5xx、证书错误
+ * 一律当成致命错误，直接 `resetServer()` 销毁 WebView 退回选服页——地铁里掉一次网
+ * 就等于丢掉整个浏览现场，而提示只有一句「无法建立连接」。
+ */
+data class WebLoadFailure(
+    val kind: Kind,
+    val httpStatus: Int? = null,
+    val description: String? = null,
+) {
+    enum class Kind {
+        /** 断网、DNS 失败、连接被拒等：原地重试即可恢复。 */
+        NETWORK,
+
+        /** 服务器返回 4xx/5xx：重启或升级中的服务器重试往往就好了。 */
+        HTTP,
+
+        /** 证书/SSL 错误：用户改不了，只能换服务器或修服务端配置。 */
+        SSL,
+
+        /** 首屏超时。 */
+        TIMEOUT,
+    }
+
+    /**
+     * 值得原地重试的失败。证书错误重试也不会变好，直接给「换个服务器」；
+     * 4xx 里 401/403 属于配置问题（认证代理），同样不重试。
+     */
+    val retryable: Boolean
+        get() = when (kind) {
+            Kind.NETWORK, Kind.TIMEOUT -> true
+            Kind.HTTP -> httpStatus == null || httpStatus in 500..599
+            Kind.SSL -> false
+        }
+}
+
 abstract class JellyfinWebViewClient(
     private val coroutineScope: CoroutineScope,
     private val server: ServerEntity,
@@ -38,7 +76,7 @@ abstract class JellyfinWebViewClient(
 
     abstract fun onConnectedToWebapp()
 
-    abstract fun onErrorReceived()
+    abstract fun onLoadFailed(failure: WebLoadFailure)
 
     override fun shouldInterceptRequest(webView: WebView, request: WebResourceRequest): WebResourceResponse? {
         val url = request.url
@@ -74,7 +112,7 @@ abstract class JellyfinWebViewClient(
 
                     if (user == null || token == null) {
                         Timber.e("Unable to find user in webview credentials")
-                        onErrorReceived()
+                        onLoadFailed(WebLoadFailure(WebLoadFailure.Kind.NETWORK, description = "missing credentials"))
                         return@launch
                     }
 
@@ -95,7 +133,14 @@ abstract class JellyfinWebViewClient(
         val errorMessage = errorResponse.data?.run { bufferedReader().use(Reader::readText) }
         Timber.e("Received WebView HTTP %d error: %s", errorResponse.statusCode, errorMessage)
 
-        if (request.isForMainFrame) onErrorReceived()
+        if (request.isForMainFrame) {
+            onLoadFailed(
+                WebLoadFailure(
+                    kind = WebLoadFailure.Kind.HTTP,
+                    httpStatus = errorResponse.statusCode,
+                ),
+            )
+        }
     }
 
     override fun onReceivedError(
@@ -113,12 +158,26 @@ abstract class JellyfinWebViewClient(
         }
         Timber.e("Received WebView error %d at %s: %s", errorCode, request.url.toString(), description)
 
-        // Abort on some specific error codes or when the request url matches the server url
-        if (request.isForMainFrame) onErrorReceived()
+        // 主框架加载失败：只有 4xx/5xx 由 onReceivedHttpError 报告，这里一律按网络类处理。
+        if (request.isForMainFrame) {
+            onLoadFailed(
+                WebLoadFailure(
+                    kind = WebLoadFailure.Kind.NETWORK,
+                    description = description?.toString(),
+                ),
+            )
+        }
     }
 
     override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
         Timber.e("Received SSL error: %s", error.toString())
+        // 不再静默 cancel：证书问题用户看不出发生了什么，必须显式告知。
         handler.cancel()
+        onLoadFailed(
+            WebLoadFailure(
+                kind = WebLoadFailure.Kind.SSL,
+                description = error.primaryError.toString(),
+            ),
+        )
     }
 }

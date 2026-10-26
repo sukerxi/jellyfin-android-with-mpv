@@ -6,6 +6,7 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -27,11 +28,13 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -92,19 +95,30 @@ fun ServerSelection(
                 timestamp = server.lastUsedTimestamp,
             )
         }
+    }
 
-        // Prepend discovered servers to suggestions
-        connectionHelper.discoverServersAsFlow().collect { serverInfo ->
-            serverSuggestions.removeIf { existing -> existing.address == serverInfo.address }
-            serverSuggestions.add(
-                index = 0,
-                ServerSuggestion(
-                    type = ServerSuggestion.Type.DISCOVERED,
-                    name = serverInfo.name,
-                    address = serverInfo.address,
-                    timestamp = System.currentTimeMillis(),
-                ),
-            )
+    // 自动发现是"有时长上限的一次扫描"，不是常驻进程：collect 结束即代表这一轮扫完，
+    // 所以用 discovering 驱动头部指示器，避免旧实现里那个永远转的圈。
+    var discovering by remember { mutableStateOf(true) }
+    var discoveryGeneration by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(discoveryGeneration) {
+        discovering = true
+        try {
+            connectionHelper.discoverServersAsFlow().collect { serverInfo ->
+                serverSuggestions.removeIf { existing -> existing.address == serverInfo.address }
+                serverSuggestions.add(
+                    index = 0,
+                    ServerSuggestion(
+                        type = ServerSuggestion.Type.DISCOVERED,
+                        name = serverInfo.name,
+                        address = serverInfo.address,
+                        timestamp = System.currentTimeMillis(),
+                    ),
+                )
+            }
+        } finally {
+            discovering = false
         }
     }
 
@@ -156,6 +170,8 @@ fun ServerSelection(
                 )
                 ServerSelectionMode.AUTO_DISCOVERY -> ServerDiscoveryList(
                     serverSuggestions = serverSuggestions,
+                    discovering = discovering,
+                    onRescan = { discoveryGeneration++ },
                     onGoBack = {
                         serverSelectionMode = ServerSelectionMode.ADDRESS
                     },
@@ -271,6 +287,8 @@ private fun AnimatedErrorText(
 @Composable
 private fun ServerDiscoveryList(
     serverSuggestions: SnapshotStateList<ServerSuggestion>,
+    discovering: Boolean,
+    onRescan: () -> Unit,
     onGoBack: () -> Unit,
     onSelectServer: (String) -> Unit,
 ) {
@@ -279,7 +297,10 @@ private fun ServerDiscoveryList(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onGoBack) {
-                Icon(imageVector = Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = null)
+                Icon(
+                    imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
+                    contentDescription = stringResource(R.string.back),
+                )
             }
             Text(
                 modifier = Modifier
@@ -287,30 +308,76 @@ private fun ServerDiscoveryList(
                     .padding(horizontal = 8.dp),
                 text = stringResource(R.string.available_servers_title),
             )
-            CircularProgressIndicator(
-                modifier = Modifier
-                    .padding(horizontal = 12.dp)
-                    .size(24.dp),
-                strokeWidth = 2.dp,
-            )
+            // 扫描中才转圈；扫完换成"重新搜索"，用户知道搜索已经结束且能再来一次
+            if (discovering) {
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .padding(horizontal = 12.dp)
+                        .size(24.dp),
+                    strokeWidth = 2.dp,
+                )
+            } else {
+                IconButton(onClick = onRescan) {
+                    Icon(
+                        imageVector = Icons.Outlined.Refresh,
+                        contentDescription = stringResource(R.string.server_discovery_rescan),
+                    )
+                }
+            }
         }
         Spacer(modifier = Modifier.height(8.dp))
-        LazyColumn(
-            modifier = Modifier
-                .padding(bottom = 16.dp)
-                .fillMaxSize()
-                .background(
-                    color = MaterialTheme.colorScheme.surface,
-                    shape = MaterialTheme.shapes.medium,
-                ),
-        ) {
-            items(serverSuggestions) { server ->
-                ServerDiscoveryItem(
-                    serverSuggestion = server,
-                    onClickServer = {
-                        onSelectServer(server.address)
-                    },
+        if (serverSuggestions.isEmpty()) {
+            // 空列表也要有话说：旧实现是一块空白列表区，看起来像界面坏了
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(
+                    text = stringResource(
+                        if (discovering) {
+                            R.string.server_discovery_searching
+                        } else {
+                            R.string.server_discovery_empty
+                        },
+                    ),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
+                if (!discovering) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(R.string.server_discovery_empty_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    StyledTextButton(
+                        text = stringResource(R.string.server_discovery_rescan),
+                        onClick = onRescan,
+                    )
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .padding(bottom = 16.dp)
+                    .fillMaxSize()
+                    .background(
+                        color = MaterialTheme.colorScheme.surface,
+                        shape = MaterialTheme.shapes.medium,
+                    ),
+            ) {
+                items(serverSuggestions) { server ->
+                    ServerDiscoveryItem(
+                        serverSuggestion = server,
+                        onClickServer = {
+                            onSelectServer(server.address)
+                        },
+                    )
+                }
             }
         }
     }

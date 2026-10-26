@@ -37,6 +37,25 @@ class UpdateDialogStateHolder(
     var installPermissionVisible by mutableStateOf(false)
         private set
 
+    /**
+     * 下载完成但缺少「安装未知应用」权限时记下的待安装版本。
+     *
+     * 用户被引导去系统设置授权，回来后 app 是被 pause/resume 的，没人会再触发安装；
+     * 于是下载好的包就躺在缓存里。这里把「等权限」这件事记下来，宿主在 ON_RESUME
+     * 时检查权限并自动继续安装。
+     */
+    var pendingInstall by mutableStateOf<UpdateInfo?>(null)
+        private set
+
+    fun requestInstallAfterPermission(info: UpdateInfo) {
+        pendingInstall = info
+        installPermissionVisible = true
+    }
+
+    fun clearPendingInstall() {
+        pendingInstall = null
+    }
+
     fun requestUpdate(info: UpdateInfo, allowIgnore: Boolean) {
         prompt = UpdatePrompt(info, allowIgnore)
     }

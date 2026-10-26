@@ -143,7 +143,7 @@ fun DownloadsScreen(
                             ) {
                                 Icon(
                                     imageVector = Icons.Outlined.Close,
-                                    contentDescription = null,
+                                    contentDescription = stringResource(R.string.close),
                                 )
                             }
                         } else {
@@ -152,7 +152,7 @@ fun DownloadsScreen(
                             ) {
                                 Icon(
                                     imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
-                                    contentDescription = null,
+                                    contentDescription = stringResource(R.string.back),
                                 )
                             }
                         }
@@ -169,7 +169,7 @@ fun DownloadsScreen(
                                 IconButton(onClick = { showDeleteConfirm = true }) {
                                     Icon(
                                         imageVector = Icons.Outlined.Delete,
-                                        contentDescription = null,
+                                        contentDescription = stringResource(R.string.delete),
                                     )
                                 }
 
@@ -177,7 +177,7 @@ fun DownloadsScreen(
                                     IconButton(onClick = { showMenu = true }) {
                                         Icon(
                                             imageVector = Icons.Outlined.MoreVert,
-                                            contentDescription = null,
+                                            contentDescription = stringResource(R.string.more_options),
                                         )
                                     }
                                     DropdownMenu(

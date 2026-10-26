@@ -34,6 +34,9 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -212,11 +215,12 @@ private fun EpisodeCell(
     }
     Box(
         modifier = Modifier
-            .height(44.dp)
+            .height(48.dp)
             .background(background, RoundedCornerShape(CellCornerRadius))
             // 已播放剧集 50% 透明度（与旧版 EpisodeAdapter 一致；选中项保持全不透明）
             .alpha(if (item.played && !item.selected) 0.5f else 1f)
-            .clickable(onClick = onClick),
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics { selected = item.selected },
         contentAlignment = Alignment.Center,
     ) {
         Text(

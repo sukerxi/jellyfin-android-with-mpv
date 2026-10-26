@@ -1,6 +1,5 @@
 package org.jellyfin.mobile.ui.components
 
-import android.widget.Toast
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,6 +14,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -26,6 +26,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import org.jellyfin.mobile.BuildConfig
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.update.DownloadProgress
@@ -44,23 +47,44 @@ import java.util.UUID
 fun UpdateDialogHost(
     holder: UpdateDialogStateHolder = koinInject(),
     updateManager: UpdateManager = koinInject(),
+    snackbarController: SnackbarController = koinInject(),
 ) {
     val context = LocalContext.current
+
+    // 从系统设置授权返回后，如果正好有"等在门口"的更新，直接接着安装，
+    // 不让用户再点一次「立即下载」。
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, holder) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val pending = holder.pendingInstall ?: return@LifecycleEventObserver
+                if (updateManager.hasInstallPermission(context)) {
+                    holder.clearPendingInstall()
+                    holder.hideInstallPermission()
+                    updateManager.launchInstall(context, pending)
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     holder.prompt?.let { prompt ->
         UpdateAvailableDialog(
             prompt = prompt,
             updateManager = updateManager,
             onDownloadNow = {
-                if (!updateManager.hasInstallPermission(context)) {
-                    holder.showInstallPermission()
-                }
                 val workId = updateManager.enqueueDownload(context, prompt.info)
                 holder.showProgress(prompt.info, workId)
+                // 缺权限时不再"边弹权限引导边下载"两个对话框叠着走：
+                // 先记下待安装版本，权限对话框优先展示，下载在后台照常进行。
+                if (!updateManager.hasInstallPermission(context)) {
+                    holder.requestInstallAfterPermission(prompt.info)
+                }
             },
             onDownloadInBackground = {
                 updateManager.enqueueDownload(context, prompt.info)
-                Toast.makeText(context, R.string.update_download_started, Toast.LENGTH_SHORT).show()
+                snackbarController.show(context.getString(R.string.update_download_started))
                 holder.dismissPrompt()
             },
             onIgnore = { holder.ignoreVersion(prompt.info.versionName) },
@@ -73,17 +97,25 @@ fun UpdateDialogHost(
         UpdateProgressDialog(
             info = state.info,
             workId = state.workId,
+            onDismiss = holder::hideProgress,
             onCancel = {
                 updateManager.cancelDownload(context)
                 holder.hideProgress()
+                holder.clearPendingInstall()
             },
             onSuccess = {
                 holder.hideProgress()
-                updateManager.launchInstall(context, state.info)
+                if (updateManager.hasInstallPermission(context)) {
+                    updateManager.launchInstall(context, state.info)
+                } else {
+                    // 下载好了但装不了：记下来，授权返回后自动继续
+                    holder.requestInstallAfterPermission(state.info)
+                }
             },
             onFailed = {
                 holder.hideProgress()
-                Toast.makeText(context, R.string.update_download_failed, Toast.LENGTH_SHORT).show()
+                holder.clearPendingInstall()
+                snackbarController.show(context.getString(R.string.update_download_failed))
             },
         )
     }
@@ -171,6 +203,7 @@ private fun UpdateAvailableDialog(
 private fun UpdateProgressDialog(
     info: UpdateInfo,
     workId: UUID,
+    onDismiss: () -> Unit,
     onCancel: () -> Unit,
     onSuccess: () -> Unit,
     onFailed: () -> Unit,
@@ -202,7 +235,9 @@ private fun UpdateProgressDialog(
     val running = state as? DownloadProgress.Running
 
     AlertDialog(
-        onDismissRequest = {},
+        // 允许关闭：下载跑在 WorkManager 里，关掉对话框并中断下载；
+        // 旧实现 onDismissRequest = {} 让用户只能"取消"，等同于强迫中断。
+        onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.update_downloading_title, info.versionName)) },
         text = {
             Column {

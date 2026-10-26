@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
@@ -53,6 +54,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -93,6 +95,7 @@ import org.jellyfin.mobile.player.source.RemoteJellyfinMediaSource
 import org.jellyfin.mobile.player.ui.DecoderType
 import org.jellyfin.mobile.player.ui.PlayerFullscreenHelper
 import org.jellyfin.mobile.player.ui.TrickplayHelper
+import org.jellyfin.mobile.ui.components.SnackbarController
 import org.jellyfin.mobile.ui.navigation.BackNavigationDispatcher
 import org.jellyfin.mobile.ui.navigation.RegisterBackHandler
 import org.jellyfin.mobile.ui.screens.mpvcompare.InPlayerCompareOverlay
@@ -144,6 +147,18 @@ private const val LOADING_INDICATOR_HIDE_DELAY_MS = 400L
  *   PiP 经 [PlaybackController] 由 MainActivity 的 onUserLeaveHint 桥接；
  * - MpvPlayer 的 SurfaceView attach 与 AssSubtitleView 逻辑不变（同一个 PlayerView 实例）。
  */
+/**
+ * 播放失败的落地状态。
+ *
+ * 保留原始播放请求，重试时按同样的参数（含移动网络码率上限）再走一遍，
+ * 不需要用户退回网页重新点一次播放。
+ */
+private class PlaybackFailure(
+    val messageRes: Int,
+    val request: PlaybackRequest,
+    val maxStreamingBitrateOverride: Int?,
+)
+
 @Composable
 fun PlayerScreen(
     onClose: () -> Unit,
@@ -155,6 +170,7 @@ fun PlayerScreen(
     appPreferences: AppPreferences = koinInject(),
     qualityOptionsProvider: QualityOptionsProvider = koinInject(),
     assHandler: AssHandler = koinInject(),
+    snackbarController: SnackbarController = koinInject(),
 ) {
     val context = LocalContext.current
     // MainActivity 为 ComponentActivity；PiP 监听注册 API 在 androidx ComponentActivity 上
@@ -206,6 +222,11 @@ fun PlayerScreen(
     var controlsVisible by remember { mutableStateOf(true) }
     var controlsToken by remember { mutableIntStateOf(0) }
     var locked by remember { mutableStateOf(false) }
+    /**
+     * 播放失败的落地状态。非 null 时播放器停在原位显示错误卡片，而不是
+     * "toast 一句然后被踢回网页"——后者让用户看不到原因，也没有重试入口。
+     */
+    var playbackFailure by remember { mutableStateOf<PlaybackFailure?>(null) }
     var unlockButtonVisible by remember { mutableStateOf(false) }
     var expandedMenu by remember { mutableStateOf<PlayerMenuType?>(null) }
     var infoPanelVisible by remember { mutableStateOf(false) }
@@ -241,6 +262,14 @@ fun PlayerScreen(
         controlsVisible = true
         controlsToken++
     }
+
+    // 读屏/开关控制开启时，控件栏与解锁入口都不自动收起：这类用户需要沿着可聚焦节点
+    // 逐项浏览，几秒后把目标从手指底下抽走等于让他们重新摸索一遍。
+    val accessibilityManager = remember(context) {
+        context.getSystemService(android.view.accessibility.AccessibilityManager::class.java)
+    }
+    fun isScreenReaderActive(): Boolean =
+        accessibilityManager?.let { it.isEnabled && it.isTouchExplorationEnabled } == true
 
     // Set while the screen is being closed, so the "player == null" auto-close effect does
     // not dismiss the (newly started) player again right after it was closed.
@@ -286,6 +315,7 @@ fun PlayerScreen(
     fun peekUnlockButton() {
         unlockHideJob?.cancel()
         unlockButtonVisible = true
+        if (isScreenReaderActive()) return
         unlockHideJob = scope.launch {
             delay(Constants.DEFAULT_CONTROLS_TIMEOUT_MS.toLong())
             unlockButtonVisible = false
@@ -379,16 +409,18 @@ fun PlayerScreen(
             maxStreamingBitrateOverride,
         )
         if (error != null) {
-            // Nothing will ever start playing; show why and leave instead of
-            // staying on an empty black screen.
+            // 播放起不来：停在播放器里说明原因并给「重试 / 返回」两个出口。
+            // 直接 toast + closePlayer 会让用户在 2 秒后连错误都看不到，
+            // 也没有换内核/降清晰度的机会。
             val messageRes = when (error) {
                 is PlayerException.InvalidPlayOptions -> R.string.player_error_invalid_play_options
                 is PlayerException.NetworkFailure -> R.string.player_error_network_failure
                 is PlayerException.UnsupportedContent -> R.string.player_error_unsupported_content
                 is PlayerException.PlayerNotAvailable -> R.string.player_error_unspecific_exception
             }
-            context.toast(messageRes)
-            closePlayer()
+            playbackFailure = PlaybackFailure(messageRes, request, maxStreamingBitrateOverride)
+        } else {
+            playbackFailure = null
         }
     }
 
@@ -431,11 +463,12 @@ fun PlayerScreen(
         }
     }
 
-    // Playback errors are surfaced as toasts
+    // 播放过程中的运行期错误（解码失败、断流等）：走全局 Snackbar，可回溯、可复制，
+    // 也不再与播放器底栏抢位置。
     val errorObserver = remember(viewModel) {
         Observer<String> { message ->
             val safeMessage = message.ifEmpty { context.getString(R.string.player_error_unspecific_exception) }
-            context.toast(safeMessage)
+            snackbarController.showLong(safeMessage)
         }
     }
     DisposableEffect(viewModel, errorObserver, lifecycleOwner) {
@@ -576,8 +609,9 @@ fun PlayerScreen(
     // 导致 DefaultTimeBar 被释放、onScrubStop 丢失，松手后无法 seek。
     val controlsSuppressed = expandedMenu != null || infoPanelVisible || episodePickerVisible ||
         scrubPositionMs != null
+
     LaunchedEffect(controlsVisible, controlsSuppressed, controlsToken) {
-        if (controlsVisible && !controlsSuppressed) {
+        if (controlsVisible && !controlsSuppressed && !isScreenReaderActive()) {
             delay(Constants.DEFAULT_CONTROLS_TIMEOUT_MS.toLong())
             controlsVisible = false
         }
@@ -959,14 +993,23 @@ fun PlayerScreen(
                     color = Color(0xFF202124),
                     shape = RoundedCornerShape(6.dp),
                 ) {
-                    Text(
-                        text = stringResource(R.string.skip_media_segment),
-                        color = Color(0xFFDDDDDD),
-                        fontSize = 18.sp,
+                    // 整块 48dp 高都可点：之前只有文字本身可点，18sp 的「跳过」实际
+                    // 触控高度约 34dp，低于最小触控目标。
+                    Box(
                         modifier = Modifier
-                            .clickable { segment?.let { viewModel.skipMediaSegment(it) } }
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                    )
+                            .clickable(role = Role.Button) {
+                                segment?.let { viewModel.skipMediaSegment(it) }
+                            }
+                            .padding(horizontal = 20.dp)
+                            .heightIn(min = 48.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.skip_media_segment),
+                            color = Color(0xFFDDDDDD),
+                            fontSize = 16.sp,
+                        )
+                    }
                 }
             }
 
@@ -985,9 +1028,9 @@ fun PlayerScreen(
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.ic_screen_unlock_white_24dp),
-                        contentDescription = stringResource(R.string.playback_lock_screen),
+                        contentDescription = stringResource(R.string.playback_unlock_screen),
                         modifier = Modifier
-                            .clickable { unlockScreen() }
+                            .clickable(role = Role.Button) { unlockScreen() }
                             .padding(16.dp)
                             .size(24.dp),
                         tint = Color.White,
@@ -1122,10 +1165,25 @@ fun PlayerScreen(
                         // 位置上仍是旧值，直接置空会让进度条先跳回 seek 起点、再跳到目标。
                         pendingSeekPositionMs = position
                     },
+                    onUserInteraction = { showControls() },
                 ),
                 modifier = Modifier
                     .matchParentSize()
                     .padding(controlsPadding),
+            )
+        }
+
+        // 播放失败卡片：盖住控件栏（此时也点不动它们），只留「重试 / 返回」两条出路。
+        playbackFailure?.let { failure ->
+            PlaybackErrorCard(
+                message = stringResource(failure.messageRes),
+                onRetry = {
+                    playbackFailure = null
+                    scope.launch {
+                        startPlayback(failure.request, failure.maxStreamingBitrateOverride)
+                    }
+                },
+                onExit = { closePlayer() },
             )
         }
 
@@ -1174,10 +1232,9 @@ fun PlayerScreen(
         pendingMobileDataRequest?.let { request ->
             val mobileDataBitrate = appPreferences.mobileDataMaxBitrate
             AlertDialog(
-                onDismissRequest = {
-                    pendingMobileDataRequest = null
-                    closePlayer()
-                },
+                // 点弹窗外部或按返回不处理：这里的三个选项都是「是否开始播放」的决策，
+                // 误触外部等同「取消播放」过于激烈。要退出播放，请走显式的「取消」。
+                onDismissRequest = {},
                 title = { Text(stringResource(R.string.mobile_data_playback_dialog_title)) },
                 text = {
                     Text(

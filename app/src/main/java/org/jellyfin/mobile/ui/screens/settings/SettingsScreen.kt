@@ -3,7 +3,6 @@ package org.jellyfin.mobile.ui.screens.settings
 import android.content.Intent
 import android.provider.Settings
 import android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
@@ -28,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -55,6 +55,7 @@ import org.jellyfin.mobile.settings.VideoPlayerType
 import org.jellyfin.mobile.update.UpdateCheckResult
 import org.jellyfin.mobile.update.UpdateChannel
 import org.jellyfin.mobile.update.UpdateChecker
+import org.jellyfin.mobile.ui.components.SnackbarController
 import org.jellyfin.mobile.update.UpdateDialogStateHolder
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.isPackageInstalled
@@ -69,6 +70,7 @@ fun SettingsScreen(
     storageManager: StorageManager = koinInject(),
     updateChecker: UpdateChecker = koinInject(),
     updateDialogState: UpdateDialogStateHolder = koinInject(),
+    snackbarController: SnackbarController = koinInject(),
 ) {
     val context = LocalContext.current
     val scope = androidx.compose.runtime.rememberCoroutineScope()
@@ -132,15 +134,15 @@ fun SettingsScreen(
     }
 
     fun checkForUpdates() {
-        Toast.makeText(context, R.string.update_checking, Toast.LENGTH_SHORT).show()
+        snackbarController.show(context.getString(R.string.update_checking))
         scope.launch {
             when (val result = updateChecker.check(ignoreDismissed = true)) {
                 is UpdateCheckResult.UpToDate ->
-                    Toast.makeText(context, R.string.update_up_to_date, Toast.LENGTH_SHORT).show()
+                    snackbarController.show(context.getString(R.string.update_up_to_date))
                 is UpdateCheckResult.UpdateAvailable ->
                     updateDialogState.requestUpdate(result.info, allowIgnore = false)
                 is UpdateCheckResult.Error ->
-                    Toast.makeText(context, R.string.update_check_failed, Toast.LENGTH_SHORT).show()
+                    snackbarController.show(context.getString(R.string.update_check_failed))
             }
         }
     }
@@ -154,7 +156,7 @@ fun SettingsScreen(
                     IconButton(onClick = onBack) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
-                            contentDescription = null,
+                            contentDescription = stringResource(R.string.back),
                         )
                     }
                 },
@@ -598,7 +600,23 @@ private fun ClickPreferenceRow(
         summary = summary,
         enabled = enabled,
         onClick = onClick,
-        trailing = null,
+        // 有箭头才是"点进去"的行；开关行由 Switch 自己表达，禁用行不给箭头，
+        // 避免"看起来能点但点不动"
+        trailing = if (enabled) {
+            { PreferenceChevron() }
+        } else {
+            null
+        },
+    )
+}
+
+/** 可点行的尾部箭头：给整行一个"这里能进去"的可视暗示。 */
+@Composable
+private fun PreferenceChevron() {
+    Icon(
+        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }
 
@@ -616,7 +634,7 @@ private fun <T> SingleSelectPreferenceRow(
         summary = summary,
         enabled = true,
         onClick = onClick,
-        trailing = null,
+        trailing = { PreferenceChevron() },
     )
 }
 
