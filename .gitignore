@@ -19,3 +19,4 @@ build
 /ui_dump.xml
 /regression-*/
 /perf-review-*.md
+/.verify
