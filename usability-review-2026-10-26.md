@@ -413,6 +413,24 @@
 
 选集面板 48dp 改 `heightIn(min=48dp)`（大字号不裁切）；卡片 `Role.Button` 语义；中英文案补齐。
 
+### 7. 字号与无障碍回归（第三批验收项）
+
+**200% 字号走查**（`settings put system font_scale 2.0`，1080×2400）：设置页（开关/单选/说明全部正常换行，箭头与当前值未被挤掉）、下载页、选服页、WebView 内容均正常。
+
+走查中发现两个真问题：
+
+1. **网页错误覆盖层与加载圈叠层**（`WebViewHost.kt`）。连接超时后 `timeoutRunnable` 只设了 `loadFailure`，没清 `showLoading`；两层都居中对齐，于是出现「正文被按钮压住 + 两个『换服务器』按钮（一层一个）」+ 中间还残留一个转圈。修复：超时同时 `showLoading = false`；渲染时 `visible = showLoading && loadFailure == null` 兜底；错误页 Column 改 `fillMaxSize + verticalScroll + Arrangement.Center`，200% 字号下也能滚到底。实测 200% / 100% 均干净。
+2. **中央按钮对比度**（`PlayerControls.kt`）。控件层改成上下渐变压暗后，画面中部刻意不压暗，而中央那排（上一集/播放/下一集）正好落在中间——白图标直接压在明亮画面上几乎看不见。给这排按钮加了 25% 圆形暗底（`backdrop` 参数，仅中央使用，底栏不受影响）。
+
+**无障碍标签扫描**：写了个 `uiautomator dump` 解析脚本，按「clickable/long-clickable 节点是否自带或含后代 text/content-desc」统计（只看自身文本会误报 Compose 的 Button，文字在子节点）。结果：
+
+| 页面 | 可点节点 | 无标签 |
+| --- | --- | --- |
+| 选服页（200%） | 4 | 0 |
+| 下载页（200%） | 2 | 0 |
+
+播放器页未能复测：验证期间 Jellyfin 服务（`192.168.6.113:8096`）不可达，`curl` 三次全超时。中央按钮暗底与 200% 控件布局因此只有编译验证，需服务恢复后补一次真机确认。
+
 ---
 
 ## 附：证据索引（快速复核）

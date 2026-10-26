@@ -26,6 +26,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.TextButton
@@ -183,6 +185,9 @@ private fun WebViewHostContent(
     val timeoutRunnable = remember {
         Runnable {
             state.connected = false
+            // 超时后必须同时收掉加载圈。否则错误页与半透明加载态叠在屏幕正中：
+            // 正文被按钮压住，还会看到两个「换服务器」按钮（各来自一层）。
+            showLoading = false
             // 超时不再直接清服务器会话：先让用户就地重试
             loadFailure = WebLoadFailure(WebLoadFailure.Kind.TIMEOUT)
         }
@@ -332,7 +337,12 @@ private fun WebViewHostContent(
             }
 
             // Loading overlay
-            AnimatedVisibility(visible = showLoading, modifier = Modifier.align(Alignment.Center)) {
+            // 错误页出现时不再画加载圈：两层都居中，叠起来会互相遮挡
+            // （曾经的表现为正文被按钮压住、屏幕上出现两个「换服务器」按钮）。
+            AnimatedVisibility(
+                visible = showLoading && loadFailure == null,
+                modifier = Modifier.align(Alignment.Center),
+            ) {
                 Column(
                     modifier = Modifier.systemBarsPadding(),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -437,8 +447,14 @@ private fun WebViewLoadErrorOverlay(
         contentAlignment = Alignment.Center,
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 32.dp),
+            // 200% 字号下「标题 + 原因 + 两个按钮」会高过一屏，居中布局会把首尾切掉；
+            // fillMaxSize + 垂直滚动：空间够时仍然居中，不够时可以滚到底。
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 32.dp, vertical = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
         ) {
             Text(
                 text = stringResource(

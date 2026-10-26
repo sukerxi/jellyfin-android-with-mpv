@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -272,12 +273,14 @@ fun PlayerControls(
                 onClick = actions.onPrevious,
                 iconRes = R.drawable.ic_skip_previous_black_32dp,
                 contentDescription = stringResource(R.string.playback_previous),
+                backdrop = true,
             )
             if (state.hasChapters) {
                 PlayerIconButton(
                     onClick = actions.onPreviousChapter,
                     iconRes = R.drawable.ic_skip_previous_chapter_black_32dp,
                     contentDescription = stringResource(R.string.playback_previous_chapter),
+                    backdrop = true,
                 )
             }
             PlayerIconButton(
@@ -288,12 +291,14 @@ fun PlayerControls(
                 ),
                 buttonSize = 66.dp,
                 iconSize = 42.dp,
+                backdrop = true,
             )
             if (state.hasChapters) {
                 PlayerIconButton(
                     onClick = actions.onNextChapter,
                     iconRes = R.drawable.ic_skip_next_chapter_black_32dp,
                     contentDescription = stringResource(R.string.playback_next_chapter),
+                    backdrop = true,
                 )
             }
             PlayerIconButton(
@@ -301,6 +306,7 @@ fun PlayerControls(
                 iconRes = R.drawable.ic_skip_next_black_32dp,
                 contentDescription = stringResource(R.string.playback_next),
                 enabled = state.hasNext,
+                backdrop = true,
             )
         }
 
@@ -627,6 +633,14 @@ private fun PlayerIconButton(
     iconSize: Dp = 26.dp,
     /** 图标角上的小字标（`↻` 等），用于说明按钮的附加语义；null 表示没有。 */
     cornerLabel: String? = null,
+    /**
+     * 是否给按钮垫一层圆形暗底。
+     *
+     * 控件层的压暗是上下渐变的，画面中部刻意保持原样（不给整幅画面蒙灰）。中央那排按钮
+     * 正好落在中间，白图标直接压在明亮画面上时几乎看不见——给它们一层 25% 的圆底，
+     * 既保住画面，也保住对比度。
+     */
+    backdrop: Boolean = false,
 ) {
     // 角标必须画在 IconButton 之外：M3 的 IconButton 内部会把内容裁成固定尺寸，画在里面
     // 会被裁掉。
@@ -634,6 +648,13 @@ private fun PlayerIconButton(
         modifier = modifier.size(buttonSize),
         contentAlignment = Alignment.Center,
     ) {
+        if (backdrop) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(Color(0x40000000), CircleShape),
+            )
+        }
         IconButton(
             onClick = onClick,
             modifier = Modifier.matchParentSize(),
