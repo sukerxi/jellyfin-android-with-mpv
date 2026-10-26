@@ -45,6 +45,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jellyfin.mobile.BuildConfig
 import org.jellyfin.mobile.MainActivity
+import org.jellyfin.mobile.R
 import org.jellyfin.mobile.app.APP_SCOPE
 import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.app.PLAYER_EVENT_CHANNEL
@@ -1348,6 +1349,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
             rebuildPlayer(preferExtensionRenderers = true, restartPlayback = true)
         } else {
             Timber.w(error, "Playback error, attempting fallback")
+            // 网络类中断（播放中途断网、连接被服务端断开）：先立刻把原因告诉用户，再尝试回退。
+            // 回退本身也要走网络，等到它超时失败才提示的话，用户面对的只是一个停住的黑屏
+            // 播放器，完全不知道发生了什么。
+            if (error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+                error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
+            ) {
+                _error.postValue(getApplication<Application>().getString(R.string.player_error_connection_lost))
+            }
             val startPosition = (playerOrNull?.currentPosition ?: 0L).milliseconds
             fallbackRetryJob?.cancel()
             fallbackRetryJob = viewModelScope.launch {

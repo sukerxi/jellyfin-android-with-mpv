@@ -158,20 +158,37 @@ class MpvPlayer(
                     // eof-reached comes from the observer cache (never a synchronous read on
                     // this main-thread handler - see readDurationMs).
                     val eofReached = MpvCore.eofReached
-                    if (!fileLoadedForCurrentItem && !stopRequested && !eofReached) {
-                        // mpv never reached FILE_LOADED for the current item and playback ended
-                        // without an explicit stop: the stream could not be opened/decoded
-                        // (e.g. a direct-play source allowed by the relaxed codec profiles that
-                        // mpv itself cannot handle). Report an error so PlayerViewModel falls back
-                        // to direct stream / transcoding instead of hanging in STATE_IDLE.
-                        pendingError = PlaybackException(
-                            "mpv failed to open the media stream",
-                            null,
-                            PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
-                        )
-                        playbackState = STATE_IDLE
-                    } else {
-                        playbackState = if (eofReached) STATE_ENDED else STATE_IDLE
+                    when {
+                        stopRequested -> playbackState = STATE_IDLE
+                        !fileLoadedForCurrentItem -> {
+                            // mpv never reached FILE_LOADED for the current item and playback ended
+                            // without an explicit stop: the stream could not be opened/decoded
+                            // (e.g. a direct-play source allowed by the relaxed codec profiles that
+                            // mpv itself cannot handle). Report an error so PlayerViewModel falls back
+                            // to direct stream / transcoding instead of hanging in STATE_IDLE.
+                            pendingError = PlaybackException(
+                                "mpv failed to open the media stream",
+                                null,
+                                PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
+                            )
+                            playbackState = STATE_IDLE
+                        }
+                        // 文件已经播放过：判断"正常播完"还是"中途断流"。
+                        //
+                        // 不能只看 eof-reached：流被截断时 mpv 同样会把 eof-reached 置真
+                        // （日志为 `http: Stream ends prematurely` → `end-file`），于是旧逻辑
+                        // 走 STATE_ENDED，播放页当成"播完了"直接关闭，用户只看到退回详情页，
+                        // 完全不知道是断网。播放位置才是可靠的判据 —— 距结尾还差一大截就结束，
+                        // 一定是被打断的。
+                        isEndOfFileNearEnd() -> playbackState = if (eofReached) STATE_ENDED else STATE_IDLE
+                        else -> {
+                            pendingError = PlaybackException(
+                                "mpv playback ended before the end of the file (stream interrupted)",
+                                null,
+                                PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+                            )
+                            playbackState = STATE_IDLE
+                        }
                     }
                 }
             }
@@ -197,10 +214,22 @@ class MpvPlayer(
             is MpvEvent.EofReached -> {
                 // keep-open=yes keeps the file loaded on the last frame: this is the primary
                 // signal for natural playback completion, and seeking away clears it again.
+                //
+                // 但 eof-reached 并不等于"正常播完"：流被截断时 mpv 同样会把它置真（内嵌
+                // ffmpeg 先报 `http: Stream ends prematurely`，再走 end-file）。只看这个标志
+                // 会把"播放中途断网"当成播完 —— 播放页据此直接静默关闭退回详情页，用户
+                // 完全不知道发生了什么。所以还要核对播放位置是否真的到了片尾。
                 playbackState = when {
-                    event.isEofReached -> STATE_ENDED
-                    playbackState == STATE_ENDED -> STATE_READY
-                    else -> playbackState
+                    !event.isEofReached -> if (playbackState == STATE_ENDED) STATE_READY else playbackState
+                    isEndOfFileNearEnd() -> STATE_ENDED
+                    else -> {
+                        pendingError = PlaybackException(
+                            "mpv reported end of file well before the end of the stream (interrupted)",
+                            null,
+                            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+                        )
+                        STATE_IDLE
+                    }
                 }
             }
             is MpvEvent.DurationChanged -> {
@@ -251,6 +280,18 @@ class MpvPlayer(
     private var pendingDetach: Runnable? = null
 
     private val mainHandler = Handler(looper)
+
+    /**
+     * 结束播放时的位置是否已经接近片尾。
+     *
+     * 时长未知（直播 / 时长还没读到的 HLS）时无法判断，一律按"已到结尾"处理 —— 宁可漏报
+     * 一次断流，也不要把正常看到结尾误报成错误。
+     */
+    private fun isEndOfFileNearEnd(): Boolean {
+        if (durationMs <= 0) return true
+        // 用缓存里的 time-pos：END_FILE 之后 mpv 可能已经把它清零，而缓存保留着最后观测到的位置。
+        return currentPositionMs() >= durationMs - END_OF_FILE_TOLERANCE_MS
+    }
 
     private val surfaceHolderCallback = object : SurfaceHolder.Callback {
         override fun surfaceCreated(holder: SurfaceHolder) {
@@ -685,5 +726,10 @@ class MpvPlayer(
             DecoderType.HARDWARE
         }
         decoderListener(decoderType)
+    }
+
+    private companion object {
+        /** 距结尾小于该时长时视为正常播完，不当作断流。 */
+        const val END_OF_FILE_TOLERANCE_MS = 5_000L
     }
 }
