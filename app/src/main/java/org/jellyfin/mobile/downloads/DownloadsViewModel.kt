@@ -28,11 +28,15 @@ class DownloadsViewModel : ViewModel(), KoinComponent {
     private val downloadManager: DownloadManager by inject()
     private val activityEventHandler: ActivityEventHandler by inject()
     private val storageManager: StorageManager by inject()
+    private val progressTracker: DownloadProgressTracker by inject()
 
     val downloads: StateFlow<List<DownloadFiles>> = downloadDao
         .getAllDownloadsWithFiles()
         .flowOn(Dispatchers.IO)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(), emptyList())
+
+    /** downloadId -> 0f..1f，只包含正在下载的条目。 */
+    val downloadProgress: StateFlow<Map<Long, Float>> = progressTracker.progress
 
     private val _storageLocation = MutableStateFlow(storageManager.getStorageLocation())
     val storageLocation = _storageLocation.asStateFlow()
@@ -80,6 +84,18 @@ class DownloadsViewModel : ViewModel(), KoinComponent {
     fun download(download: DownloadEntity) {
         viewModelScope.launch {
             downloadManager.resume(download)
+        }
+    }
+
+    /**
+     * 取消单个正在进行的下载。
+     *
+     * 之前唯一的取消入口在通知栏，用户在下载列表里看着进度条却没有任何可点的操作。
+     * 取消后条目回到「排队」状态，文件保留，可以再次点开继续。
+     */
+    fun cancelDownload(download: DownloadEntity) {
+        viewModelScope.launch {
+            downloadManager.cancel(download.id)
         }
     }
 

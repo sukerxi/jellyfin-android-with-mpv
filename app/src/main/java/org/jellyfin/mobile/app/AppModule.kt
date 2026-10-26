@@ -34,6 +34,7 @@ import org.jellyfin.mobile.bridge.MediaSegments
 import org.jellyfin.mobile.bridge.NativePlayer
 import org.jellyfin.mobile.downloads.DownloadManager
 import org.jellyfin.mobile.downloads.DownloadNotificationManager
+import org.jellyfin.mobile.downloads.DownloadProgressTracker
 import org.jellyfin.mobile.downloads.DownloadQueue
 import org.jellyfin.mobile.downloads.DownloadsViewModel
 import org.jellyfin.mobile.downloads.FileDownloader
@@ -213,7 +214,8 @@ val applicationModule = module {
     single { StorageManager(get(), get()) }
     single { DownloadManager(get(), get(), get(), get(), get()) }
     single { DownloadNotificationManager(get()) }
-    single { DownloadQueue(get(), get(), get(), get(), get(), get()) }
+    single { DownloadProgressTracker() }
+    single { DownloadQueue(get(), get(), get(), get(), get(), get(), get()) }
     single { FileDownloader(get()) }
 
     // App updates

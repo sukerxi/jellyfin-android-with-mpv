@@ -124,6 +124,18 @@
     <string name="playback_fullscreen">Fullscreen</string>
     <string name="playback_unlock_screen">Unlock screen</string>
     <string name="playback_more">More</string>
+    <!-- 状态徽标：只在非默认值时出现，避免常驻噪音 -->
+    <string name="playback_badge_speed">%1$s</string>
+    <string name="playback_badge_software_decoder">SW decode</string>
+    <string name="playback_badge_quality">%1$s</string>
+    <!-- 长按临时倍速时的角标 -->
+    <string name="playback_speed_boost_active">%1$s · fast-forwarding</string>
+    <!-- 双击 seek 的跳转量：步长来自服务端设置，不能写死 -->
+    <string name="playback_seek_forward_step">+%1$ds</string>
+    <string name="playback_seek_back_step">-%1$ds</string>
+    <!-- 「全屏」按钮在横屏视频上实际是旋转设备，描述要如实说明 -->
+    <string name="playback_rotate_fullscreen">Rotate to fill screen</string>
+    <string name="playback_exit_fullscreen">Exit full screen</string>
     <!-- 菜单项标题与当前值：「清晰度 · 自动」 -->
     <string name="playback_menu_item_with_value">%1$s · %2$s</string>
     <string name="back">Back</string>
@@ -195,6 +207,12 @@
     <string name="pref_exoplayer_allow_horizontal_gesture_summary">Allow horizontal gesture control for video seeking</string>
     <string name="pref_exoplayer_double_tap_pause">Double-tap to pause</string>
     <string name="pref_exoplayer_double_tap_pause_summary">Double-tapping anywhere on the video toggles play/pause instead of seeking forward/backward</string>
+    <string name="pref_controls_timeout">Hide controls after</string>
+    <string name="pref_controls_timeout_summary">Playback only — controls stay while paused or while your finger is on them</string>
+    <string name="controls_timeout_short">3 seconds</string>
+    <string name="controls_timeout_default">5 seconds</string>
+    <string name="controls_timeout_long">10 seconds</string>
+    <string name="controls_timeout_never">Never</string>
     <string name="pref_exoplayer_direct_play_ass">Native SSA/ASS subtitle rendering</string>
     <string name="pref_exoplayer_direct_play_ass_description">Render SSA/ASS subtitles on the device with their original styling, positioning and effects, instead of asking the server to burn them into the video. Direct play only: this applies when the video does not need transcoding. Client-side rendering may not reproduce every effect.</string>
     <string name="playback_info_native_ass_rendering">SSA/ASS on device</string>
@@ -278,6 +296,11 @@
         <item quantity="other">Do you want to remove these %1$d downloads?</item>
     </plurals>
     <string name="download_incomplete">Download incomplete</string>
+    <string name="download_queued">Queued</string>
+    <string name="cancel">Cancel</string>
+    <string name="download_redownload">Download again</string>
+    <string name="download_incomplete_redownload_message">This download is incomplete or damaged. Download it again? The existing partial files will be overwritten.</string>
+    <string name="download_select">Select</string>
     <string name="download_settings_dialog_title">Choose download location</string>
     <string name="download_settings_dialog_message">Please choose where downloaded media should be saved. Downloads use WiFi only by default.</string>
     <string name="select_folder">Select folder</string>

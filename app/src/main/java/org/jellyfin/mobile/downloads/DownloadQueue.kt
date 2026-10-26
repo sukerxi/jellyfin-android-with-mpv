@@ -24,6 +24,7 @@ class DownloadQueue(
     private val downloadDao: DownloadDao,
     private val downloadNotificationManager: DownloadNotificationManager,
     private val storageManager: StorageManager,
+    private val progressTracker: DownloadProgressTracker,
     okHttpClient: OkHttpClient,
 ) {
     private data class QueuedFile(val file: DownloadFileEntity, val remoteUri: Uri)
@@ -65,11 +66,19 @@ class DownloadQueue(
                 downloadWithFiles.download.getDisplayName(context).orEmpty(),
             )
 
+            val downloadId = downloadWithFiles.download.id
+            // 通知栏与列表共享同一份百分比：两者都由这个回调驱动的，分开算会不一致。
+            val progressCallback = FileDownloader.ProgressCallback { downloaded, total ->
+                notificationProgressCallback.onProgress(downloaded, total)
+                if (total > 0) progressTracker.update(downloadId, downloaded.toFloat() / total)
+            }
+
             for (queuedFile in queuedFiles) {
-                download(api, queuedFile, notificationProgressCallback)
+                download(api, queuedFile, progressCallback)
             }
 
             notificationProgressCallback.onEnd()
+            progressTracker.clear(downloadId)
             downloadDao.update(downloadWithFiles.download.copy(status = DownloadStatus.DOWNLOADED))
         } catch (e: CancellationException) {
             // The download could've been canceled by the app, in which case we need to refresh it before making changes
@@ -77,12 +86,15 @@ class DownloadQueue(
             if (download?.status == DownloadStatus.DOWNLOADING) {
                 downloadDao.update(download.copy(status = DownloadStatus.QUEUED))
             }
+            progressTracker.clear(downloadWithFiles.download.id)
             throw e
         } catch (e: IOException) {
             downloadDao.update(downloadWithFiles.download.copy(status = DownloadStatus.QUEUED))
+            progressTracker.clear(downloadWithFiles.download.id)
             throw e
         } catch (e: Exception) {
             downloadDao.update(downloadWithFiles.download.copy(status = DownloadStatus.ERROR))
+            progressTracker.clear(downloadWithFiles.download.id)
             throw e
         }
     }

@@ -48,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -66,6 +67,7 @@ fun DownloadsScreen(
     backDispatcher: BackNavigationDispatcher,
 ) {
     val downloads by viewModel.downloads.collectAsState()
+    val downloadProgress by viewModel.downloadProgress.collectAsState()
     val storageLocation by viewModel.storageLocation.collectAsState()
     val storageLocationAccessible by viewModel.storageLocationAccessible.collectAsState()
     val selection = remember { mutableStateSetOf<Long>() }
@@ -160,6 +162,24 @@ fun DownloadsScreen(
                 },
                 actions = {
                     Row {
+                        // 非多选态也给出「选择」入口：多选此前只能靠长按进入，而长按没有任何
+                        // 可见提示，首次使用者基本发现不了。
+                        AnimatedVisibility(
+                            visible = !selectionMode && downloads.isNotEmpty(),
+                            enter = fadeIn(),
+                            exit = fadeOut(),
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    downloads.firstOrNull()?.let { selection.add(it.download.id) }
+                                },
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_checklist_24dp),
+                                    contentDescription = stringResource(R.string.download_select),
+                                )
+                            }
+                        }
                         AnimatedVisibility(
                             visible = selectionMode,
                             enter = fadeIn(),
@@ -237,11 +257,13 @@ fun DownloadsScreen(
                         downloads = downloads,
                         onOpen = { viewModel.openDownload(it) },
                         onDownload = { viewModel.download(it) },
+                        onCancel = { viewModel.cancelDownload(it) },
                         selection = selection,
                         onToggleSelection = { download ->
                             if (selection.contains(download.id)) selection.remove(download.id)
                             else selection.add(download.id)
                         },
+                        progress = downloadProgress,
                         modifier = Modifier.weight(1f),
                     )
                 }

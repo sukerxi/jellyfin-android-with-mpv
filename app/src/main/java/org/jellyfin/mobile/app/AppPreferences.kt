@@ -196,6 +196,13 @@ class AppPreferences(context: Context) {
     val exoPlayerDoubleTapPauseFlow: Flow<Boolean> =
         preferenceFlow(KEY_EXOPLAYER_DOUBLE_TAP_PAUSE, false)
 
+    /** 控件自动隐藏时长（毫秒），0 表示永不隐藏。 */
+    var controlsTimeoutMs: Int
+        get() = snapshot[KEY_CONTROLS_TIMEOUT] ?: Constants.DEFAULT_CONTROLS_TIMEOUT_MS
+        set(value) = persistValue(KEY_CONTROLS_TIMEOUT, value)
+    val controlsTimeoutFlow: Flow<Int> =
+        preferenceFlow(KEY_CONTROLS_TIMEOUT, Constants.DEFAULT_CONTROLS_TIMEOUT_MS)
+
     var exoPlayerDirectPlayAss: Boolean
         get() = snapshot[KEY_EXOPLAYER_DIRECT_PLAY_ASS] ?: false
         set(value) = persistValue(KEY_EXOPLAYER_DIRECT_PLAY_ASS, value)
@@ -331,6 +338,8 @@ class AppPreferences(context: Context) {
             booleanPreferencesKey(Constants.PREF_EXOPLAYER_ALLOW_HORIZONTAL_GESTURE)
         private val KEY_EXOPLAYER_DOUBLE_TAP_PAUSE =
             booleanPreferencesKey(Constants.PREF_EXOPLAYER_DOUBLE_TAP_PAUSE)
+        private val KEY_CONTROLS_TIMEOUT =
+            intPreferencesKey(Constants.PREF_CONTROLS_TIMEOUT)
         private val KEY_EXOPLAYER_DIRECT_PLAY_ASS =
             booleanPreferencesKey(Constants.PREF_EXOPLAYER_DIRECT_PLAY_ASS)
         private val KEY_EXOPLAYER_NETWORK_BUFFER =

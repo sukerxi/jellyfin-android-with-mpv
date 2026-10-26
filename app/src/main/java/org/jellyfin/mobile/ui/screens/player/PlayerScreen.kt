@@ -29,6 +29,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -84,6 +85,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.player.PlayerException
+import org.jellyfin.mobile.player.PlayerUiError
 import org.jellyfin.mobile.player.PlayerViewModel
 import org.jellyfin.mobile.player.interaction.PlaybackController
 import org.jellyfin.mobile.player.interaction.PlaybackLauncher
@@ -221,6 +223,11 @@ fun PlayerScreen(
     // UI state
     var controlsVisible by remember { mutableStateOf(true) }
     var controlsToken by remember { mutableIntStateOf(0) }
+    // 手指是否还按在控件层上：按住期间不隐藏，抬手后重新计时。
+    var touchActive by remember { mutableStateOf(false) }
+    // 自动隐藏时长由用户决定（3s / 5s / 10s / 永不），不再写死。
+    val controlsTimeoutMs by appPreferences.controlsTimeoutFlow
+        .collectAsState(initial = appPreferences.controlsTimeoutMs)
     var locked by remember { mutableStateOf(false) }
     /**
      * 播放失败的落地状态。非 null 时播放器停在原位显示错误卡片，而不是
@@ -261,6 +268,25 @@ fun PlayerScreen(
     fun showControls() {
         controlsVisible = true
         controlsToken++
+    }
+
+    /*
+     * 单击 = 显示/收起控件。
+     *
+     * 控件隐藏时由手势层收到点击，控件可见时手势层被控件层挡住、由控件层的空白处点击收到
+     * —— 两个入口都调到这里。极少数情况下同一次抬手会同时命中两层（重叠命中），因此加一个
+     * 很短的窗口去抖，避免「收起又立刻弹出」。
+     */
+    var lastControlsToggleUptime by remember { mutableStateOf(0L) }
+    fun toggleControls() {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - lastControlsToggleUptime < Constants.CONTROLS_TOGGLE_DEBOUNCE_MS) return
+        lastControlsToggleUptime = now
+        if (controlsVisible) {
+            controlsVisible = false
+        } else {
+            showControls()
+        }
     }
 
     // 读屏/开关控制开启时，控件栏与解锁入口都不自动收起：这类用户需要沿着可聚焦节点
@@ -316,8 +342,12 @@ fun PlayerScreen(
         unlockHideJob?.cancel()
         unlockButtonVisible = true
         if (isScreenReaderActive()) return
+        // 解锁按钮跟随同一个「自动隐藏」设置：选了「永不隐藏」的人，锁定后也不该被抽走
+        // 唯一的出口。
+        val timeout = controlsTimeoutMs
+        if (timeout <= 0) return
         unlockHideJob = scope.launch {
-            delay(Constants.DEFAULT_CONTROLS_TIMEOUT_MS.toLong())
+            delay(timeout.toLong())
             unlockButtonVisible = false
         }
     }
@@ -464,11 +494,23 @@ fun PlayerScreen(
     }
 
     // 播放过程中的运行期错误（解码失败、断流等）：走全局 Snackbar，可回溯、可复制，
-    // 也不再与播放器底栏抢位置。
+    // 也不再与播放器底栏抢位置。断流这类「链路好了就能继续看」的错误附带重试动作，
+    // 让用户不必退出播放器再重进（重进还会丢掉当前进度）。
     val errorObserver = remember(viewModel) {
-        Observer<String> { message ->
-            val safeMessage = message.ifEmpty { context.getString(R.string.player_error_unspecific_exception) }
-            snackbarController.showLong(safeMessage)
+        Observer<PlayerUiError> { error ->
+            val safeMessage = error.message.ifEmpty {
+                context.getString(R.string.player_error_unspecific_exception)
+            }
+            if (error.retryable) {
+                snackbarController.show(
+                    text = safeMessage,
+                    actionLabel = context.getString(R.string.retry),
+                    duration = SnackbarDuration.Long,
+                    action = viewModel::retryPlayback,
+                )
+            } else {
+                snackbarController.showLong(safeMessage)
+            }
         }
     }
     DisposableEffect(viewModel, errorObserver, lifecycleOwner) {
@@ -607,12 +649,21 @@ fun PlayerScreen(
     // Controls auto-hide
     // 拖动进度条期间（scrubPositionMs != null）不自动隐藏：控件栏消失会中断 scrub，
     // 导致 DefaultTimeBar 被释放、onScrubStop 丢失，松手后无法 seek。
+    //
+    // 隐藏规则（按用户反馈重做）：
+    // - 暂停时不隐藏 —— 暂停就是在读信息/做选择，此时抽走控件是干扰；
+    // - 手指按在控件上时不隐藏 —— 只「重置计时」不够，按住超过计时长度照样会消失；
+    // - 时长为 0 表示永不隐藏，完全交给用户的意愿；
+    // - 菜单/面板/拖动进度条期间不隐藏（原有规则）。
     val controlsSuppressed = expandedMenu != null || infoPanelVisible || episodePickerVisible ||
-        scrubPositionMs != null
+        compareVisible || scrubPositionMs != null || touchActive
 
-    LaunchedEffect(controlsVisible, controlsSuppressed, controlsToken) {
-        if (controlsVisible && !controlsSuppressed && !isScreenReaderActive()) {
-            delay(Constants.DEFAULT_CONTROLS_TIMEOUT_MS.toLong())
+    LaunchedEffect(controlsVisible, controlsSuppressed, controlsToken, controlsTimeoutMs, isPlaying) {
+        val timeout = controlsTimeoutMs
+        val shouldHide = controlsVisible && !controlsSuppressed && timeout > 0 &&
+            isPlaying && !isScreenReaderActive()
+        if (shouldHide) {
+            delay(timeout.toLong())
             controlsVisible = false
         }
     }
@@ -825,9 +876,7 @@ fun PlayerScreen(
         isLandscape = { isLandscapeOrientation() },
         isLocked = { locked },
         getPlayer = { viewModel.playerOrNull },
-        onToggleControls = {
-            if (controlsVisible) controlsVisible = false else showControls()
-        },
+        onToggleControls = { toggleControls() },
         onPeekUnlockButton = { peekUnlockButton() },
         onTogglePlayPause = { viewModel.togglePlayPause() },
         onSeekTo = { position -> viewModel.seekTo(position) },
@@ -844,6 +893,15 @@ fun PlayerScreen(
             }
         },
         onShowControls = { showControls() },
+        // 双击跳转量与快进/快退按钮共用服务端下发的步长，文案必须反映真实值，
+        // 否则用户会以为自己跳的是固定 10 秒。
+        seekStepLabel = { forward ->
+            val seconds = viewModel.seekStepMs(forward) / 1000
+            context.getString(
+                if (forward) R.string.playback_seek_forward_step else R.string.playback_seek_back_step,
+                seconds,
+            )
+        },
         longPressTimeoutMs = android.view.ViewConfiguration.getLongPressTimeout().toLong(),
         exclusionSizeVerticalPx = exclusionSizeVerticalPx,
         exclusionSizeHorizontalPx = exclusionSizeHorizontalPx,
@@ -1061,6 +1119,9 @@ fun PlayerScreen(
                     scrubPositionMs = scrubPositionMs,
                     pendingSeekPositionMs = pendingSeekPositionMs,
                     mpvCompareEnabled = mpvCompareEntryEnabled && player is MpvPlayer,
+                    // 与下面 onToggleFullscreen 的判定保持一致：横屏（或未知）视频走转屏，
+                    // 竖屏视频才是沉浸式切换。
+                    rotatesOnFullscreen = videoStream == null || videoStream.isLandscape,
                 ),
                 menus = PlayerMenusState(
                     expanded = expandedMenu,
@@ -1165,7 +1226,11 @@ fun PlayerScreen(
                         // 位置上仍是旧值，直接置空会让进度条先跳回 seek 起点、再跳到目标。
                         pendingSeekPositionMs = position
                     },
-                    onUserInteraction = { showControls() },
+                    // 只重置自动隐藏计时，不改变可见性：能走到这里说明控件本来就是可见的，
+                    // 而空白处单击要能把它收起——旧的 showControls() 会在收起后立刻又弹回来。
+                    onUserInteraction = { controlsToken++ },
+                    onTouchActiveChanged = { active -> touchActive = active },
+                    onTapBackground = { toggleControls() },
                 ),
                 modifier = Modifier
                     .matchParentSize()

@@ -40,6 +40,7 @@ object Constants {
     const val PREF_EXOPLAYER_ALLOW_BACKGROUND_AUDIO = "pref_exoplayer_allow_background_audio"
     const val PREF_EXOPLAYER_ALLOW_HORIZONTAL_GESTURE = "pref_exoplayer_allow_horizontal_gesture"
     const val PREF_EXOPLAYER_DOUBLE_TAP_PAUSE = "pref_exoplayer_double_tap_pause"
+    const val PREF_CONTROLS_TIMEOUT = "pref_controls_timeout"
     const val PREF_EXOPLAYER_DIRECT_PLAY_ASS = "pref_exoplayer_direct_play_ass"
     const val PREF_EXOPLAYER_NETWORK_BUFFER = "pref_exoplayer_network_buffer"
     const val NETWORK_BUFFER_AUTO = "auto"
@@ -143,7 +144,35 @@ object Constants {
     const val PLAYER_TIME_UPDATE_RATE = 10000L
     const val CHAPTER_MARKING_UPDATE_DELAY = 1000L
     const val SKIP_MEDIA_SEGMENT_UPDATE_DELAY = 1000L
-    const val DEFAULT_CONTROLS_TIMEOUT_MS = 4000
+    const val DEFAULT_CONTROLS_TIMEOUT_MS = 5000
+
+    /**
+     * 控件自动隐藏的可选时长。
+     *
+     * 0 表示永不自动隐藏。这个值必须可配：固定在 4 秒时，读标题、看剩余时长、判断当前音轨
+     * 都可能来不及，而每个人的阅读速度不一样 —— 把它写死等于替用户决定节奏。
+     */
+    const val CONTROLS_TIMEOUT_NEVER = 0
+    const val CONTROLS_TIMEOUT_SHORT = 3000
+    const val CONTROLS_TIMEOUT_DEFAULT = DEFAULT_CONTROLS_TIMEOUT_MS
+    const val CONTROLS_TIMEOUT_LONG = 10000
+
+    /**
+     * 暂停时不隐藏控件。
+     *
+     * 暂停意味着用户要读信息或做选择（音轨、字幕、清晰度），此时把控件抽走纯属添乱。
+     */
+    const val CONTROLS_TIMEOUT_PAUSED = Int.MAX_VALUE
+
+    /**
+     * 单击切换控件的去抖窗口。
+     *
+     * 控件层（空白处点击）与手势层（控件隐藏时的点击）会收到同一次点击：控件层当场处理，
+     * 手势层的 detectTapGestures 因为有双击检测，必须等 doubleTapTimeout（默认 300ms）过后
+     * 才派发 onTap。窗口必须大于这个超时，否则同一次点击会被处理两遍 —— 先收起、300ms 后
+     * 又弹回来，看起来就是「点了没反应」。
+     */
+    const val CONTROLS_TOGGLE_DEBOUNCE_MS = 400L
     const val SWIPE_GESTURE_EXCLUSION_SIZE_VERTICAL = 64
     const val DEFAULT_CENTER_OVERLAY_TIMEOUT_MS = 250
     const val SWIPE_GESTURE_EXCLUSION_SIZE_HORIZONTAL = 48

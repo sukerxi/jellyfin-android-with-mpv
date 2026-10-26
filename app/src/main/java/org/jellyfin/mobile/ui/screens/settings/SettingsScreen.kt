@@ -93,6 +93,16 @@ fun SettingsScreen(
         .collectAsState(initial = appPreferences.exoPlayerAllowHorizontalGesture)
     val doubleTapPause by appPreferences.exoPlayerDoubleTapPauseFlow
         .collectAsState(initial = appPreferences.exoPlayerDoubleTapPause)
+    val controlsTimeout by appPreferences.controlsTimeoutFlow
+        .collectAsState(initial = appPreferences.controlsTimeoutMs)
+    val controlsTimeoutOptions = remember {
+        listOf(
+            ChoiceItem(Constants.CONTROLS_TIMEOUT_SHORT, R.string.controls_timeout_short),
+            ChoiceItem(Constants.CONTROLS_TIMEOUT_DEFAULT, R.string.controls_timeout_default),
+            ChoiceItem(Constants.CONTROLS_TIMEOUT_LONG, R.string.controls_timeout_long),
+            ChoiceItem(Constants.CONTROLS_TIMEOUT_NEVER, R.string.controls_timeout_never),
+        )
+    }
     val directPlayAss by appPreferences.exoPlayerDirectPlayAssFlow
         .collectAsState(initial = appPreferences.exoPlayerDirectPlayAss)
     val networkBuffer by appPreferences.exoPlayerNetworkBufferFlow
@@ -258,6 +268,25 @@ fun SettingsScreen(
                     summary = stringResource(R.string.pref_exoplayer_double_tap_pause_summary),
                     checked = doubleTapPause,
                     onCheckedChange = { appPreferences.exoPlayerDoubleTapPause = it },
+                )
+                // 「控件多久后自动隐藏」：之前固定 4 秒且不可改，读标题/看音轨常被打断。
+                // 暂停时与手指按住时同样不隐藏（见 PlayerScreen 的 controlsSuppressed）。
+                SingleSelectPreferenceRow(
+                    title = stringResource(R.string.pref_controls_timeout),
+                    summary = listOfNotNull(
+                        controlsTimeoutOptions.find { it.key == controlsTimeout }?.let { stringResource(it.titleRes) },
+                        stringResource(R.string.pref_controls_timeout_summary),
+                    ).joinToString(" · "),
+                    items = controlsTimeoutOptions,
+                    selectedKey = controlsTimeout,
+                    onClick = {
+                        choiceDialog = ChoiceDialogState(
+                            title = context.getString(R.string.pref_controls_timeout),
+                            items = controlsTimeoutOptions,
+                            selectedKey = controlsTimeout,
+                            onSelect = { appPreferences.controlsTimeoutMs = it as Int },
+                        )
+                    },
                 )
                 // 「播放缓冲区大小」：ExoPlayer 用它设置缓冲时长，mpv 用它设置 demuxer 预读
                 // 时长与缓存上限；蜂窝网络下两个引擎都会自动收紧一档。

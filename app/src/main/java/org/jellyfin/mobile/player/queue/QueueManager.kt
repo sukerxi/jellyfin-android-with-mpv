@@ -289,6 +289,18 @@ class QueueManager(
     }
 
     /**
+     * 用户手动重试：先重置自动回退的计数，再从指定位置续播。
+     *
+     * 与 [restartPlaybackWithFallback] 的区别只在于计数：自动回退的次数是为「同一次故障
+     * 连续重试」而设的，用户主动点重试时通常已经恢复了网络，不该被前面的次数挡住。
+     */
+    suspend fun retryPlaybackFrom(startPosition: Duration): Boolean {
+        playbackRetries = 0
+        lastPlaybackError = 0L
+        return restartPlaybackWithFallback(startPosition)
+    }
+
+    /**
      * Change the maximum bitrate to the specified value.
      */
     suspend fun changeBitrate(bitrate: Int?): Boolean {

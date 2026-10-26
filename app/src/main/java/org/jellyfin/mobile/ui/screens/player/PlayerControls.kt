@@ -5,6 +5,7 @@ import android.view.ViewGroup
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Icon
@@ -30,11 +32,13 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -55,7 +59,23 @@ import org.jellyfin.mobile.player.ui.TrickplayState
  * trickplay）与功能按钮行（锁屏/音轨/字幕/倍速/清晰度/解码器/信息/选集/全屏）。
  */
 
+/** 全屏模态层（对比面板等）用的均匀压暗。 */
 val ControlsScrim = Color(0x60000000)
+
+/**
+ * 控件层遮罩。
+ *
+ * 原先是一层平铺的 37.5% 黑：中间的通透度被白白吃掉，而顶部/底部的按钮区又不够暗 ——
+ * 纯白图标压在一帧亮画面上时对比度可能低于 3:1。改成上下渐变压暗、中间保持通透：
+ * 文字所在的区域更清楚，画面主体几乎不受影响。
+ */
+private val ControlsScrimBrush = Brush.verticalGradient(
+    0.0f to Color(0xB3000000),
+    0.20f to Color(0x59000000),
+    0.42f to Color(0x00000000),
+    0.62f to Color(0x33000000),
+    1.0f to Color(0xB3000000),
+)
 private val ControlsText = Color.White
 private val ChapterMarkingWatched = Color(0xFF00A4DC)
 private val ChapterMarkingUnwatched = Color(0xFF333333)
@@ -86,6 +106,11 @@ data class PlayerControlsState(
     val pendingSeekPositionMs: Long? = null,
     /** Whether the configuration comparison entry should be offered (mpv engine, not switched off). */
     val mpvCompareEnabled: Boolean = false,
+    /**
+     * 「全屏」按钮实际会旋转设备（横屏视频），而不是切换沉浸式。文案与角标据此区分，
+     * 否则同一个图标在两种视频上做两件事，用户无法预判。
+     */
+    val rotatesOnFullscreen: Boolean = false,
 )
 
 /** 下拉菜单渲染所需的全部状态。 */
@@ -126,6 +151,21 @@ class PlayerControlsActions(
      * 不会出现「刚点完一个菜单，手指还停在屏幕上，控件已经淡出」。
      */
     val onUserInteraction: () -> Unit,
+    /**
+     * 手指是否仍按在控件层上。
+     *
+     * 只重置计时是不够的：调进度、拉音量、盯着菜单比较音轨都可能按得久一点，计时器到点
+     * 照样把控件（连同正在操作的菜单）收走。按下期间挂起隐藏，抬手后再重新计时。
+     */
+    val onTouchActiveChanged: (Boolean) -> Unit,
+    /**
+     * 单击控件层的空白处（不是按钮、不是进度条）。
+     *
+     * 控件可见时单击画面任意空白位置立刻收起控件，这是视频播放器的通用手势：用户想让出
+     * 画面时不该被迫等自动隐藏计时走完。之前只有手势层处理单击，而控件可见时手势层被
+     * 控件层挡住，点击等于无效 —— 于是「想收起控件」只能干等。
+     */
+    val onTapBackground: () -> Unit,
 )
 
 /** DefaultTimeBar 的 scrub 监听转发（字段由 SideEffect 保持最新）。 */
@@ -162,16 +202,34 @@ fun PlayerControls(
     // actions 每次重组都是新实例（位置每 200ms 变一次），用 rememberUpdatedState 取最新回调，
     // pointerInput 的 key 保持稳定，避免手势进行中被取消重启。
     val onUserInteraction by rememberUpdatedState(actions.onUserInteraction)
+    val onTouchActiveChanged by rememberUpdatedState(actions.onTouchActiveChanged)
+    val onTapBackground by rememberUpdatedState(actions.onTapBackground)
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(ControlsScrim)
-            // 非消费型观察者：任何一次按下都算「用户还在操作」，交给宿主重置自动隐藏计时。
-            // 不用 clickable，避免吞掉下面按钮/进度条的点击。
+            .background(ControlsScrimBrush)
+            // 非消费型观察者：任何一次按下都算「用户还在操作」，交给宿主重置自动隐藏计时，
+            // 并在按住期间挂起隐藏。不用 clickable，避免吞掉下面按钮/进度条的点击。
+            // 同一个观察者顺带识别「轻点空白处」= 立刻收起控件：控件可见时手势层被这一层挡住，
+            // 单击只能在这里处理，否则想收起控件就只能等自动隐藏计时走完。
             .pointerInput(Unit) {
+                val touchSlop = viewConfiguration.touchSlop
+                val longPressTimeoutMs = android.view.ViewConfiguration.getLongPressTimeout()
                 awaitEachGesture {
-                    awaitFirstDown(requireUnconsumed = false)
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    onUserInteraction()
+                    onTouchActiveChanged(true)
+                    // 抬起后才判断「这是不是一次轻点空白处」：向下传给子控件的触摸（按钮、
+                    // 进度条、菜单入口）会消费事件，按太久或滑动超过阈值也一律不算轻点。
+                    val up = waitForUpOrCancellation()
+                    if (up != null && !down.isConsumed && !up.isConsumed) {
+                        val moved = (up.position - down.position).getDistance()
+                        val heldMs = up.uptimeMillis - down.uptimeMillis
+                        if (moved <= touchSlop && heldMs < longPressTimeoutMs) onTapBackground()
+                    }
+                    // 抬手或被系统取消都要解除挂起，否则控件会永久留在屏幕上。
+                    onTouchActiveChanged(false)
                     onUserInteraction()
                 }
             },
@@ -252,8 +310,51 @@ fun PlayerControls(
                 .align(Alignment.BottomStart)
                 .fillMaxWidth(),
         ) {
+            StatusSummary(menus = menus)
             ProgressRow(state = state, actions = actions)
             BottomBar(state = state, menus = menus, actions = actions)
+        }
+    }
+}
+
+/**
+ * 底栏上方的状态摘要：只列「非默认值」，因此正常播放时它不存在。
+ *
+ * 倍速、清晰度、解码器切换之后图标本身不变化，菜单一关就无从确认当前状态 —— 用户想知道
+ * 「我现在是不是 1.5 倍速」只能再把菜单打开一遍。这里把当前值一行摆出来，且只摆偏离默认
+ * 的那些，避免常驻噪音。
+ */
+@Composable
+private fun StatusSummary(menus: PlayerMenusState) {
+    val speed = menus.speeds.firstOrNull { it.selected }?.speed
+    val quality = menus.qualities.firstOrNull { it.selected && it.bitrate != 0 }?.title
+    val softwareDecoder = menus.decoders.firstOrNull { it.selected }?.type == DecoderType.SOFTWARE
+
+    val chips = buildList {
+        if (speed != null && speed != 1f) add(formatSpeedLabel(speed))
+        if (quality != null) add(quality)
+        if (softwareDecoder) add(stringResource(R.string.playback_badge_software_decoder))
+    }
+    if (chips.isEmpty()) return
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 14.dp, end = 14.dp, bottom = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        chips.forEach { label ->
+            Text(
+                text = label,
+                color = ControlsText,
+                fontSize = 11.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .background(Color(0x99000000), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 6.dp, vertical = 1.dp),
+            )
         }
     }
 }
@@ -456,7 +557,16 @@ private fun BottomBar(
                 } else {
                     R.drawable.ic_fullscreen_enter_white_32dp
                 },
-                contentDescription = stringResource(R.string.playback_fullscreen),
+                // 横屏视频时这个按钮其实是「转屏」，描述如实说明动作，避免用户以为
+                // 点了会变成别的分辨率；竖屏视频才是真正的沉浸式切换。
+                contentDescription = stringResource(
+                    when {
+                        state.isFullscreen -> R.string.playback_exit_fullscreen
+                        state.rotatesOnFullscreen -> R.string.playback_rotate_fullscreen
+                        else -> R.string.playback_fullscreen
+                    },
+                ),
+                cornerLabel = if (state.rotatesOnFullscreen && !state.isFullscreen) "↻" else null,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -515,20 +625,43 @@ private fun PlayerIconButton(
     // 48dp 是 Material 的最小触控目标；旧值 42dp 在竖屏上点起来偏小
     buttonSize: Dp = 48.dp,
     iconSize: Dp = 26.dp,
+    /** 图标角上的小字标（`↻` 等），用于说明按钮的附加语义；null 表示没有。 */
+    cornerLabel: String? = null,
 ) {
-    IconButton(
-        onClick = onClick,
-        // 调用方传 fillMaxWidth 时宽度会撑满所在槽位（底栏等分布局），高度固定为 buttonSize
+    // 角标必须画在 IconButton 之外：M3 的 IconButton 内部会把内容裁成固定尺寸，画在里面
+    // 会被裁掉。
+    Box(
         modifier = modifier.size(buttonSize),
-        enabled = enabled,
+        contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            painter = painterResource(iconRes),
-            contentDescription = contentDescription,
-            modifier = Modifier.size(iconSize),
-            // 禁用态置灰（Material 禁用内容透明度 0.38），与旧版 View isEnabled=false 时
-            // textColorPrimary ColorStateList 的 disabled 态一致
-            tint = if (enabled) ControlsText else ControlsText.copy(alpha = 0.38f),
-        )
+        IconButton(
+            onClick = onClick,
+            modifier = Modifier.matchParentSize(),
+            enabled = enabled,
+        ) {
+            Icon(
+                painter = painterResource(iconRes),
+                contentDescription = contentDescription,
+                modifier = Modifier.size(iconSize),
+                // 禁用态置灰（Material 禁用内容透明度 0.38），与旧版 View isEnabled=false 时
+                // textColorPrimary ColorStateList 的 disabled 态一致
+                tint = if (enabled) ControlsText else ControlsText.copy(alpha = 0.38f),
+            )
+        }
+        if (cornerLabel != null) {
+            Text(
+                text = cornerLabel,
+                color = ControlsText,
+                fontSize = 9.sp,
+                maxLines = 1,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(x = 2.dp, y = 2.dp)
+                    .background(Color(0x99000000), RoundedCornerShape(3.dp))
+                    .padding(horizontal = 3.dp, vertical = 1.dp)
+                    // 角标是图标描述的补充，不单独成为一个无障碍节点
+                    .clearAndSetSemantics { },
+            )
+        }
     }
 }

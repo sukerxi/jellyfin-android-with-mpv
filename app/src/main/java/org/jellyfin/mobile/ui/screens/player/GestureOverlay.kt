@@ -43,10 +43,14 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -68,6 +72,10 @@ private val IndicatorTrackColor = Color.White.copy(alpha = 0.24f)
 private val SeekPositionTextColor = Color(0xFFAAAAAA)
 private val IndicatorWidth = 160.dp
 private val DoubleTapToggleSize = 96.dp
+
+/** 双击跳转量文字（`+10s` / `-10s`）。 */
+private val RippleLabelWidth = 160.dp
+private val RippleLabelLift = 56.dp
 
 @Composable
 fun GestureOverlay(
@@ -196,6 +204,32 @@ private fun BoxScope.GestureIndicators(
     handler: PlayerGestureHandler,
     surfaceSize: IntSize,
 ) {
+    // 长按临时倍速：音画已经变快了，但屏幕上原本没有任何反馈，用户不确定是否生效，
+    // 于是一直按着等。给一次触感 + 顶部角标，松手前都能看到「正在 N× 快进」。
+    val haptic = LocalHapticFeedback.current
+    LaunchedEffect(handler.speedBoostActive) {
+        if (handler.speedBoostActive) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    }
+    if (handler.speedBoostActive) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 72.dp)
+                .background(IndicatorBackground, RoundedCornerShape(16.dp))
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+        ) {
+            Text(
+                text = stringResource(
+                    R.string.playback_speed_boost_active,
+                    formatSpeedLabel(Constants.HOLD_SPEEDUP_MULTIPLIER),
+                ),
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+
     // Brightness / volume indicator
     handler.indicator?.let { indicator ->
         Box(
@@ -275,6 +309,32 @@ private fun BoxScope.GestureIndicators(
                 )
             }
         }
+    }
+
+    // 双击 seek 的跳转量。涟漪本身只表达「点这里了」，不表达「跳了多远」——步长由服务端
+    // 偏好决定（10s / 30s 都可能），所以在涟漪中心上方补一行文字。涟漪消失时一起退场。
+    handler.ripple?.let { ripple ->
+        val density = LocalDensity.current
+        val labelWidthPx = with(density) { RippleLabelWidth.toPx() }
+        val labelLiftPx = with(density) { RippleLabelLift.toPx() }
+        val maxX = (surfaceSize.width - labelWidthPx).coerceAtLeast(0f)
+        Text(
+            text = ripple.label,
+            color = Color.White,
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .offset {
+                    IntOffset(
+                        x = (ripple.x - labelWidthPx / 2f).coerceIn(0f, maxX).roundToInt(),
+                        // 抬到触点上方的同时夹在屏内，避免在屏幕顶边双击时文字被裁掉。
+                        y = (ripple.y - labelLiftPx).coerceIn(0f, surfaceSize.height.toFloat()).roundToInt(),
+                    )
+                }
+                .width(RippleLabelWidth),
+        )
     }
 
     // Double tap play/pause toggle icon

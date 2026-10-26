@@ -60,11 +60,14 @@ data class DoubleTapToggleIndicator(
  * 双击 seek 的涟漪反馈的一次性触发（[token] 用于识别新的双击）。
  *
  * [x]/[y] 为双击坐标，作为平台 RippleDrawable 的 hotspot。
+ * [label] 是叠加在涟漪上的跳转量文案（`+10s` / `-10s`）：只画一个涟漪的话，用户无法
+ * 判断这次双击到底跳了多远 —— 步长是服务端下发的偏好，可能 10s 也可能 30s。
  */
 data class RippleIndicator(
     val x: Float,
     val y: Float,
     val token: Long,
+    val label: String,
 )
 
 private enum class GestureDirection {
@@ -95,6 +98,8 @@ class PlayerGestureHandler(
     private val onPressSpeedUp: (Boolean) -> Unit,
     private val onZoomChanged: (Boolean) -> Unit,
     private val onShowControls: () -> Unit,
+    /** 双击跳转量的可读文案（`+10s` / `-10s`），步长来自服务端偏好。 */
+    private val seekStepLabel: (forward: Boolean) -> String,
 ) {
     var indicator: VolumeBrightnessIndicator? by mutableStateOf(null)
         private set
@@ -103,6 +108,10 @@ class PlayerGestureHandler(
     var doubleTapToggle: DoubleTapToggleIndicator? by mutableStateOf(null)
         private set
     var ripple: RippleIndicator? by mutableStateOf(null)
+        private set
+
+    /** 长按临时倍速是否正在生效：宿主据此显示「N× 快进中」角标并给一次触感反馈。 */
+    var speedBoostActive: Boolean by mutableStateOf(false)
         private set
 
     private var currentGesture = GestureDirection.NONE
@@ -148,8 +157,14 @@ class PlayerGestureHandler(
         } else {
             // Show ripple effect and fast-forward/rewind. The overlay replays the ripple
             // for every new token and clears the state once it finished fading out.
-            ripple = RippleIndicator(x = position.x, y = position.y, token = ++rippleToken)
-            if (position.x > viewCenterX) onFastForward() else onRewind()
+            val forward = position.x > viewCenterX
+            ripple = RippleIndicator(
+                x = position.x,
+                y = position.y,
+                token = ++rippleToken,
+                label = seekStepLabel(forward),
+            )
+            if (forward) onFastForward() else onRewind()
         }
 
         // Cancel the auto-hide timer and restart it after seeking
@@ -162,6 +177,7 @@ class PlayerGestureHandler(
     fun onLongPressStarted() {
         if (isLocked() || !appPreferences.exoPlayerAllowPressSpeedUp) return
         isOnPressingSpeedUp = true
+        speedBoostActive = true
         onPressSpeedUp(true)
     }
 
@@ -438,6 +454,7 @@ class PlayerGestureHandler(
     private fun releaseSpeedUp() {
         if (isOnPressingSpeedUp) {
             isOnPressingSpeedUp = false
+            speedBoostActive = false
             onPressSpeedUp(false)
         }
     }
@@ -491,6 +508,7 @@ fun rememberPlayerGestureHandler(
     onPressSpeedUp: (Boolean) -> Unit,
     onZoomChanged: (Boolean) -> Unit,
     onShowControls: () -> Unit,
+    seekStepLabel: (forward: Boolean) -> String,
     longPressTimeoutMs: Long,
     exclusionSizeVerticalPx: Int,
     exclusionSizeHorizontalPx: Int,
@@ -529,6 +547,7 @@ fun rememberPlayerGestureHandler(
             onPressSpeedUp = onPressSpeedUp,
             onZoomChanged = onZoomChanged,
             onShowControls = onShowControls,
+            seekStepLabel = seekStepLabel,
         )
     }
 }

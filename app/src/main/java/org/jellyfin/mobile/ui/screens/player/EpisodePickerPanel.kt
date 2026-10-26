@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -215,12 +216,15 @@ private fun EpisodeCell(
     }
     Box(
         modifier = Modifier
-            .height(48.dp)
+            // 固定 48dp 高度在 200% 字体下会把文字裁掉；改用最小高度让格子随字体长高，
+            // 同时保证触控高度不低于 Material 的最小目标。
+            .heightIn(min = 48.dp)
             .background(background, RoundedCornerShape(CellCornerRadius))
             // 已播放剧集 50% 透明度（与旧版 EpisodeAdapter 一致；选中项保持全不透明）
             .alpha(if (item.played && !item.selected) 0.5f else 1f)
             .clickable(role = Role.Button, onClick = onClick)
-            .semantics { selected = item.selected },
+            .semantics { selected = item.selected }
+            .padding(vertical = 6.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(

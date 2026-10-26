@@ -178,8 +178,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     private val skippedAutoSegments = mutableSetOf<MediaSegmentDto>()
     private var lastAutoSkipPositionMs = -1L
 
-    private val _error = MutableLiveData<String>()
-    val error: LiveData<String> = _error
+    private val _error = MutableLiveData<PlayerUiError>()
+    val error: LiveData<PlayerUiError> = _error
 
     private val eventLogger = EventLogger()
 
@@ -1024,6 +1024,17 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         playerOrNull?.seekToOffset(displayPreferences.skipForwardLength)
     }
 
+    /**
+     * 快进/快退的步长（毫秒），来自服务端 DisplayPreferences。
+     *
+     * 界面用它生成双击反馈文案（`+10s`），因为步长随用户设置变化，写死 10s 会误导。
+     */
+    fun seekStepMs(forward: Boolean): Long = if (forward) {
+        displayPreferences.skipForwardLength
+    } else {
+        displayPreferences.skipBackLength
+    }
+
     fun seekTo(positionMs: Long) {
         val player = playerOrNull ?: return
         val durationMs = player.duration
@@ -1355,15 +1366,41 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
             if (error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
                 error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
             ) {
-                _error.postValue(getApplication<Application>().getString(R.string.player_error_connection_lost))
+                _error.postValue(
+                    PlayerUiError(
+                        getApplication<Application>().getString(R.string.player_error_connection_lost),
+                        retryable = true,
+                    ),
+                )
             }
             val startPosition = (playerOrNull?.currentPosition ?: 0L).milliseconds
             fallbackRetryJob?.cancel()
             fallbackRetryJob = viewModelScope.launch {
                 val retried = queueManager.restartPlaybackWithFallback(startPosition)
                 if (!retried) {
-                    _error.postValue(error.localizedMessage.orEmpty())
+                    _error.postValue(PlayerUiError(error.localizedMessage.orEmpty()))
                 }
+            }
+        }
+    }
+
+    /**
+     * 用户点了错误提示上的「重试」：从当前位置续播。
+     *
+     * 与自动回退共用同一条链路，但要先把自动回退的计数清零 —— 用户手动重试时通常已经
+     * 解决了问题（恢复了网络），不应该因为前面自动回退耗尽了次数而被拒绝。
+     */
+    fun retryPlayback() {
+        val startPosition = (playerOrNull?.currentPosition ?: 0L).milliseconds
+        fallbackRetryJob?.cancel()
+        fallbackRetryJob = viewModelScope.launch {
+            val retried = queueManager.retryPlaybackFrom(startPosition)
+            if (!retried) {
+                _error.postValue(
+                    PlayerUiError(
+                        getApplication<Application>().getString(R.string.player_error_unspecific_exception),
+                    ),
+                )
             }
         }
     }
@@ -1390,3 +1427,16 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         private const val TRANSCODE_REASON_LOOKUP_DELAY_MS = 1_000L
     }
 }
+
+/**
+ * 一条需要呈现给用户的播放错误。
+ *
+ * 之前这里只是一个 `String`，界面无从判断「这条错误值不值得给用户一个重试按钮」，于是
+ * 所有错误都退化成一句 2 秒后消失的提示。把「是否可重试」带在错误对象上，界面就能在
+ * 断流这类「链路恢复了就能继续看」的场景直接给出动作，而不必让用户自己退出播放器重进。
+ */
+data class PlayerUiError(
+    val message: String,
+    /** true 表示重试有意义（例如网络中断）；false 表示重试也过不了（例如内容不支持）。 */
+    val retryable: Boolean = false,
+)
