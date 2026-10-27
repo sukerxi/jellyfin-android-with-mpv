@@ -19,6 +19,12 @@ private val JellyfinDarkColorScheme = darkColorScheme(
     onBackground = JellyfinOnSurface,
     onSurface = JellyfinOnSurface,
     onError = JellyfinOnSurface,
+    // Snackbar 用的是「反色」容器，M3 默认值在深色方案里是近白色，
+    // 在纯深色界面上像一块贴纸；这里一并压成深色。
+    inverseSurface = JellyfinSnackbar,
+    inverseOnSurface = JellyfinOnSurface,
+    // 动作文字（重试/确定等）沿用品牌青；在 #303030 上对比度约 4.6:1，满足 AA。
+    inversePrimary = JellyfinPrimary,
 )
 
 private val JellyfinShapes = Shapes(
