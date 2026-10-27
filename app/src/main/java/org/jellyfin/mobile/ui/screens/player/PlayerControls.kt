@@ -39,7 +39,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -558,10 +557,12 @@ private fun BottomBar(
         PlayerMenuAnchor(modifier = Modifier.weight(1f)) {
             PlayerIconButton(
                 onClick = actions.onToggleFullscreen,
-                iconRes = if (state.isFullscreen) {
-                    R.drawable.ic_fullscreen_exit_white_32dp
-                } else {
-                    R.drawable.ic_fullscreen_enter_white_32dp
+                // 横屏视频时这个按钮实际是「旋转设备」，图标也换成转屏符号，让动作一眼可辨；
+                // 之前用全屏图标 + 9sp 的 ↻ 角标提示，角标小到像误触残留，反而成了噪音。
+                iconRes = when {
+                    state.isFullscreen -> R.drawable.ic_fullscreen_exit_white_32dp
+                    state.rotatesOnFullscreen -> R.drawable.ic_screen_rotation_white_32dp
+                    else -> R.drawable.ic_fullscreen_enter_white_32dp
                 },
                 // 横屏视频时这个按钮其实是「转屏」，描述如实说明动作，避免用户以为
                 // 点了会变成别的分辨率；竖屏视频才是真正的沉浸式切换。
@@ -572,7 +573,6 @@ private fun BottomBar(
                         else -> R.string.playback_fullscreen
                     },
                 ),
-                cornerLabel = if (state.rotatesOnFullscreen && !state.isFullscreen) "↻" else null,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -631,8 +631,6 @@ private fun PlayerIconButton(
     // 48dp 是 Material 的最小触控目标；旧值 42dp 在竖屏上点起来偏小
     buttonSize: Dp = 48.dp,
     iconSize: Dp = 26.dp,
-    /** 图标角上的小字标（`↻` 等），用于说明按钮的附加语义；null 表示没有。 */
-    cornerLabel: String? = null,
     /**
      * 是否给按钮垫一层圆形暗底。
      *
@@ -642,8 +640,6 @@ private fun PlayerIconButton(
      */
     backdrop: Boolean = false,
 ) {
-    // 角标必须画在 IconButton 之外：M3 的 IconButton 内部会把内容裁成固定尺寸，画在里面
-    // 会被裁掉。
     Box(
         modifier = modifier.size(buttonSize),
         contentAlignment = Alignment.Center,
@@ -667,21 +663,6 @@ private fun PlayerIconButton(
                 // 禁用态置灰（Material 禁用内容透明度 0.38），与旧版 View isEnabled=false 时
                 // textColorPrimary ColorStateList 的 disabled 态一致
                 tint = if (enabled) ControlsText else ControlsText.copy(alpha = 0.38f),
-            )
-        }
-        if (cornerLabel != null) {
-            Text(
-                text = cornerLabel,
-                color = ControlsText,
-                fontSize = 9.sp,
-                maxLines = 1,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .offset(x = 2.dp, y = 2.dp)
-                    .background(Color(0x99000000), RoundedCornerShape(3.dp))
-                    .padding(horizontal = 3.dp, vertical = 1.dp)
-                    // 角标是图标描述的补充，不单独成为一个无障碍节点
-                    .clearAndSetSemantics { },
             )
         }
     }

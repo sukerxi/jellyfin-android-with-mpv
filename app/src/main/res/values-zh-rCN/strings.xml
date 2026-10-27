@@ -370,6 +370,11 @@
     <!-- 播放器控件与无障碍文案 -->
     <string name="back">返回</string>
     <string name="retry">重试</string>
+    <!-- 起播加载三阶段：静默转圈 → 说明当前在等什么 → 网络慢的兜底出口 -->
+    <string name="player_loading_preparing">正在连接服务器…</string>
+    <string name="player_loading_buffering">正在缓冲…</string>
+    <string name="player_loading_check_network">网络较慢，仍在加载…</string>
+    <string name="player_loading_exit">退出播放</string>
     <string name="player_error_title">播放失败</string>
     <string name="player_error_detail_hint">可以重试，或返回后换一个清晰度。</string>
     <string name="web_error_title_retryable">无法连接到服务器</string>

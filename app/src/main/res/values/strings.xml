@@ -140,6 +140,11 @@
     <string name="playback_menu_item_with_value">%1$s · %2$s</string>
     <string name="back">Back</string>
     <string name="retry">Retry</string>
+    <!-- 起播加载三阶段：静默转圈 → 说明当前在等什么 → 网络慢的兜底出口 -->
+    <string name="player_loading_preparing">Contacting server…</string>
+    <string name="player_loading_buffering">Buffering…</string>
+    <string name="player_loading_check_network">Slow network — still loading…</string>
+    <string name="player_loading_exit">Exit player</string>
     <!-- 播放失败卡片：留在播放器内说明原因并给出口，取代「toast + 立刻退出」 -->
     <string name="player_error_title">Playback failed</string>
     <string name="player_error_detail_hint">You can retry, or go back and pick another quality.</string>

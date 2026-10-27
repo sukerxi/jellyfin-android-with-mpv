@@ -20,6 +20,37 @@ export class ExoPlayerPlugin {
         this._paused = true;
 
         this._nativePlayer = window['NativePlayer'];
+
+        this._hideLoadingOnPlayFailure();
+    }
+
+    /**
+     * jellyfin-web shows the fullscreen loading spinner before `playbackManager.play()`
+     * resolves, but hides it only on the success path: if fetching the item or the
+     * PlaybackInfo request fails (offline, timeout), the promise rejects and the spinner
+     * stays on top of the web UI forever -- including after the native player is closed.
+     * Attach a side-effect handler that always hides it on failure, without changing what
+     * the original promise does for its other callers.
+     */
+    _hideLoadingOnPlayFailure() {
+        const manager = this.playbackManager;
+        if (!manager || manager.__nativeLoadingFixInstalled) {
+            return;
+        }
+
+        const originalPlay = manager.play.bind(manager);
+        manager.play = (...args) => {
+            const result = originalPlay(...args);
+            if (result && typeof result.catch === 'function') {
+                result.catch(() => {
+                    if (this.loading && this.loading.hide) {
+                        this.loading.hide();
+                    }
+                });
+            }
+            return result;
+        };
+        manager.__nativeLoadingFixInstalled = true;
     }
 
     async play(options) {

@@ -14,6 +14,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -113,6 +114,7 @@ import org.jellyfin.mobile.utils.isAutoRotateOn
 import org.jellyfin.mobile.utils.isOnCellularNetwork
 import org.jellyfin.mobile.utils.koinInject
 import org.jellyfin.mobile.utils.toast
+import org.jellyfin.mobile.webapp.WebappFunctionChannel
 import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.MediaSegmentDto
 import org.jellyfin.sdk.model.api.PlayMethod
@@ -138,6 +140,15 @@ private const val SEEK_UI_SETTLE_TIMEOUT_MS = 1000L
  * 销毁重建，旋转就会从 0° 重启，视觉上即是卡顿。
  */
 private const val LOADING_INDICATOR_HIDE_DELAY_MS = 400L
+
+/** 加载指示器补上说明文案的延迟（毫秒）：前几秒保持纯转圈，避免一闪而过的提示。 */
+private const val LOADING_HINT_DELAY_MS = 3_000L
+
+/** 加载指示器升级出「重试 / 退出」的二次延迟（毫秒，累计约 12s）。 */
+private const val LOADING_STUCK_DELAY_MS = 9_000L
+
+/** 加载指示器的阶段：静默转圈 → 文案说明 → 兜底操作。 */
+private enum class PlayerLoadingStage { ACTIVE, SLOW, STUCK }
 
 /**
  * 阶段 5：播放器界面（Compose 化）。
@@ -173,6 +184,7 @@ fun PlayerScreen(
     qualityOptionsProvider: QualityOptionsProvider = koinInject(),
     assHandler: AssHandler = koinInject(),
     snackbarController: SnackbarController = koinInject(),
+    webappFunctionChannel: WebappFunctionChannel = koinInject(),
 ) {
     val context = LocalContext.current
     // MainActivity 为 ComponentActivity；PiP 监听注册 API 在 androidx ComponentActivity 上
@@ -197,20 +209,6 @@ fun PlayerScreen(
     // 库内部按媒体时钟调度（播放 200ms tick / 暂停 1s / 非 READY 不调度），
     // 并监听 seek、时长、播放态等事件立即重排，无需本屏维护轮询协程。
     val isTranscoding = mediaSource?.playMethod == PlayMethod.TRANSCODE
-
-    // 加载指示器滞回：mpv 状态机已按 ExoPlayer 语义修复（初始缓存填充期间保持
-    // BUFFERING，见 MpvPlayer 的 FileLoaded 处理），此处保留 400ms 兜底——状态若仍有
-    // 短暂闪烁，等 READY 稳定后再隐藏，避免指示器被反复销毁/重建导致旋转重启。
-    val isBuffering = playerState == Player.STATE_BUFFERING
-    var showLoadingIndicator by remember { mutableStateOf(false) }
-    LaunchedEffect(isBuffering) {
-        if (isBuffering) {
-            showLoadingIndicator = true
-        } else {
-            delay(LOADING_INDICATOR_HIDE_DELAY_MS)
-            showLoadingIndicator = false
-        }
-    }
 
     val progressState = rememberProgressStateWithTickInterval(
         player = player,
@@ -310,6 +308,39 @@ fun PlayerScreen(
     // because playback ended on its own. Guards every other effect from running again and
     // keeps the closing paths idempotent.
     val playbackEnded = remember { mutableStateOf(false) }
+
+    // 加载指示器。三段时间线：
+    // - 起播前（还在向服务端要播放信息，mediaSource 仍为空）立刻显示：此前这段时间
+    //   只有一块黑屏，网络慢时用户完全不知道应用在做什么；
+    // - 缓冲态沿用 400ms 滞回（见 LOADING_INDICATOR_HIDE_DELAY_MS），mpv 状态机按
+    //   ExoPlayer 语义修复后仍可能出现的 READY 闪烁不会让转圈反复重启；
+    // - 3s 后补一句说明，12s 仍未就绪给「重试 / 退出」——长时间卡在网络上时，
+    //   用户不必靠猜，也不用退出重进才能重来。
+    val isBuffering = playerState == Player.STATE_BUFFERING
+    var bufferingIndicatorVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(isBuffering) {
+        if (isBuffering) {
+            bufferingIndicatorVisible = true
+        } else {
+            delay(LOADING_INDICATOR_HIDE_DELAY_MS)
+            bufferingIndicatorVisible = false
+        }
+    }
+    val preparingPlayback = mediaSource == null && playbackFailure == null &&
+        pendingMobileDataRequest == null && !closingSoon.value && !playbackEnded.value
+    val showLoadingIndicator = preparingPlayback || bufferingIndicatorVisible
+
+    var loadingStage by remember { mutableStateOf(PlayerLoadingStage.ACTIVE) }
+    // 每次重试自增，让下面的计时序列从头开始
+    var loadingAttempt by remember { mutableIntStateOf(0) }
+    LaunchedEffect(showLoadingIndicator, preparingPlayback, loadingAttempt) {
+        loadingStage = PlayerLoadingStage.ACTIVE
+        if (!showLoadingIndicator) return@LaunchedEffect
+        delay(LOADING_HINT_DELAY_MS)
+        loadingStage = PlayerLoadingStage.SLOW
+        delay(LOADING_STUCK_DELAY_MS)
+        loadingStage = PlayerLoadingStage.STUCK
+    }
 
     /**
      * Leave the player screen: the web app takes playback over again and the native player
@@ -643,6 +674,10 @@ fun PlayerScreen(
             // 窗口常亮标志必须显式清除，否则播放中退出后 FLAG_KEEP_SCREEN_ON 会残留，
             // 导致主界面等非播放场景屏幕也不熄屏
             window.keepScreenOn = false
+            // 网页端的全屏加载圈不归原生层管：jellyfin-web 的 playbackManager.play() 在
+            // 取条目/PlaybackInfo 请求失败时不会隐藏它，用户退出播放器后转圈会继续挂在
+            // 网页正中。这里兜底关一次，覆盖「网络问题导致播放没起来」的那条路径。
+            webappFunctionChannel.hideWebLoading()
         }
     }
 
@@ -1019,22 +1054,70 @@ fun PlayerScreen(
             // Loading indicator - a Material3 spinner restyled to be thick enough to read at
             // this size and deliberately polished: 6dp stroke, 24%-alpha track, rounded caps.
             //
-            // Visibility is driven by the hysteretic showLoadingIndicator above, NOT by the
-            // raw buffering state: mpv's state machine now follows ExoPlayer semantics (READY
-            // only once playback can actually proceed), and the hysteresis below absorbs any
-            // residual flicker - disposing and recreating the indicator restarts its rotation
-            // from 0°, which is exactly what made it stutter.
+            // Visibility is driven by the hysteretic state above, NOT by the raw buffering
+            // state: mpv's state machine now follows ExoPlayer semantics (READY only once
+            // playback can actually proceed), and the hysteresis absorbs any residual flicker
+            // - disposing and recreating the indicator restarts its rotation from 0 degrees,
+            // which is exactly what made it stutter.
+            //
+            // The wait is explained in stages (see loadingStage): a bare spinner for the
+            // first few seconds, a short label after that, and retry/exit actions once the
+            // wait stops looking like normal buffering.
             if (showLoadingIndicator) {
                 val indicatorColor = MaterialTheme.colorScheme.primary
-                CircularProgressIndicator(
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .size(64.dp),
-                    color = indicatorColor,
-                    strokeWidth = 6.dp,
-                    trackColor = indicatorColor.copy(alpha = 0.24f),
-                    strokeCap = StrokeCap.Round,
-                )
+                Column(
+                    modifier = Modifier.align(Alignment.Center),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(64.dp),
+                        color = indicatorColor,
+                        strokeWidth = 6.dp,
+                        trackColor = indicatorColor.copy(alpha = 0.24f),
+                        strokeCap = StrokeCap.Round,
+                    )
+                    if (loadingStage != PlayerLoadingStage.ACTIVE) {
+                        Text(
+                            text = stringResource(
+                                when {
+                                    loadingStage == PlayerLoadingStage.STUCK ->
+                                        R.string.player_loading_check_network
+                                    preparingPlayback -> R.string.player_loading_preparing
+                                    else -> R.string.player_loading_buffering
+                                },
+                            ),
+                            color = Color(0xFFDDDDDD),
+                            fontSize = 14.sp,
+                            modifier = Modifier
+                                .padding(top = 12.dp)
+                                .background(Color(0x66000000), RoundedCornerShape(4.dp))
+                                .padding(horizontal = 10.dp, vertical = 3.dp),
+                        )
+                    }
+                    if (loadingStage == PlayerLoadingStage.STUCK) {
+                        Row(modifier = Modifier.padding(top = 4.dp)) {
+                            // 起播阶段（还没有播放器/媒体源）没有可"续播"的位置，
+                            // 重试只会重复同一条网络请求，不如直接退出回网页重新点播；
+                            // 缓冲阶段走 viewModel 的重试链路，从当前位置重载媒体源。
+                            if (!preparingPlayback) {
+                                TextButton(
+                                    onClick = {
+                                        loadingAttempt++
+                                        viewModel.retryPlayback()
+                                    },
+                                ) {
+                                    Text(text = stringResource(R.string.retry), color = Color.White)
+                                }
+                            }
+                            TextButton(onClick = { closePlayer() }) {
+                                Text(
+                                    text = stringResource(R.string.player_loading_exit),
+                                    color = Color.White,
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
             // Skip media segment button
