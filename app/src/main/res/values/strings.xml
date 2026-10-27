@@ -106,8 +106,12 @@
     <string name="playback_info_chip_external">External</string>
     <string name="playback_info_chip_forced">Forced</string>
     <string name="playback_info_chip_default">Default</string>
+    <string name="playback_info_copy">Copy</string>
+    <string name="playback_info_copied">Playback info copied</string>
     <string name="episode_picker_title">Episodes</string>
     <string name="episode_picker_count">%1$d / %2$d</string>
+    <string name="episode_picker_loading">Loading episodes…</string>
+    <string name="episode_picker_watched">Watched</string>
     <!-- 阶段 5：Compose 播放器控件无障碍描述 -->
     <string name="playback_previous">Previous</string>
     <string name="playback_next">Next</string>
@@ -124,6 +128,7 @@
     <string name="playback_fullscreen">Fullscreen</string>
     <string name="playback_unlock_screen">Unlock screen</string>
     <string name="playback_more">More</string>
+    <string name="playback_locked_hint">Screen locked — tap the screen to show the unlock button</string>
     <!-- 状态徽标：只在非默认值时出现，避免常驻噪音 -->
     <string name="playback_badge_speed">%1$s</string>
     <string name="playback_badge_software_decoder">SW decode</string>
@@ -135,6 +140,7 @@
     <string name="playback_seek_back_step">-%1$ds</string>
     <!-- 「全屏」按钮在横屏视频上实际是旋转设备，描述要如实说明 -->
     <string name="playback_rotate_fullscreen">Rotate to fill screen</string>
+    <string name="playback_rotate_portrait">Rotate back to portrait</string>
     <string name="playback_exit_fullscreen">Exit full screen</string>
     <!-- 菜单项标题与当前值：「清晰度 · 自动」 -->
     <string name="playback_menu_item_with_value">%1$s · %2$s</string>
@@ -249,9 +255,10 @@
     <string name="mobile_data_bitrate_720p">720p - 4 Mbps</string>
     <string name="mobile_data_bitrate_1080p">1080p - 10 Mbps</string>
     <string name="mobile_data_playback_dialog_title">Mobile data playback</string>
-    <string name="mobile_data_playback_dialog_message">You are currently on a mobile network. Continuing may use a lot of data, so playing at the lower bitrate (%1$s) is recommended.</string>
+    <string name="mobile_data_playback_dialog_message">You are on a mobile network. The lower bitrate (%1$s) uses about %2$s per minute; the original quality can use considerably more.</string>
     <string name="mobile_data_playback_play_low_bitrate">Play at lower bitrate</string>
     <string name="mobile_data_playback_play_original">Play at original quality</string>
+    <string name="mobile_data_playback_cancel">Cancel playback</string>
 
     <string name="external_player_app">External player app</string>
     <string name="external_player_mpv">MPV Player</string>
@@ -334,6 +341,7 @@
     <string name="update_checking">Checking for updates…</string>
     <string name="update_up_to_date">You are on the latest version</string>
     <string name="update_check_failed">Update check failed. Please try again later.</string>
+    <string name="update_check_failed_reason">Update check failed: %1$s</string>
     <string name="update_available_title">New version available</string>
     <string name="update_current_version">Current version: %1$s</string>
     <string name="update_new_version">Latest version: %1$s</string>

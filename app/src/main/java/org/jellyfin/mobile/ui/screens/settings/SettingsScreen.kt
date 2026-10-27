@@ -12,10 +12,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -127,6 +129,8 @@ fun SettingsScreen(
         .collectAsState(initial = appPreferences.silentUpdateDownload)
 
     var choiceDialog by remember { mutableStateOf<ChoiceDialogState?>(null) }
+    // 手动检查更新是网络操作：进行中禁止重复触发，并在行内显示状态而不是连弹两条提示。
+    var updateCheckRunning by remember { mutableStateOf(false) }
 
     val storageLocationPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -144,15 +148,25 @@ fun SettingsScreen(
     }
 
     fun checkForUpdates() {
+        if (updateCheckRunning) return
+        updateCheckRunning = true
         snackbarController.show(context.getString(R.string.update_checking))
         scope.launch {
-            when (val result = updateChecker.check(ignoreDismissed = true)) {
-                is UpdateCheckResult.UpToDate ->
-                    snackbarController.show(context.getString(R.string.update_up_to_date))
-                is UpdateCheckResult.UpdateAvailable ->
-                    updateDialogState.requestUpdate(result.info, allowIgnore = false)
-                is UpdateCheckResult.Error ->
-                    snackbarController.show(context.getString(R.string.update_check_failed))
+            try {
+                when (val result = updateChecker.check(ignoreDismissed = true)) {
+                    is UpdateCheckResult.UpToDate ->
+                        snackbarController.show(context.getString(R.string.update_up_to_date))
+                    is UpdateCheckResult.UpdateAvailable ->
+                        updateDialogState.requestUpdate(result.info, allowIgnore = false)
+                    is UpdateCheckResult.Error ->
+                        snackbarController.show(
+                            result.message?.takeUnless(String::isBlank)?.let { reason ->
+                                context.getString(R.string.update_check_failed_reason, reason)
+                            } ?: context.getString(R.string.update_check_failed),
+                        )
+                }
+            } finally {
+                updateCheckRunning = false
             }
         }
     }
@@ -507,11 +521,13 @@ fun SettingsScreen(
                 } else {
                     stringResource(R.string.update_channel_cnb)
                 }
-                ClickPreferenceRow(
+                // 渠道由安装包决定，不是可选项：用只读信息行呈现，避免「灰掉但不知道为什么」。
+                PreferenceRow(
                     title = stringResource(R.string.pref_update_channel),
                     summary = stringResource(R.string.pref_update_channel_summary, channelName),
-                    enabled = false,
-                    onClick = {},
+                    enabled = true,
+                    onClick = null,
+                    trailing = null,
                 )
                 SwitchPreferenceRow(
                     title = stringResource(R.string.pref_auto_check_updates),
@@ -527,7 +543,12 @@ fun SettingsScreen(
                 )
                 ClickPreferenceRow(
                     title = stringResource(R.string.pref_check_update),
-                    summary = stringResource(R.string.pref_check_update_summary),
+                    summary = if (updateCheckRunning) {
+                        stringResource(R.string.update_checking)
+                    } else {
+                        stringResource(R.string.pref_check_update_summary)
+                    },
+                    showProgress = updateCheckRunning,
                     onClick = { checkForUpdates() },
                 )
             }
@@ -623,6 +644,7 @@ private fun ClickPreferenceRow(
     modifier: Modifier = Modifier,
     summary: String? = null,
     enabled: Boolean = true,
+    showProgress: Boolean = false,
 ) {
     PreferenceRow(
         title = title,
@@ -630,11 +652,20 @@ private fun ClickPreferenceRow(
         enabled = enabled,
         onClick = onClick,
         // 有箭头才是"点进去"的行；开关行由 Switch 自己表达，禁用行不给箭头，
-        // 避免"看起来能点但点不动"
-        trailing = if (enabled) {
-            { PreferenceChevron() }
-        } else {
-            null
+        // 避免"看起来能点但点不动"；进行中的网络操作把箭头换成转圈。
+        trailing = when {
+            showProgress -> {
+                {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                    )
+                }
+            }
+            enabled -> {
+                { PreferenceChevron() }
+            }
+            else -> null
         },
     )
 }

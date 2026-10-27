@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  转屏（竖屏 → 横屏）：Material「screen_rotation」。
+
+  原始字形是满幅的（墨迹覆盖整个 24×24 视口），直接按 26dp 画出来会比底栏其他图标
+  明显大一圈。这里把内容缩到 0.78 并居中：墨迹约 18.7 单位，与音轨、字幕、倍速、
+  更多等图标（16~20 单位）处于同一光学尺寸。
+
+  横屏方向用同一形状的镜像（ic_rotate_to_portrait_white_24dp），两个方向同族、
+  箭头方向相反，不会出现「点一下换了另一种图标」的观感。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <group
+        android:pivotX="12"
+        android:pivotY="12"
+        android:scaleX="0.78"
+        android:scaleY="0.78">
+        <path
+            android:fillColor="#ffffff"
+            android:pathData="M16.48,2.52c3.27,1.55 5.61,4.72 5.97,8.48h1.5C23.44,4.84 18.29,0 12,0l-0.66,0.03 3.81,3.81 1.33,-1.32zM10.23,1.75c-0.59,-0.59 -1.54,-0.59 -2.12,0L1.75,8.11c-0.59,0.59 -0.59,1.54 0,2.12l12.02,12.02c0.59,0.59 1.54,0.59 2.12,0l6.36,-6.36c0.59,-0.59 0.59,-1.54 0,-2.12L10.23,1.75zM14.83,21.19L2.81,9.17l6.36,-6.36 12.02,12.02 -6.36,6.36zM7.52,21.48C4.25,19.94 1.91,16.76 1.55,13H0.05C0.56,19.16 5.71,24 12,24l0.66,-0.03 -3.81,-3.81 -1.33,1.32z" />
+    </group>
+</vector>

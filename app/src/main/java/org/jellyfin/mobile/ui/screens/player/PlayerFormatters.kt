@@ -41,6 +41,17 @@ fun formatBitrate(bitrate: Double): String {
     return formatted + unit
 }
 
+/**
+ * 移动网络下的流量估算：按码率换算每分钟消耗量（十进制 MB）。
+ *
+ * 播放前确认框需要给出「继续播会花多少流量」的决策依据，只写码率（Mbps）对多数用户
+ * 没有直观概念。1 Mbps ≈ 7.5 MB/分钟。
+ */
+fun formatDataPerMinute(bitrate: Int): String {
+    val megabytes = bitrate * 60.0 / 8 / 1_000_000
+    return "%.0f MB".format(Locale.getDefault(), megabytes)
+}
+
 /** 文件大小格式化：B / KB / MB / GB / TB。 */
 fun formatFileSize(bytes: Long): String {
     val units = arrayOf("B", "KB", "MB", "GB", "TB")

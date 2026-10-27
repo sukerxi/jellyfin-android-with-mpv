@@ -20,3 +20,4 @@ build
 /regression-*/
 /perf-review-*.md
 /.verify
+/.emulator_stdout.log

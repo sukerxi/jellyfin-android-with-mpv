@@ -1,6 +1,8 @@
 package org.jellyfin.mobile.ui.screens.player
 
 import android.app.PictureInPictureParams
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.res.Configuration
 import android.graphics.Rect
 import android.view.View
@@ -9,6 +11,7 @@ import android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -21,15 +24,18 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -61,6 +67,8 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -138,8 +146,20 @@ private const val SEEK_UI_SETTLE_TIMEOUT_MS = 1000L
  * 这里保留一层滞回作为兜底：万一某条路径仍出现短暂的 READY 闪烁（如网络抖动导致
  * paused-for-cache 快速翻转），指示器保持挂载、旋转不中断——不确定态进度条一旦被
  * 销毁重建，旋转就会从 0° 重启，视觉上即是卡顿。
+ *
+ * 真正的连续性由「起播前 + 缓冲中」合成单条可见性状态保证（见 [PlayerScreen] 里
+ * showLoadingIndicator 的注释），因此这里不需要长延迟；剩下的时间交给淡出动画，
+ * 指示器不会在首帧上停留。
  */
-private const val LOADING_INDICATOR_HIDE_DELAY_MS = 400L
+private const val LOADING_INDICATOR_HIDE_DELAY_MS = 250L
+
+/** 加载指示器淡入 / 淡出时长（毫秒）：入场要快，出场略慢，避免首帧上「啪」地消失。 */
+private const val LOADING_INDICATOR_FADE_IN_MS = 150
+private const val LOADING_INDICATOR_FADE_OUT_MS = 180
+
+/** 控件层淡入 / 淡出时长（毫秒）：自动收起、点按收起、起播完成后的收起共用同一条过渡。 */
+private const val CONTROLS_FADE_IN_MS = 120
+private const val CONTROLS_FADE_OUT_MS = 140
 
 /** 加载指示器补上说明文案的延迟（毫秒）：前几秒保持纯转圈，避免一闪而过的提示。 */
 private const val LOADING_HINT_DELAY_MS = 3_000L
@@ -312,27 +332,42 @@ fun PlayerScreen(
     // 加载指示器。三段时间线：
     // - 起播前（还在向服务端要播放信息，mediaSource 仍为空）立刻显示：此前这段时间
     //   只有一块黑屏，网络慢时用户完全不知道应用在做什么；
-    // - 缓冲态沿用 400ms 滞回（见 LOADING_INDICATOR_HIDE_DELAY_MS），mpv 状态机按
+    // - 缓冲态沿用滞回（见 LOADING_INDICATOR_HIDE_DELAY_MS），mpv 状态机按
     //   ExoPlayer 语义修复后仍可能出现的 READY 闪烁不会让转圈反复重启；
     // - 3s 后补一句说明，12s 仍未就绪给「重试 / 退出」——长时间卡在网络上时，
     //   用户不必靠猜，也不用退出重进才能重来。
+    //
+    // 关键：可见性由**一条**状态驱动，把「起播前」「播放器还没就绪」「缓冲中」合成同一个
+    // 等待区间。之前几段各自驱动、最后 OR 起来，媒体源解析完成（preparingPlayback 立刻变假）
+    // 到播放器真正进入 BUFFERING 之间存在一段空档（播放器正在创建 / 处于 IDLE）：指示器被
+    // 销毁后马上重建，CircularProgressIndicator 的不确定态动画从 0° 重新开始——用户看到的
+    // 就是「转圈突然跳一下」。合成之后这条空档不存在，同一个指示器一路转到首帧。
     val isBuffering = playerState == Player.STATE_BUFFERING
-    var bufferingIndicatorVisible by remember { mutableStateOf(false) }
-    LaunchedEffect(isBuffering) {
-        if (isBuffering) {
-            bufferingIndicatorVisible = true
-        } else {
-            delay(LOADING_INDICATOR_HIDE_DELAY_MS)
-            bufferingIndicatorVisible = false
-        }
-    }
     val preparingPlayback = mediaSource == null && playbackFailure == null &&
         pendingMobileDataRequest == null && !closingSoon.value && !playbackEnded.value
-    val showLoadingIndicator = preparingPlayback || bufferingIndicatorVisible
+    val waitingForPlayback = playbackFailure == null &&
+        pendingMobileDataRequest == null &&
+        !closingSoon.value && !playbackEnded.value &&
+        (
+            mediaSource == null ||
+                isBuffering ||
+                playerState == null ||
+                playerState == Player.STATE_IDLE
+            )
 
-    var loadingStage by remember { mutableStateOf(PlayerLoadingStage.ACTIVE) }
+    var showLoadingIndicator by remember { mutableStateOf(true) }
     // 每次重试自增，让下面的计时序列从头开始
     var loadingAttempt by remember { mutableIntStateOf(0) }
+    LaunchedEffect(waitingForPlayback, loadingAttempt) {
+        if (waitingForPlayback) {
+            showLoadingIndicator = true
+        } else {
+            delay(LOADING_INDICATOR_HIDE_DELAY_MS)
+            showLoadingIndicator = false
+        }
+    }
+
+    var loadingStage by remember { mutableStateOf(PlayerLoadingStage.ACTIVE) }
     LaunchedEffect(showLoadingIndicator, preparingPlayback, loadingAttempt) {
         loadingStage = PlayerLoadingStage.ACTIVE
         if (!showLoadingIndicator) return@LaunchedEffect
@@ -389,6 +424,11 @@ fun PlayerScreen(
         orientationListener.disable()
         activity.lockOrientation()
         peekUnlockButton()
+        // 锁定后控件与解锁按钮都会按超时消失；没有任何提示时用户会以为应用卡死或触控失灵。
+        snackbarController.show(
+            context.getString(R.string.playback_locked_hint),
+            duration = SnackbarDuration.Long,
+        )
     }
 
     fun unlockScreen() {
@@ -703,6 +743,24 @@ fun PlayerScreen(
         }
     }
 
+    // 起播完成即收起控件（每次会话只做一次）。
+    //
+    // 起播阶段控件是挂着的（用户需要知道「正在做什么」），一旦首帧出来、缓冲结束，
+    // 画面本身才是主角 —— 这时候再让控件占满一个自动隐藏时长纯属干等。播放器类应用的
+    // 通行做法是「加载完成 = 让出画面」。
+    //
+    // 只在本次会话第一次真正播起来时触发：中途缓冲（网络抖动）结束时，若用户正开着菜单
+    // 或在看进度，收起控件反而是干扰。
+    var initialLoadFinished by remember { mutableStateOf(false) }
+    LaunchedEffect(showLoadingIndicator, isPlaying, controlsSuppressed, controlsTimeoutMs) {
+        if (initialLoadFinished || showLoadingIndicator || !isPlaying) return@LaunchedEffect
+        initialLoadFinished = true
+        val timeout = controlsTimeoutMs
+        if (controlsVisible && !controlsSuppressed && timeout > 0 && !isScreenReaderActive()) {
+            controlsVisible = false
+        }
+    }
+
     // Seek target hold-off: after a scrub-seek the progress bar keeps showing the target
     // position until the player's reported position reaches it. The official progress state
     // refreshes on POSITION_DISCONTINUITY, but mpv still reports the pre-seek time-pos until
@@ -927,7 +985,10 @@ fun PlayerScreen(
                 AspectRatioFrameLayout.RESIZE_MODE_FIT
             }
         },
-        onShowControls = { showControls() },
+        // 双击只做「跳转 / 暂停」这两件事：不再顺手把控件弹出来。以前每次双击都会
+        // showControls()，控件可见时用户的第一次单击又只会把控件收起——于是「双击暂停」
+        // 需要三下才生效。双击时顺手收起控件（画面让位给反馈图标），语义才对。
+        onHideControls = { if (controlsVisible) controlsVisible = false },
         // 双击跳转量与快进/快退按钮共用服务端下发的步长，文案必须反映真实值，
         // 否则用户会以为自己跳的是固定 10 秒。
         seekStepLabel = { forward ->
@@ -953,7 +1014,8 @@ fun PlayerScreen(
 
     // 返回键交给宿主（唯一的仲裁点）派发，本屏只声明"按下返回时怎么处理"。
     // 浮层在网页之上，所以它的返回语义永远优先于 webapp 的 SPA 后退：
-    // 先关面板/菜单，再关闭播放器；锁屏时吞掉按键（解锁按钮才是出口）。
+    // 先关面板/菜单；控件可见时先把控件收起（播放不中断），再按一次才退出播放器；
+    // 锁屏时吞掉按键（解锁按钮才是出口）。
     backDispatcher.RegisterBackHandler {
         when {
             infoPanelVisible || episodePickerVisible || expandedMenu != null || compareVisible -> {
@@ -962,8 +1024,10 @@ fun PlayerScreen(
                 episodePickerVisible = false
                 compareVisible = false
             }
-            !locked -> closePlayer()
-            // Locked: swallow the press, the unlock button closes the player
+            locked -> Unit
+            // 播放失败卡片覆盖在控件之上，返回应直接离开而不是先空收一次控件。
+            playbackFailure == null && controlsVisible -> controlsVisible = false
+            else -> closePlayer()
         }
     }
 
@@ -1054,21 +1118,27 @@ fun PlayerScreen(
             // Loading indicator - a Material3 spinner restyled to be thick enough to read at
             // this size and deliberately polished: 6dp stroke, 24%-alpha track, rounded caps.
             //
-            // Visibility is driven by the hysteretic state above, NOT by the raw buffering
-            // state: mpv's state machine now follows ExoPlayer semantics (READY only once
-            // playback can actually proceed), and the hysteresis absorbs any residual flicker
-            // - disposing and recreating the indicator restarts its rotation from 0 degrees,
-            // which is exactly what made it stutter.
+            // Visibility is driven by the single continuous state above, NOT by the raw
+            // buffering state: mpv's state machine now follows ExoPlayer semantics (READY only
+            // once playback can actually proceed), and the synthesised state absorbs any
+            // residual flicker - disposing and recreating the indicator restarts its rotation
+            // from 0 degrees, which is exactly what made it stutter.
+            //
+            // The fade keeps the unmount off-screen: the spinner leaves as a fade instead of
+            // disappearing between two frames, so handing over to the first video frame reads
+            // as one motion rather than a jump.
             //
             // The wait is explained in stages (see loadingStage): a bare spinner for the
             // first few seconds, a short label after that, and retry/exit actions once the
             // wait stops looking like normal buffering.
-            if (showLoadingIndicator) {
+            AnimatedVisibility(
+                visible = showLoadingIndicator,
+                enter = fadeIn(tween(LOADING_INDICATOR_FADE_IN_MS)),
+                exit = fadeOut(tween(LOADING_INDICATOR_FADE_OUT_MS)),
+                modifier = Modifier.align(Alignment.Center),
+            ) {
                 val indicatorColor = MaterialTheme.colorScheme.primary
-                Column(
-                    modifier = Modifier.align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(64.dp),
                         color = indicatorColor,
@@ -1181,7 +1251,14 @@ fun PlayerScreen(
         }
 
         // Controls
-        if (controlsVisible) {
+        // 控件层：整层淡入淡出。自动收起、点按收起、起播完成后的收起共用同一条
+        // 过渡，不再是「一帧之内整层消失/出现」。
+        AnimatedVisibility(
+            visible = controlsVisible,
+            enter = fadeIn(tween(CONTROLS_FADE_IN_MS)),
+            exit = fadeOut(tween(CONTROLS_FADE_OUT_MS)),
+            modifier = Modifier.matchParentSize(),
+        ) {
             PlayerControls(
                 state = PlayerControlsState(
                     title = title,
@@ -1205,6 +1282,8 @@ fun PlayerScreen(
                     // 与下面 onToggleFullscreen 的判定保持一致：横屏（或未知）视频走转屏，
                     // 竖屏视频才是沉浸式切换。
                     rotatesOnFullscreen = videoStream == null || videoStream.isLandscape,
+                    // 加载等待期间中央那排按钮让位给转圈（见 PlayerControlsState.loading）。
+                    loading = showLoadingIndicator,
                 ),
                 menus = PlayerMenusState(
                     expanded = expandedMenu,
@@ -1314,9 +1393,10 @@ fun PlayerScreen(
                     onUserInteraction = { controlsToken++ },
                     onTouchActiveChanged = { active -> touchActive = active },
                     onTapBackground = { toggleControls() },
+                    onDoubleTap = { position -> gestureHandler.onDoubleTap(position) },
                 ),
                 modifier = Modifier
-                    .matchParentSize()
+                    .fillMaxSize()
                     .padding(controlsPadding),
             )
         }
@@ -1343,6 +1423,13 @@ fun PlayerScreen(
             PlaybackInfoPanel(
                 model = infoModel,
                 onDismiss = { infoPanelVisible = false },
+                onCopy = {
+                    val title = context.getString(R.string.playback_info_title)
+                    val text = infoModel.toPlainText(title)
+                    context.getSystemService(ClipboardManager::class.java)
+                        ?.setPrimaryClip(ClipData.newPlainText(title, text))
+                    snackbarController.show(context.getString(R.string.playback_info_copied))
+                },
                 controlsBounds = controlsPadding,
             )
         }
@@ -1379,36 +1466,64 @@ fun PlayerScreen(
         // 移动网络播放确认：默认推荐低码率播放，也可选择继续原画质或取消（退出播放器返回网页）。
         pendingMobileDataRequest?.let { request ->
             val mobileDataBitrate = appPreferences.mobileDataMaxBitrate
-            AlertDialog(
-                // 点弹窗外部或按返回不处理：这里的三个选项都是「是否开始播放」的决策，
-                // 误触外部等同「取消播放」过于激烈。要退出播放，请走显式的「取消」。
+            val qualityLabel = stringResource(
+                when (mobileDataBitrate) {
+                    Constants.MOBILE_DATA_BITRATE_480P -> R.string.mobile_data_bitrate_480p
+                    Constants.MOBILE_DATA_BITRATE_1080P -> R.string.mobile_data_bitrate_1080p
+                    else -> R.string.mobile_data_bitrate_720p
+                },
+            )
+            Dialog(
+                // 三个选项都是「是否开始播放」的明确决策：误触外部或按返回不应等同于取消播放。
                 onDismissRequest = {},
-                title = { Text(stringResource(R.string.mobile_data_playback_dialog_title)) },
-                text = {
-                    Text(
-                        stringResource(
-                            R.string.mobile_data_playback_dialog_message,
-                            formatBitrate(mobileDataBitrate.toDouble()),
-                        ),
-                    )
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            pendingMobileDataRequest = null
-                            scope.launch { startPlayback(request, mobileDataBitrate) }
-                        },
-                    ) {
-                        Text(stringResource(R.string.mobile_data_playback_play_low_bitrate))
-                    }
-                },
-                dismissButton = {
-                    Row {
-                        TextButton(
+                properties = DialogProperties(
+                    dismissOnBackPress = false,
+                    dismissOnClickOutside = false,
+                ),
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shape = RoundedCornerShape(28.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .widthIn(max = 420.dp),
+                ) {
+                    Column(modifier = Modifier.padding(24.dp)) {
+                        Text(
+                            text = stringResource(R.string.mobile_data_playback_dialog_title),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.headlineSmall,
+                        )
+                        Text(
+                            text = stringResource(
+                                R.string.mobile_data_playback_dialog_message,
+                                qualityLabel,
+                                formatDataPerMinute(mobileDataBitrate),
+                            ),
+                            modifier = Modifier.padding(top = 12.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        // 竖排按钮：三个 TextButton 平铺时看起来同等重要，窄屏还会换行挤压。
+                        Button(
+                            onClick = {
+                                pendingMobileDataRequest = null
+                                scope.launch { startPlayback(request, mobileDataBitrate) }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 24.dp),
+                        ) {
+                            Text(stringResource(R.string.mobile_data_playback_play_low_bitrate))
+                        }
+                        OutlinedButton(
                             onClick = {
                                 pendingMobileDataRequest = null
                                 scope.launch { startPlayback(request, null) }
                             },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
                         ) {
                             Text(stringResource(R.string.mobile_data_playback_play_original))
                         }
@@ -1417,12 +1532,15 @@ fun PlayerScreen(
                                 pendingMobileDataRequest = null
                                 closePlayer()
                             },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp),
                         ) {
-                            Text(stringResource(android.R.string.cancel))
+                            Text(stringResource(R.string.mobile_data_playback_cancel))
                         }
                     }
-                },
-            )
+                }
+            }
         }
     }
 }

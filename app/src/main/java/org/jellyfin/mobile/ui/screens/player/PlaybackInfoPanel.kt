@@ -25,6 +25,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -83,6 +84,18 @@ data class PlaybackInfoRow(
     val label: String,
     val value: String,
 )
+
+/** 导出为纯文本：反馈播放问题时可直接粘贴，不必逐行长按选取。 */
+fun PlaybackInfoModel.toPlainText(title: String): String = buildString {
+    appendLine(title)
+    itemName?.takeUnless(String::isBlank)?.let { appendLine(it) }
+    sections.forEach { section ->
+        appendLine()
+        appendLine(section.title)
+        if (section.chips.isNotEmpty()) appendLine(section.chips.joinToString(" · "))
+        section.rows.forEach { row -> appendLine("${row.label}: ${row.value}") }
+    }
+}
 
 private data class PlaybackInfoLabels(
     val sectionOverview: String,
@@ -377,6 +390,7 @@ private fun buildEngineInfo(
 fun PlaybackInfoPanel(
     model: PlaybackInfoModel,
     onDismiss: () -> Unit,
+    onCopy: () -> Unit,
     controlsBounds: PaddingValues = PaddingValues(),
     modifier: Modifier = Modifier,
 ) {
@@ -419,6 +433,13 @@ fun PlaybackInfoPanel(
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
+                    }
+                    TextButton(onClick = onCopy) {
+                        Text(
+                            text = stringResource(R.string.playback_info_copy),
+                            color = AccentColor,
+                            fontSize = 13.sp,
+                        )
                     }
                     IconButton(onClick = onDismiss, modifier = Modifier.size(40.dp)) {
                         Icon(

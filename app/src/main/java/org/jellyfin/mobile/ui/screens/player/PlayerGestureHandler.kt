@@ -97,7 +97,7 @@ class PlayerGestureHandler(
     private val onRewind: () -> Unit,
     private val onPressSpeedUp: (Boolean) -> Unit,
     private val onZoomChanged: (Boolean) -> Unit,
-    private val onShowControls: () -> Unit,
+    private val onHideControls: () -> Unit,
     /** 双击跳转量的可读文案（`+10s` / `-10s`），步长来自服务端偏好。 */
     private val seekStepLabel: (forward: Boolean) -> String,
 ) {
@@ -167,8 +167,10 @@ class PlayerGestureHandler(
             if (forward) onFastForward() else onRewind()
         }
 
-        // Cancel the auto-hide timer and restart it after seeking
-        onShowControls()
+        // 双击是「对画面做的事」，不该顺手把控件栏叫出来：那会让紧接着的双击变成
+        // 「第一下收控件、第二下才开始计数」，用户体感就是「双击要按三下」。
+        // 这里反过来——有控件就收起，让出画面给反馈图标。
+        onHideControls()
     }
 
     /**
@@ -507,7 +509,7 @@ fun rememberPlayerGestureHandler(
     onRewind: () -> Unit,
     onPressSpeedUp: (Boolean) -> Unit,
     onZoomChanged: (Boolean) -> Unit,
-    onShowControls: () -> Unit,
+    onHideControls: () -> Unit,
     seekStepLabel: (forward: Boolean) -> String,
     longPressTimeoutMs: Long,
     exclusionSizeVerticalPx: Int,
@@ -546,7 +548,7 @@ fun rememberPlayerGestureHandler(
             onRewind = onRewind,
             onPressSpeedUp = onPressSpeedUp,
             onZoomChanged = onZoomChanged,
-            onShowControls = onShowControls,
+            onHideControls = onHideControls,
             seekStepLabel = seekStepLabel,
         )
     }

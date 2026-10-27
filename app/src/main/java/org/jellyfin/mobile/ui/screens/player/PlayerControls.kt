@@ -5,6 +5,7 @@ import android.view.ViewGroup
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,6 +34,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -111,6 +113,14 @@ data class PlayerControlsState(
      * 否则同一个图标在两种视频上做两件事，用户无法预判。
      */
     val rotatesOnFullscreen: Boolean = false,
+    /**
+     * 是否处于加载等待（起播前 / 缓冲中）。
+     *
+     * 为 true 时隐藏中央那排按钮：加载指示器就画在正中间，两者叠在一起时蓝色圆环会
+     * 绕着播放键转，播放键还会在就绪的瞬间从「播放」变成「暂停」——看起来就像指示器
+     * 突然跳了一下。让转圈独占画面中心，就绪后再把按钮淡回来。
+     */
+    val loading: Boolean = false,
 )
 
 /** 下拉菜单渲染所需的全部状态。 */
@@ -166,6 +176,13 @@ class PlayerControlsActions(
      * 控件层挡住，点击等于无效 —— 于是「想收起控件」只能干等。
      */
     val onTapBackground: () -> Unit,
+    /**
+     * 控件层空白处的双击，转发给手势处理器（暂停/播放或快进/快退，取决于用户设置）。
+     *
+     * 控件可见时手势层被控件层挡住，双击收不到——不转发的话用户得先点一下收起控件、
+     * 再双击，体感就是「双击要按三下」。
+     */
+    val onDoubleTap: (Offset) -> Unit,
 )
 
 /** DefaultTimeBar 的 scrub 监听转发（字段由 SideEffect 保持最新）。 */
@@ -204,6 +221,7 @@ fun PlayerControls(
     val onUserInteraction by rememberUpdatedState(actions.onUserInteraction)
     val onTouchActiveChanged by rememberUpdatedState(actions.onTouchActiveChanged)
     val onTapBackground by rememberUpdatedState(actions.onTapBackground)
+    val onDoubleTap by rememberUpdatedState(actions.onDoubleTap)
 
     Box(
         modifier = modifier
@@ -211,29 +229,40 @@ fun PlayerControls(
             .background(ControlsScrimBrush)
             // 非消费型观察者：任何一次按下都算「用户还在操作」，交给宿主重置自动隐藏计时，
             // 并在按住期间挂起隐藏。不用 clickable，避免吞掉下面按钮/进度条的点击。
-            // 同一个观察者顺带识别「轻点空白处」= 立刻收起控件：控件可见时手势层被这一层挡住，
-            // 单击只能在这里处理，否则想收起控件就只能等自动隐藏计时走完。
             .pointerInput(Unit) {
-                val touchSlop = viewConfiguration.touchSlop
-                val longPressTimeoutMs = android.view.ViewConfiguration.getLongPressTimeout()
                 awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
+                    awaitFirstDown(requireUnconsumed = false)
                     onUserInteraction()
                     onTouchActiveChanged(true)
-                    // 抬起后才判断「这是不是一次轻点空白处」：向下传给子控件的触摸（按钮、
-                    // 进度条、菜单入口）会消费事件，按太久或滑动超过阈值也一律不算轻点。
-                    val up = waitForUpOrCancellation()
-                    if (up != null && !down.isConsumed && !up.isConsumed) {
-                        val moved = (up.position - down.position).getDistance()
-                        val heldMs = up.uptimeMillis - down.uptimeMillis
-                        if (moved <= touchSlop && heldMs < longPressTimeoutMs) onTapBackground()
-                    }
                     // 抬手或被系统取消都要解除挂起，否则控件会永久留在屏幕上。
+                    waitForUpOrCancellation()
                     onTouchActiveChanged(false)
                     onUserInteraction()
                 }
             },
     ) {
+        // 空白处的单击 / 双击。
+        //
+        // 单独一层、放在所有控件**下面**（同级后绘制者优先命中）：点按钮时事件根本不会到
+        // 这里，点空白才由这一层收下。反过来说，这一层绝不能挂在父节点上——detectTapGestures
+        // 会 consume 掉 DOWN，父节点的这个 consume 会让子按钮 clickable 的后续事件判定成
+        // 「已被消费」而取消，整个控件栏就点不动了（第一版就踩了这个坑）。
+        //
+        // detectTapGestures 自带单击/双击区分（单击要等一个双击窗口才回调），这也是为什么
+        // 收起控件会慢约 300ms：不和双击抢手势，就只能等窗口过期。
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = { onTapBackground() },
+                        onDoubleTap = { offset -> onDoubleTap(offset) },
+                        // 长按不算轻点：按住看画面再松手不该把控件收走。
+                        onLongPress = {},
+                    )
+                },
+        )
+
         // Top bar: back button + title
         Row(
             modifier = Modifier
@@ -263,50 +292,53 @@ fun PlayerControls(
         }
 
         // Center controls: previous / previous chapter / play-pause / next chapter / next
-        Row(
-            modifier = Modifier.align(Alignment.Center),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            PlayerIconButton(
-                onClick = actions.onPrevious,
-                iconRes = R.drawable.ic_skip_previous_black_32dp,
-                contentDescription = stringResource(R.string.playback_previous),
-                backdrop = true,
-            )
-            if (state.hasChapters) {
+        // 加载等待期间整排隐藏：加载指示器就画在正中，叠在一起等于让蓝圈绕着播放键转。
+        if (!state.loading) {
+            Row(
+                modifier = Modifier.align(Alignment.Center),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 PlayerIconButton(
-                    onClick = actions.onPreviousChapter,
-                    iconRes = R.drawable.ic_skip_previous_chapter_black_32dp,
-                    contentDescription = stringResource(R.string.playback_previous_chapter),
+                    onClick = actions.onPrevious,
+                    iconRes = R.drawable.ic_skip_previous_black_32dp,
+                    contentDescription = stringResource(R.string.playback_previous),
+                    backdrop = true,
+                )
+                if (state.hasChapters) {
+                    PlayerIconButton(
+                        onClick = actions.onPreviousChapter,
+                        iconRes = R.drawable.ic_skip_previous_chapter_black_32dp,
+                        contentDescription = stringResource(R.string.playback_previous_chapter),
+                        backdrop = true,
+                    )
+                }
+                PlayerIconButton(
+                    onClick = actions.onTogglePlayPause,
+                    iconRes = if (state.isPlaying) R.drawable.ic_pause_black_42dp else R.drawable.ic_play_black_42dp,
+                    contentDescription = stringResource(
+                        if (state.isPlaying) R.string.playback_pause else R.string.playback_play,
+                    ),
+                    buttonSize = 66.dp,
+                    iconSize = 42.dp,
+                    backdrop = true,
+                )
+                if (state.hasChapters) {
+                    PlayerIconButton(
+                        onClick = actions.onNextChapter,
+                        iconRes = R.drawable.ic_skip_next_chapter_black_32dp,
+                        contentDescription = stringResource(R.string.playback_next_chapter),
+                        backdrop = true,
+                    )
+                }
+                PlayerIconButton(
+                    onClick = actions.onNext,
+                    iconRes = R.drawable.ic_skip_next_black_32dp,
+                    contentDescription = stringResource(R.string.playback_next),
+                    enabled = state.hasNext,
                     backdrop = true,
                 )
             }
-            PlayerIconButton(
-                onClick = actions.onTogglePlayPause,
-                iconRes = if (state.isPlaying) R.drawable.ic_pause_black_42dp else R.drawable.ic_play_black_42dp,
-                contentDescription = stringResource(
-                    if (state.isPlaying) R.string.playback_pause else R.string.playback_play,
-                ),
-                buttonSize = 66.dp,
-                iconSize = 42.dp,
-                backdrop = true,
-            )
-            if (state.hasChapters) {
-                PlayerIconButton(
-                    onClick = actions.onNextChapter,
-                    iconRes = R.drawable.ic_skip_next_chapter_black_32dp,
-                    contentDescription = stringResource(R.string.playback_next_chapter),
-                    backdrop = true,
-                )
-            }
-            PlayerIconButton(
-                onClick = actions.onNext,
-                iconRes = R.drawable.ic_skip_next_black_32dp,
-                contentDescription = stringResource(R.string.playback_next),
-                enabled = state.hasNext,
-                backdrop = true,
-            )
         }
 
         // Bottom: progress row + button bar
@@ -557,19 +589,28 @@ private fun BottomBar(
         PlayerMenuAnchor(modifier = Modifier.weight(1f)) {
             PlayerIconButton(
                 onClick = actions.onToggleFullscreen,
-                // 横屏视频时这个按钮实际是「旋转设备」，图标也换成转屏符号，让动作一眼可辨；
-                // 之前用全屏图标 + 9sp 的 ↻ 角标提示，角标小到像误触残留，反而成了噪音。
+                // 横屏视频时这个按钮实际是「旋转设备」：竖屏→横屏、横屏→竖屏。
+                // 两个方向用**同一组**转屏图标（同一形状、方向相反），不掺全屏图标——
+                // 之前竖屏是转屏图标、横屏变成「退出全屏」，动作没变图标却换了家族，
+                // 看起来像换了个功能。图标内部已把内容缩到与其他底栏图标同一光学尺寸，
+                // 不会比旁边的按钮显大。
                 iconRes = when {
+                    state.rotatesOnFullscreen -> if (state.isFullscreen) {
+                        R.drawable.ic_rotate_to_portrait_white_24dp
+                    } else {
+                        R.drawable.ic_rotate_to_landscape_white_24dp
+                    }
                     state.isFullscreen -> R.drawable.ic_fullscreen_exit_white_32dp
-                    state.rotatesOnFullscreen -> R.drawable.ic_screen_rotation_white_32dp
                     else -> R.drawable.ic_fullscreen_enter_white_32dp
                 },
                 // 横屏视频时这个按钮其实是「转屏」，描述如实说明动作，避免用户以为
                 // 点了会变成别的分辨率；竖屏视频才是真正的沉浸式切换。
                 contentDescription = stringResource(
                     when {
-                        state.isFullscreen -> R.string.playback_exit_fullscreen
+                        state.rotatesOnFullscreen && state.isFullscreen ->
+                            R.string.playback_rotate_portrait
                         state.rotatesOnFullscreen -> R.string.playback_rotate_fullscreen
+                        state.isFullscreen -> R.string.playback_exit_fullscreen
                         else -> R.string.playback_fullscreen
                     },
                 ),

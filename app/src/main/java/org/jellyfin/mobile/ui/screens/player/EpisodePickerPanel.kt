@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -22,6 +23,9 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
@@ -31,13 +35,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -179,8 +183,26 @@ fun EpisodePickerPanel(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 if (items.isNullOrEmpty()) {
-                    // Metadata still loading
-                    Spacer(modifier = Modifier.height(8.dp))
+                    // 元数据未加载：此前只留一个空 Spacer，面板看起来像坏了。
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 20.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = stringResource(R.string.episode_picker_loading),
+                            color = TextCount,
+                            fontSize = 13.sp,
+                        )
+                    }
                 } else {
                     LazyVerticalGrid(
                         columns = GridCells.Adaptive(minSize = 64.dp),
@@ -214,16 +236,20 @@ private fun EpisodeCell(
         item.selected -> AccentColor
         else -> IdleColor
     }
+    // 已看集此前用 50% 透明度表达，和「不可用」的视觉语言冲突；改为对勾角标，
+    // 同时用 stateDescription 让读屏用户也能得到这个信息。
+    val watchedLabel = stringResource(R.string.episode_picker_watched)
     Box(
         modifier = Modifier
             // 固定 48dp 高度在 200% 字体下会把文字裁掉；改用最小高度让格子随字体长高，
             // 同时保证触控高度不低于 Material 的最小目标。
             .heightIn(min = 48.dp)
             .background(background, RoundedCornerShape(CellCornerRadius))
-            // 已播放剧集 50% 透明度（与旧版 EpisodeAdapter 一致；选中项保持全不透明）
-            .alpha(if (item.played && !item.selected) 0.5f else 1f)
             .clickable(role = Role.Button, onClick = onClick)
-            .semantics { selected = item.selected }
+            .semantics {
+                selected = item.selected
+                if (item.played) stateDescription = watchedLabel
+            }
             .padding(vertical = 6.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -236,5 +262,16 @@ private fun EpisodeCell(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 6.dp),
         )
+        if (item.played) {
+            Icon(
+                imageVector = Icons.Filled.Check,
+                contentDescription = null,
+                tint = Color(0xB3FFFFFF),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 2.dp, end = 4.dp)
+                    .size(12.dp),
+            )
+        }
     }
 }
