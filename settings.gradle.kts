@@ -34,14 +34,35 @@ pluginManagement {
     }
 
     repositories {
-        gradlePluginPortal()
         // Google 专属插件（AndroidX / AGP）的 marker POM 与实际 artifact 必须由同一仓库提供
         googleHosted("https://dl.google.com/dl/android/maven2/")
         googleHosted("https://maven.aliyun.com/repository/google/")
+        // 插件与依赖都先走公共镜像：Gradle 会为每个插件按顺序在每个仓库查一次，
+        // 把共享出口的 Gradle Plugin Portal / Maven Central 排在前面，遇到 429 时
+        // 会直接 disable 该仓库、连带整条解析链失败（见构建 cnb-7p7-1k5ujrqnf）。
         publicMirror("https://mirrors.cloud.tencent.com/nexus/repository/maven-public/")
         publicMirror("https://maven.aliyun.com/repository/public/")
+        // 阿里云另有独立的 Gradle Plugin Portal 镜像：部分插件（gradle-kotlin-dsl-plugins
+        // 等 org.gradle.* 制品）在 repository/public 里没有，只在该镜像上。
+        publicMirror("https://maven.aliyun.com/repository/gradle-plugin/")
         publicMirror("https://repo.huaweicloud.com/repository/maven/")
-        mavenCentral()
-        google()
+        // 上面几个镜像仍未覆盖的插件（如 de.mannodermaus:android-junit5）走 Plugin Portal。
+        gradlePluginPortal()
+        // 官方源只兜底镜像同步空窗期可能缺失的 group（插件生态多为这些 group）。
+        mavenCentral {
+            content {
+                includeGroupByRegex("org\\.jetbrains(\\..*)?")
+                includeGroupByRegex("org\\.jetbrains\\.kotlin(\\..*)?")
+                includeGroupByRegex("org\\.kotlin(\\..*)?")
+                includeGroupByRegex("com\\.gradle(\\..*)?")
+            }
+        }
+        google {
+            content {
+                includeGroupByRegex("androidx(\\..*)?")
+                includeGroupByRegex("com\\.android(\\..*)?")
+                includeGroupByRegex("com\\.google(\\..*)?")
+            }
+        }
     }
 }
