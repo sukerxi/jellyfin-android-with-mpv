@@ -151,9 +151,11 @@
     <!-- 网页宿主连接错误分级：可重试（网络/超时/5xx）与不可恢复（证书）分开提示 -->
     <string name="web_error_title_retryable">Cannot reach the server</string>
     <string name="web_error_title_fatal">Connection failed</string>
+    <string name="web_error_title_webapp">Web interface failed to load</string>
     <string name="web_error_message_timeout">The server did not respond in time. Check the address and your network, then retry.</string>
     <string name="web_error_message_http">The server returned an error (%1$d).</string>
     <string name="web_error_message_ssl">The secure connection to the server could not be established.</string>
+    <string name="web_error_message_webapp">The server was reached, but its web interface did not finish loading. This usually happens on an unstable network.</string>
     <string name="web_error_message_generic">The page could not be loaded.</string>
     <!-- 选服页自动发现：不再常转圈，给出空态与重试 -->
     <string name="server_discovery_searching">Searching for servers…</string>

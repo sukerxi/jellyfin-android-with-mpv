@@ -45,6 +45,12 @@ data class WebLoadFailure(
         /** 断网、DNS 失败、连接被拒等：原地重试即可恢复。 */
         NETWORK,
 
+        /**
+         * 主框架已连上，但网页界面（bundle / 脚本分片）没有加载完成。
+         * 网络不稳定时最常见，重试即可恢复。
+         */
+        WEBAPP,
+
         /** 服务器返回 4xx/5xx：重启或升级中的服务器重试往往就好了。 */
         HTTP,
 
@@ -61,7 +67,7 @@ data class WebLoadFailure(
      */
     val retryable: Boolean
         get() = when (kind) {
-            Kind.NETWORK, Kind.TIMEOUT -> true
+            Kind.NETWORK, Kind.TIMEOUT, Kind.WEBAPP -> true
             Kind.HTTP -> httpStatus == null || httpStatus in 500..599
             Kind.SSL -> false
         }
@@ -75,6 +81,15 @@ abstract class JellyfinWebViewClient(
 ) : WebViewClientCompat() {
 
     abstract fun onConnectedToWebapp()
+
+    /** 首屏已渲染出实质内容（注入脚本探测）。 */
+    abstract fun onWebappRendered()
+
+    /**
+     * 首屏是否已渲染。渲染前的脚本加载失败都会留下黑屏（登录页出不来），
+     * 按致命错误整页替换；渲染后的失败属于 webapp 运行时问题，保留当前会话。
+     */
+    abstract fun isWebappRendered(): Boolean
 
     abstract fun onLoadFailed(failure: WebLoadFailure)
 
@@ -125,6 +140,16 @@ abstract class JellyfinWebViewClient(
         }
     }
 
+    /**
+     * 是否属于 webapp 自身的脚本资源（主 bundle 或代码分片）。
+     * `/native/` 下的资源由本地 assets 提供、不走网络，排除在外。
+     */
+    private fun WebResourceRequest.isWebappScript(): Boolean {
+        val path = url.path?.lowercase(Locale.ROOT) ?: return false
+        if (path.contains("/native/")) return false
+        return Constants.MAIN_BUNDLE_PATH_REGEX.matches(path) || path.endsWith(".js")
+    }
+
     override fun onReceivedHttpError(
         view: WebView,
         request: WebResourceRequest,
@@ -140,6 +165,13 @@ abstract class JellyfinWebViewClient(
                     httpStatus = errorResponse.statusCode,
                 ),
             )
+            return
+        }
+
+        // 首屏渲染不出来之前，任何脚本（bundle / 代码分片）的 HTTP 错误都会让 webapp
+        // 停在黑屏上，必须让用户看到原因与重试入口。
+        if (!isWebappRendered() && request.isWebappScript()) {
+            onLoadFailed(WebLoadFailure(kind = WebLoadFailure.Kind.WEBAPP, httpStatus = errorResponse.statusCode))
         }
     }
 
@@ -166,6 +198,13 @@ abstract class JellyfinWebViewClient(
                     description = description?.toString(),
                 ),
             )
+            return
+        }
+
+        // 首屏渲染之前的脚本失败同样致命：bundle 被拦截后还要走网络下载，网络不稳时
+        // 失败或卡住就是「能连上服务器但一直黑屏」，不能只记日志。
+        if (!isWebappRendered() && request.isWebappScript()) {
+            onLoadFailed(WebLoadFailure(kind = WebLoadFailure.Kind.WEBAPP, description = description?.toString()))
         }
     }
 

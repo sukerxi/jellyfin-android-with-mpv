@@ -16,7 +16,12 @@ import androidx.compose.runtime.setValue
  */
 @Stable
 class WebViewHostState {
-    /** webapp 是否已连接（主 bundle 已成功请求，页面已可交互）。 */
+    /**
+     * 主框架是否已连上：bundle 请求已被拦截、开始下载。
+     *
+     * 不代表首屏已渲染 —— 宿主另用渲染信号决定何时淡入 WebView，
+     * 返回键仲裁只需要"页面上是否已有可交互内容"的近似判断。
+     */
     var connected: Boolean by mutableStateOf(false)
         internal set
 }

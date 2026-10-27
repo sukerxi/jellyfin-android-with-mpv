@@ -44,10 +44,45 @@ import timber.log.Timber
 import java.util.UUID
 
 @Suppress("unused")
-class NativeInterface(private val context: Context) : KoinComponent {
+class NativeInterface(
+    private val context: Context,
+    private val webappLoadListener: WebappLoadListener? = null,
+) : KoinComponent {
     private val activityEventHandler: ActivityEventHandler = get()
     private val remoteVolumeProvider: RemoteVolumeProvider by inject()
     private val deviceProfileBuilder: DeviceProfileBuilder by inject()
+
+    /**
+     * 网页首屏加载过程中的关键信号，由注入脚本上报。
+     *
+     * 这些回调在 WebView 的 JS 桥线程执行，订阅方需要自行切回主线程。
+     */
+    interface WebappLoadListener {
+        /** 真正的 webapp bundle 加载完成（脚本已执行）。 */
+        fun onMainBundleLoaded()
+
+        /** 真正的 webapp bundle 加载失败（断网、5xx、连接被重置等）。 */
+        fun onMainBundleFailed(url: String?)
+
+        /** 首屏已渲染出实质内容。 */
+        fun onWebappRendered()
+    }
+
+    @JavascriptInterface
+    fun onWebappBundleLoaded() {
+        webappLoadListener?.onMainBundleLoaded()
+    }
+
+    @JavascriptInterface
+    fun onWebappBundleFailed(url: String?) {
+        Timber.e("webapp main bundle failed to load: %s", url)
+        webappLoadListener?.onMainBundleFailed(url)
+    }
+
+    @JavascriptInterface
+    fun onWebappRendered() {
+        webappLoadListener?.onWebappRendered()
+    }
 
     @SuppressLint("HardwareIds")
     @JavascriptInterface

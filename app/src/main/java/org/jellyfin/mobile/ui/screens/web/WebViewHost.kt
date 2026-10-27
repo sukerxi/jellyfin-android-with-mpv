@@ -77,6 +77,7 @@ import org.jellyfin.mobile.webapp.JellyfinWebViewClient
 import org.jellyfin.mobile.webapp.WebLoadFailure
 import org.jellyfin.mobile.webapp.WebappFunctionChannel
 import timber.log.Timber
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 常驻的网页宿主。
@@ -182,6 +183,10 @@ private fun WebViewHostContent(
 
     val assetsPathHandler = remember { AssetsPathHandler(context) }
 
+    // 首屏是否已渲染。渲染前的脚本加载失败都会留下黑屏，由 JellyfinWebViewClient 上报；
+    // 渲染后的失败属于 webapp 自己的运行时问题，不再整页替换。
+    val webappRendered = remember { AtomicBoolean(false) }
+
     val timeoutRunnable = remember {
         Runnable {
             state.connected = false
@@ -194,16 +199,84 @@ private fun WebViewHostContent(
     }
     val showLoadingRunnable = remember { Runnable { showLoading = true } }
 
+    /**
+     * 首屏渲染完成。
+     *
+     * 主 bundle 请求被拦截不代表页面已可用：真正的 bundle 还要走网络下载，下载完
+     * React 也才刚开始挂载。加载圈必须留到真正画出内容为止，否则中间那段就是黑屏。
+     */
+    fun markWebappRendered(webView: WebView) {
+        webappRendered.set(true)
+        webView.post {
+            webView.removeCallbacks(showLoadingRunnable)
+            webView.removeCallbacks(timeoutRunnable)
+            state.connected = true
+            showLoading = false
+            // 渲染成功说明之前判定失败的加载已经自愈（例如 bundle 最终下载完成）
+            loadFailure = null
+        }
+    }
+
+    fun handleLoadFailed(failure: WebLoadFailure) {
+        val webView = webViewHolder[0]
+        if (webView == null) {
+            onSelectServer(failure.retryable)
+            return
+        }
+        webView.post {
+            webView.removeCallbacks(timeoutRunnable)
+            webView.removeCallbacks(showLoadingRunnable)
+            state.connected = false
+            showLoading = false
+            loadFailure = failure
+        }
+    }
+
+    // 原生侧兜底：注入脚本没上报渲染、页面又确实画不出内容时，限时给出可重试错误页，
+    // 而不是让用户对着黑屏无限等待（WebView 自己的网络超时可能长达数分钟）。
+    val renderCheckRunnable = remember {
+        Runnable {
+            val webView = webViewHolder[0] ?: return@Runnable
+            if (webappRendered.get() || loadFailure != null) return@Runnable
+            webView.evaluateJavascript(WEBAPP_READY_PROBE_JS) { result ->
+                if (result == "true") {
+                    markWebappRendered(webView)
+                } else {
+                    Timber.w("webapp did not render in time, showing retryable error")
+                    handleLoadFailed(WebLoadFailure(WebLoadFailure.Kind.WEBAPP))
+                }
+            }
+        }
+    }
+
     fun reloadWebapp() {
         val webView = webViewHolder[0] ?: return
         loadFailure = null
         showLoading = false
+        webappRendered.set(false)
         state.connected = false
         webView.removeCallbacks(timeoutRunnable)
         webView.removeCallbacks(showLoadingRunnable)
+        webView.removeCallbacks(renderCheckRunnable)
         webView.loadUrl("${server.hostname.trimEnd('/')}/")
         webView.postDelayed(timeoutRunnable, Constants.INITIAL_CONNECTION_TIMEOUT)
         webView.postDelayed(showLoadingRunnable, Constants.SHOW_PROGRESS_BAR_DELAY)
+    }
+
+    // 注入脚本上报的加载信号，运行在 WebView 的 JS 桥线程，回调内部自行切主线程。
+    val webappLoadListener = object : NativeInterface.WebappLoadListener {
+        override fun onMainBundleLoaded() {
+            Timber.i("webapp main bundle loaded")
+        }
+
+        override fun onMainBundleFailed(url: String?) {
+            handleLoadFailed(WebLoadFailure(WebLoadFailure.Kind.WEBAPP))
+        }
+
+        override fun onWebappRendered() {
+            val webView = webViewHolder[0] ?: return
+            markWebappRendered(webView)
+        }
     }
 
     val jellyfinWebViewClient = remember {
@@ -220,27 +293,24 @@ private fun WebViewHostContent(
                 // dispatched to the main thread
                 webView.post {
                     webView.removeCallbacks(timeoutRunnable)
-                    webView.removeCallbacks(showLoadingRunnable)
                     state.connected = true
-                    showLoading = false
                     loadFailure = null
                     showBatterySnackbar = true
+                    // bundle 已开始下载：改由渲染检测兜底，超时仍然给可重试错误页
+                    webView.removeCallbacks(renderCheckRunnable)
+                    webView.postDelayed(renderCheckRunnable, Constants.WEBAPP_RENDER_TIMEOUT)
                 }
             }
 
+            override fun onWebappRendered() {
+                val webView = webViewHolder[0] ?: return
+                markWebappRendered(webView)
+            }
+
+            override fun isWebappRendered(): Boolean = webappRendered.get()
+
             override fun onLoadFailed(failure: WebLoadFailure) {
-                val webView = webViewHolder[0]
-                if (webView == null) {
-                    onSelectServer(failure.retryable)
-                    return
-                }
-                webView.post {
-                    webView.removeCallbacks(timeoutRunnable)
-                    webView.removeCallbacks(showLoadingRunnable)
-                    state.connected = false
-                    showLoading = false
-                    loadFailure = failure
-                }
+                handleLoadFailed(failure)
             }
         }
     }
@@ -257,7 +327,7 @@ private fun WebViewHostContent(
             },
         )
         settings.applyDefault()
-        addJavascriptInterface(NativeInterface(context), "NativeInterface")
+        addJavascriptInterface(NativeInterface(context, webappLoadListener), "NativeInterface")
         addJavascriptInterface(nativePlayer, "NativePlayer")
         addJavascriptInterface(externalPlayer, "ExternalPlayer")
         addJavascriptInterface(mediaSegments, "MediaSegments")
@@ -436,7 +506,15 @@ private fun WebViewLoadErrorOverlay(
             R.string.web_error_message_http,
             failure.httpStatus ?: 0,
         )
+        WebLoadFailure.Kind.WEBAPP -> stringResource(R.string.web_error_message_webapp)
         WebLoadFailure.Kind.NETWORK -> stringResource(R.string.web_error_message_generic)
+    }
+
+    val title = when (failure.kind) {
+        WebLoadFailure.Kind.WEBAPP -> stringResource(R.string.web_error_title_webapp)
+        else -> stringResource(
+            if (failure.retryable) R.string.web_error_title_retryable else R.string.web_error_title_fatal,
+        )
     }
 
     Box(
@@ -457,9 +535,7 @@ private fun WebViewLoadErrorOverlay(
             verticalArrangement = Arrangement.Center,
         ) {
             Text(
-                text = stringResource(
-                    if (failure.retryable) R.string.web_error_title_retryable else R.string.web_error_title_fatal,
-                ),
+                text = title,
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onBackground,
             )
@@ -490,6 +566,19 @@ private fun WebViewLoadErrorOverlay(
         }
     }
 }
+
+/**
+ * 首屏渲染探测（与注入脚本里的探测同一判据）。
+ *
+ * index.html 的 #reactRoot 里只有一个静态 splashLogo；登录页/首页由 React 挂载后
+ * 才会出现可见文字、输入框或按钮。没有 #reactRoot 的旧版 webapp 走 body 文本兜底。
+ */
+private const val WEBAPP_READY_PROBE_JS =
+    """(function(){var b=document.body;""" +
+        """if(b&&(b.innerText||'').trim().length>0)return true;""" +
+        """if(document.querySelector('input,button'))return true;""" +
+        """var r=document.getElementById('reactRoot');""" +
+        """return !!(r&&(r.children.length>1||!r.querySelector('.splashLogo')));})()"""
 
 /**
  * 把屏幕左侧边缘的返回手势区域让给 app。

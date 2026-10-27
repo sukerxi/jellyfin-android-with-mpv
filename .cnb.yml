@@ -285,7 +285,17 @@
         else
           echo "未配置签名密钥（KEYSTORE），产出未签名 APK"
         fi
-        ./gradlew --no-daemon --console=plain assembleLibreRelease versionTxt --stacktrace
+        # 与 PR 流水线同款兜底：冷缓存构建要为全部插件/依赖重新解析，任一源瞬时
+        # 限流或抖动都会整体失败（2026-10-27 的发版即因 AGP 插件解析超时而红）。
+        # 失败后退避 60s 整体重跑一次，已下载的依赖会命中 Gradle 缓存。
+        run_build() {
+          ./gradlew --no-daemon --console=plain assembleLibreRelease versionTxt --stacktrace
+        }
+        if ! run_build; then
+          echo "构建失败：等待 60s 后整体重试一次（应对依赖/插件解析的瞬时网络故障）..."
+          sleep 60
+          run_build
+        fi
 
     - name: 整理发布产物
       script: |
@@ -369,7 +379,15 @@
         else
           echo "未配置签名密钥（KEYSTORE），产出未签名 APK/AAB"
         fi
-        ./gradlew --no-daemon --console=plain assemble bundleRelease versionTxt --stacktrace
+        # 同 nightly-release：整体失败后退避重试一次，覆盖依赖/插件解析的瞬时故障。
+        run_build() {
+          ./gradlew --no-daemon --console=plain assemble bundleRelease versionTxt --stacktrace
+        }
+        if ! run_build; then
+          echo "构建失败：等待 60s 后整体重试一次（应对依赖/插件解析的瞬时网络故障）..."
+          sleep 60
+          run_build
+        fi
 
     - name: 整理发布产物
       script: |

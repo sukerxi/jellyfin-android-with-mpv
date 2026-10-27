@@ -15,6 +15,15 @@ object Constants {
     const val MINIMUM_WEB_VIEW_VERSION = 80
     const val SHOW_PROGRESS_BAR_DELAY = 1000L
     const val INITIAL_CONNECTION_TIMEOUT = 10000L // 10 seconds
+
+    /**
+     * 首屏渲染的等待上限。
+     *
+     * 主 bundle 请求被拦截只代表「页面开始加载」，真正的 bundle 还要走网络下载。
+     * 超过这个时间仍没有渲染出任何内容，就按加载失败处理（可重试），
+     * 避免网络不稳时停在永久黑屏上。
+     */
+    const val WEBAPP_RENDER_TIMEOUT = 20000L
     val MAIN_BUNDLE_PATH_REGEX = Regex(""".*/main\.[^/\s]+\.bundle\.js""")
     const val CAST_SDK_PATH = "cast_sender.js"
     const val SESSION_CAPABILITIES_PATH = "sessions/capabilities/full"
