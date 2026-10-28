@@ -51,11 +51,13 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -234,21 +236,21 @@ fun PlayerScreen(
     val decoderType by viewModel.decoderType.observeAsState()
     val detectedDecoderType by viewModel.detectedDecoderType.observeAsState()
     val transcodeReasons by viewModel.transcodeReasons.observeAsState()
-    val chapterMarkings by viewModel.chapterMarkings.collectAsStateWithLifecycle()
-    val activeSkipSegment by viewModel.activeAskToSkipSegment.collectAsStateWithLifecycle()
 
     // 播放进度 state：media3 官方 Compose 实现，替代原先手写的 200ms while(delay) 轮询。
     // 库内部按媒体时钟调度（播放 200ms tick / 暂停 1s / 非 READY 不调度），
     // 并监听 seek、时长、播放态等事件立即重排，无需本屏维护轮询协程。
+    //
+    // 注意：这里只创建 state 对象，不读取 currentPositionMs / durationMs。
+    // 这三个值每 200ms 变一次，若在本屏顶层读取，整个 PlayerScreen（包括视频 AndroidView、
+    // 手势层、浮层）都会跟着 5Hz 重组；读取点下沉到 PlayerProgressRow 后，tick 只重组
+    // 进度行，控件隐藏时甚至没有任何观察者。
     val isTranscoding = mediaSource?.playMethod == PlayMethod.TRANSCODE
 
     val progressState = rememberProgressStateWithTickInterval(
         player = player,
         tickIntervalMs = POSITION_TICK_INTERVAL_MS,
     )
-    val positionMs = progressState.currentPositionMs
-    val durationMs = progressState.durationMs
-    val bufferedMs = progressState.bufferedPositionMs
 
     // UI state
     var controlsVisible by remember { mutableStateOf(true) }
@@ -277,6 +279,9 @@ fun PlayerScreen(
     var gestureSurfaceSize by remember { mutableStateOf(IntSize.Zero) }
     var isPlaying by remember { mutableStateOf(false) }
     var scrubPositionMs by remember { mutableStateOf<Long?>(null) }
+    // 拖动状态只关心「有没有在拖」：直接读 scrubPositionMs 会让整个屏幕在拖动时跟着
+    // 每个触摸事件重组，用派生态把订阅收窄成布尔值（开始/结束各触发一次）。
+    val isScrubbing by remember { derivedStateOf { scrubPositionMs != null } }
     // 松手后正在生效的 seek 目标位置：进度 state 的位置追上目标（或超时）后置空
     var pendingSeekPositionMs by remember { mutableStateOf<Long?>(null) }
     var pipMode by remember { mutableStateOf(activity.isInPictureInPictureMode) }
@@ -389,6 +394,11 @@ fun PlayerScreen(
         loadingStage = PlayerLoadingStage.STUCK
     }
 
+    // 控件层的 actions 只在首次组合时创建（见下方 remember），内部的 closePlayer() 会
+    // 捕获当次组合的 onClose 参数。onClose 来自调用方，可能随上级重组换实例，
+    // 用 rememberUpdatedState 保证事件触发时读到的是最新引用。
+    val currentOnClose by rememberUpdatedState(onClose)
+
     /**
      * Leave the player screen: the web app takes playback over again and the native player
      * is stopped unless the user enabled background playback (or the web app is casting).
@@ -408,7 +418,7 @@ fun PlayerScreen(
         if (!viewModel.keepPlaybackOnExit()) {
             playbackEnded.value = true
         }
-        onClose()
+        currentOnClose()
     }
 
     fun hideUnlockButton() {
@@ -743,7 +753,7 @@ fun PlayerScreen(
     // - 时长为 0 表示永不隐藏，完全交给用户的意愿；
     // - 菜单/面板/拖动进度条期间不隐藏（原有规则）。
     val controlsSuppressed = expandedMenu != null || infoPanelVisible || episodePickerVisible ||
-        compareVisible || scrubPositionMs != null || touchActive
+        compareVisible || isScrubbing || touchActive
 
     LaunchedEffect(controlsVisible, controlsSuppressed, controlsToken, controlsTimeoutMs, isPlaying) {
         val timeout = controlsTimeoutMs
@@ -1196,41 +1206,11 @@ fun PlayerScreen(
             exit = fadeOut(tween(CONTROLS_FADE_OUT_MS)),
             modifier = Modifier.matchParentSize(),
         ) {
-            PlayerControls(
-                state = PlayerControlsState(
-                    title = title,
-                    isFullscreen = isFullscreen,
-                    hasChapters = hasChapters,
-                    hasNext = viewModel.queueManager.hasNext(),
-                    queueSize = queueSize,
-                    currentQueueIndex = currentQueueIndex,
-                    subtitleCount = subtitleStreams.size,
-                    subtitlesEnabled = subtitlesEnabled,
-                    qualityAvailable = mediaSource is RemoteJellyfinMediaSource,
-                    positionMs = positionMs,
-                    durationMs = durationMs,
-                    bufferedMs = bufferedMs,
-                    isPlaying = isPlaying,
-                    chapterMarkings = chapterMarkings,
-                    trickplay = trickplayHelper.state,
-                    scrubPositionMs = scrubPositionMs,
-                    pendingSeekPositionMs = pendingSeekPositionMs,
-                    mpvCompareEnabled = mpvCompareEntryEnabled && player is MpvPlayer,
-                    // 与下面 onToggleFullscreen 的判定保持一致：横屏（或未知）视频走转屏，
-                    // 竖屏视频才是沉浸式切换。
-                    rotatesOnFullscreen = videoStream == null || videoStream.isLandscape,
-                    // 加载等待期间中央那排按钮让位给转圈（见 PlayerControlsState.loading）。
-                    loading = showLoadingIndicator,
-                ),
-                menus = PlayerMenusState(
-                    expanded = expandedMenu,
-                    audioTracks = audioTracks,
-                    subtitleTracks = subtitleTracks,
-                    speeds = speeds,
-                    qualities = qualities,
-                    decoders = decoders,
-                ),
-                actions = PlayerControlsActions(
+            // 回调实例只建一次：内部捕获的都是 remember 的 MutableState 委托与稳定对象，
+            // 在事件真正触发时读到的仍是最新值。若每次重组都新建 actions，控件层所有子
+            // Composable 的入参都会"变"，进度 tick 就能穿透整棵控件树。
+            val controlsActions = remember {
+                PlayerControlsActions(
                     onBack = { closePlayer() },
                     onTogglePlayPause = { viewModel.togglePlayPause() },
                     onPrevious = { viewModel.skipToPrevious() },
@@ -1286,7 +1266,9 @@ fun PlayerScreen(
                         }
                     },
                     onToggleFullscreen = {
-                        val videoTrack = videoStream
+                        // 读当前媒体源而不是组合时捕获的 videoStream：这个回调在控件显示期间
+                        // 只会创建一次（remember），捕获值会停留在旧队列项上。
+                        val videoTrack = viewModel.mediaSourceOrNull?.selectedVideoStream
                         if (videoTrack == null || videoTrack.isLandscape) {
                             val current = activity.resources.configuration.orientation
                             activity.requestedOrientation = when (current) {
@@ -1308,8 +1290,10 @@ fun PlayerScreen(
                         }
                     },
                     onScrubStart = {
-                        // 记录 scrub 起点，拖动期间位置文本显示 scrub 位置
-                        scrubPositionMs = positionMs
+                        // 记录 scrub 起点，拖动期间位置文本显示 scrub 位置。
+                        // 直接问播放器的实时位置：这里不再有 200ms tick 驱动的组合局部变量。
+                        scrubPositionMs = viewModel.playerOrNull?.currentPosition
+                            ?: progressState.currentPositionMs
                         showControls()
                     },
                     onScrubMove = { position ->
@@ -1329,7 +1313,49 @@ fun PlayerScreen(
                     // 而空白处单击要能把它收起——旧的 showControls() 会在收起后立刻又弹回来。
                     onUserInteraction = { controlsToken++ },
                     onTouchActiveChanged = { active -> touchActive = active },
+                )
+            }
+            PlayerControls(
+                state = PlayerControlsState(
+                    title = title,
+                    isFullscreen = isFullscreen,
+                    hasChapters = hasChapters,
+                    hasNext = viewModel.queueManager.hasNext(),
+                    queueSize = queueSize,
+                    currentQueueIndex = currentQueueIndex,
+                    subtitleCount = subtitleStreams.size,
+                    subtitlesEnabled = subtitlesEnabled,
+                    qualityAvailable = mediaSource is RemoteJellyfinMediaSource,
+                    isPlaying = isPlaying,
+                    mpvCompareEnabled = mpvCompareEntryEnabled && player is MpvPlayer,
+                    // 与下面 onToggleFullscreen 的判定保持一致：横屏（或未知）视频走转屏，
+                    // 竖屏视频才是沉浸式切换。
+                    rotatesOnFullscreen = videoStream == null || videoStream.isLandscape,
+                    // 加载等待期间中央那排按钮让位给转圈（见 PlayerControlsState.loading）。
+                    loading = showLoadingIndicator,
                 ),
+                menus = PlayerMenusState(
+                    expanded = expandedMenu,
+                    audioTracks = audioTracks,
+                    subtitleTracks = subtitleTracks,
+                    speeds = speeds,
+                    qualities = qualities,
+                    decoders = decoders,
+                ),
+                actions = controlsActions,
+                // 进度行自己读取 200ms tick / scrub / trickplay / 章节状态：这些高频值
+                // 不进 PlayerControlsState，tick 就不会重组上下两条栏。
+                progress = {
+                    val chapterMarkings by viewModel.chapterMarkings.collectAsStateWithLifecycle()
+                    PlayerProgressRow(
+                        progressState = progressState,
+                        trickplay = trickplayHelper.state,
+                        chapterMarkings = chapterMarkings,
+                        scrubPositionMs = scrubPositionMs,
+                        pendingSeekPositionMs = pendingSeekPositionMs,
+                        actions = controlsActions,
+                    )
+                },
                 gestureHandler = gestureHandler,
                 // 刘海/系统栏只作用于按钮内容，遮罩与点击区域仍铺满（见 PlayerControls 的
                 // contentPadding 说明）。
@@ -1355,48 +1381,14 @@ fun PlayerScreen(
         //
         // 锁定屏幕时隐藏：锁定就是为了防止误触，跳过分段同样是"会改变播放位置"的操作，
         // 不该在锁定后还能点。内边距与控件层一致（横屏只避刘海），免得被右侧刘海裁掉。
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .padding(controlsPadding),
-        ) {
-            AnimatedVisibility(
-                visible = activeSkipSegment != null && !locked,
-                enter = fadeIn(),
-                exit = fadeOut(),
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 12.dp, bottom = 96.dp),
-            ) {
-                val segment: MediaSegmentDto? = activeSkipSegment
-                val shape = RoundedCornerShape(12.dp)
-                // 整块 48dp 高都可点：之前只有文字本身可点，18sp 的「跳过」实际
-                // 触控高度约 34dp，低于最小触控目标。
-                Box(
-                    modifier = Modifier
-                        .playerGlass(shape)
-                        .clip(shape)
-                        .clickable(role = Role.Button) {
-                            segment?.let { viewModel.skipMediaSegment(it) }
-                        }
-                        .padding(horizontal = 20.dp)
-                        .heightIn(min = 48.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        // 说明跳过的是什么（片头/片尾/…），只写「跳过」时用户不知道
-                        // 这一下会跳到哪里。
-                        text = stringResource(
-                            segment?.let { skipSegmentLabelRes(it.type) } ?: R.string.skip_media_segment,
-                        ),
-                        color = PlayerGlassTextPrimary,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium,
-                        letterSpacing = 0.2.sp,
-                    )
-                }
-            }
-        }
+        //
+        // 单独抽成一个 Composable：它订阅的「当前分段」状态每秒都会更新，若在 PlayerScreen
+        // 顶层收集，播放中每秒都会整屏重组一次。
+        SkipMediaSegmentLayer(
+            viewModel = viewModel,
+            controlsPadding = controlsPadding,
+            locked = locked,
+        )
 
         // Loading indicator - a Material3 spinner restyled to be thick enough to read at
         // this size and deliberately polished: 6dp stroke, 24%-alpha track, rounded caps.
@@ -1657,6 +1649,63 @@ fun PlayerScreen(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * 跳过分段按钮层。
+ *
+ * 单独成一个 Composable 是为了隔离「当前分段」这条每秒更新的状态流：它的变化只应
+ * 重组按钮本身，而不是把整块播放器画面（含视频 AndroidView）一起重组。
+ */
+@Composable
+private fun SkipMediaSegmentLayer(
+    viewModel: PlayerViewModel,
+    controlsPadding: PaddingValues,
+    locked: Boolean,
+) {
+    val activeSkipSegment by viewModel.activeAskToSkipSegment.collectAsStateWithLifecycle()
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(controlsPadding),
+    ) {
+        AnimatedVisibility(
+            visible = activeSkipSegment != null && !locked,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 12.dp, bottom = 96.dp),
+        ) {
+            val segment: MediaSegmentDto? = activeSkipSegment
+            val shape = RoundedCornerShape(12.dp)
+            // 整块 48dp 高都可点：之前只有文字本身可点，18sp 的「跳过」实际
+            // 触控高度约 34dp，低于最小触控目标。
+            Box(
+                modifier = Modifier
+                    .playerGlass(shape)
+                    .clip(shape)
+                    .clickable(role = Role.Button) {
+                        segment?.let { viewModel.skipMediaSegment(it) }
+                    }
+                    .padding(horizontal = 20.dp)
+                    .heightIn(min = 48.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    // 说明跳过的是什么（片头/片尾/…），只写「跳过」时用户不知道
+                    // 这一下会跳到哪里。
+                    text = stringResource(
+                        segment?.let { skipSegmentLabelRes(it.type) } ?: R.string.skip_media_segment,
+                    ),
+                    color = PlayerGlassTextPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    letterSpacing = 0.2.sp,
+                )
             }
         }
     }

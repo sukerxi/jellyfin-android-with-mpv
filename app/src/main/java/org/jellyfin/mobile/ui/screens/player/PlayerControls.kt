@@ -52,6 +52,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
 import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.TimeBar
+import androidx.media3.ui.compose.state.ProgressStateWithTickInterval
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.player.ui.ChapterMarkingState
 import org.jellyfin.mobile.player.ui.DecoderType
@@ -85,7 +86,14 @@ private val ControlsText = Color.White
 private val ChapterMarkingWatched = Color(0xFF00A4DC)
 private val ChapterMarkingUnwatched = Color(0xFF333333)
 
-/** 控件栏渲染所需的全部状态。 */
+/**
+ * 控件栏渲染所需的低频状态。
+ *
+ * 播放位置 / 时长 / 缓冲、scrub 位置、章节标记与 trickplay 都是高频状态（200ms tick、
+ * 拖动时每个触摸事件都会更新），它们不在这个类里：如果跟着控件状态一起在 PlayerScreen
+ * 顶层读取，每 200ms 就会触发整个播放器的重组。这些值由 [PlayerProgressRow] 在自己的
+ * 组合作用域内读取，只重组进度行本身；控件隐藏时则完全不读、不重组。
+ */
 data class PlayerControlsState(
     val title: String,
     val isFullscreen: Boolean,
@@ -96,19 +104,7 @@ data class PlayerControlsState(
     val subtitleCount: Int,
     val subtitlesEnabled: Boolean,
     val qualityAvailable: Boolean,
-    val positionMs: Long,
-    val durationMs: Long,
-    val bufferedMs: Long,
     val isPlaying: Boolean,
-    val chapterMarkings: List<ChapterMarkingState>,
-    val trickplay: TrickplayState,
-    /** 拖动进度条时的 scrub 位置（非 null 时覆盖 positionMs 显示）；松手后置空。 */
-    val scrubPositionMs: Long? = null,
-    /**
-     * 松手后正在生效的 seek 目标位置。轮询位置在 seek 生效前仍是旧值，此期间进度条
-     * 继续显示目标位置，避免先跳回 seek 起点、再跳到目标位置的观感回跳。
-     */
-    val pendingSeekPositionMs: Long? = null,
     /** Whether the configuration comparison entry should be offered (mpv engine, not switched off). */
     val mpvCompareEnabled: Boolean = false,
     /**
@@ -203,6 +199,11 @@ fun PlayerControls(
     menus: PlayerMenusState,
     actions: PlayerControlsActions,
     /**
+     * 进度行插槽。播放位置等高频状态在插槽自己的组合作用域内读取，因此 200ms tick
+     * 与拖动只会重组进度行，不会波及上下两条控件栏。
+     */
+    progress: @Composable () -> Unit,
+    /**
      * 空白处的手势处理。与手势层共用同一份实现：控件可见时命中测试只落到控件层，
      * 同级的手势层收不到任何事件（见 [playerGestureInput]）。
      */
@@ -214,8 +215,8 @@ fun PlayerControls(
     contentPadding: PaddingValues = PaddingValues(0.dp),
     modifier: Modifier = Modifier,
 ) {
-    // actions 每次重组都是新实例（位置每 200ms 变一次），用 rememberUpdatedState 取最新回调，
-    // pointerInput 的 key 保持稳定，避免手势进行中被取消重启。
+    // 宿主可能按需重建 actions（切换会话、控件层重新入场），用 rememberUpdatedState 取最新
+    // 回调，pointerInput 的 key 保持稳定，避免手势进行中被取消重启。
     val onUserInteraction by rememberUpdatedState(actions.onUserInteraction)
     val onTouchActiveChanged by rememberUpdatedState(actions.onTouchActiveChanged)
 
@@ -354,7 +355,7 @@ fun PlayerControls(
                     .fillMaxWidth(),
             ) {
                 StatusSummary(menus = menus)
-                ProgressRow(state = state, actions = actions)
+                progress()
                 BottomBar(state = state, menus = menus, actions = actions)
             }
         }
@@ -403,19 +404,35 @@ private fun StatusSummary(menus: PlayerMenusState) {
     }
 }
 
+/**
+ * 进度行：播放位置、时间文本、进度条、章节标记与 trickplay 预览。
+ *
+ * 这些状态全部随 200ms tick / 拖动触摸更新，因此由这一层自己读取：调用方只传入
+ * 稳定的对象引用与 [PlayerControlsActions]（remember 过的同一实例），tick 不会向上
+ * 传播成整屏重组。
+ */
 @Composable
-private fun ProgressRow(
-    state: PlayerControlsState,
+fun PlayerProgressRow(
+    progressState: ProgressStateWithTickInterval,
+    trickplay: TrickplayState,
+    chapterMarkings: List<ChapterMarkingState>,
+    scrubPositionMs: Long?,
+    pendingSeekPositionMs: Long?,
     actions: PlayerControlsActions,
     modifier: Modifier = Modifier,
 ) {
-    val durationKnown = state.durationMs != C.TIME_UNSET && state.durationMs > 0
+    val positionMs = progressState.currentPositionMs
+    val durationMs = progressState.durationMs
+    val bufferedMs = progressState.bufferedPositionMs
+    val durationKnown = durationMs != C.TIME_UNSET && durationMs > 0
+    val effectivePositionMs = scrubPositionMs ?: pendingSeekPositionMs ?: positionMs
+
     Row(
         modifier = modifier.padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = formatTime(state.effectivePositionMs()),
+            text = formatTime(effectivePositionMs),
             color = ControlsText,
             fontSize = 14.sp,
             // 等宽数字：秒数每秒变化时文本宽度不抖，进度条两端不会跟着左右晃动。
@@ -429,16 +446,18 @@ private fun ProgressRow(
                 .onGloballyPositioned { coordinates -> seekBarWidthPx = coordinates.size.width },
         ) {
             PlayerTimeBar(
-                state = state,
+                positionMs = effectivePositionMs,
+                durationMs = durationMs,
+                bufferedMs = bufferedMs,
                 durationKnown = durationKnown,
                 actions = actions,
                 modifier = Modifier.fillMaxWidth(),
             )
-            ChapterMarkingsOverlay(markings = state.chapterMarkings)
-            TrickplayPreview(state = state.trickplay, seekBarWidthPx = seekBarWidthPx)
+            ChapterMarkingsOverlay(markings = chapterMarkings)
+            TrickplayPreview(state = trickplay, seekBarWidthPx = seekBarWidthPx)
         }
         Text(
-            text = if (durationKnown) formatTime(state.durationMs) else "--:--",
+            text = if (durationKnown) formatTime(durationMs) else "--:--",
             color = ControlsText,
             fontSize = 14.sp,
             style = TextStyle(fontFeatureSettings = "tnum"),
@@ -448,7 +467,9 @@ private fun ProgressRow(
 
 @Composable
 private fun PlayerTimeBar(
-    state: PlayerControlsState,
+    positionMs: Long,
+    durationMs: Long,
+    bufferedMs: Long,
     durationKnown: Boolean,
     actions: PlayerControlsActions,
     modifier: Modifier = Modifier,
@@ -473,9 +494,9 @@ private fun PlayerTimeBar(
         },
         update = { timeBar ->
             // Don't fight the user's finger while scrubbing
-            if (!callbacks.isScrubbing) timeBar.setPosition(state.effectivePositionMs())
-            timeBar.setDuration(state.durationMs)
-            timeBar.setBufferedPosition(state.bufferedMs)
+            if (!callbacks.isScrubbing) timeBar.setPosition(positionMs)
+            timeBar.setDuration(durationMs)
+            timeBar.setBufferedPosition(bufferedMs)
             timeBar.isEnabled = durationKnown
         },
         onRelease = { timeBar ->
@@ -664,13 +685,6 @@ private fun BottomBar(
         }
     }
 }
-
-/**
- * 进度条与时间文本的生效位置：拖动 scrub 预览 > seek 目标保持 > 实时轮询位置。
- * seek 生效前轮询位置仍是旧值，若此时不用目标位置，进度条会先跳回 seek 起点。
- */
-private fun PlayerControlsState.effectivePositionMs(): Long =
-    scrubPositionMs ?: pendingSeekPositionMs ?: positionMs
 
 @Composable
 private fun PlayerIconButton(
