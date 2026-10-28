@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -218,6 +219,11 @@ fun PlayerControls(
     state: PlayerControlsState,
     menus: PlayerMenusState,
     actions: PlayerControlsActions,
+    /**
+     * 按钮内容的安全区（系统栏 / 刘海）。遮罩与空白点击层不使用它：
+     * 横屏时刘海只该把按钮推开，不该让压暗层跟着缩进一条。
+     */
+    contentPadding: PaddingValues = PaddingValues(0.dp),
     modifier: Modifier = Modifier,
 ) {
     // actions 每次重组都是新实例（位置每 200ms 变一次），用 rememberUpdatedState 取最新回调，
@@ -267,99 +273,107 @@ fun PlayerControls(
                 },
         )
 
-        // Top bar: back button + title
-        Row(
+        // 安全区内的控件内容。外层（遮罩、按下观察者、空白点击层）始终铺满整屏，
+        // 所以横屏的刘海只会把按钮推开，压暗与可点区域都到边到角。
+        Box(
             modifier = Modifier
-                .align(Alignment.TopStart)
-                .fillMaxWidth()
-                .padding(horizontal = 4.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .matchParentSize()
+                .padding(contentPadding),
         ) {
-            IconButton(onClick = actions.onBack, modifier = Modifier.size(48.dp)) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = stringResource(R.string.back),
-                    modifier = Modifier.size(24.dp),
-                    tint = ControlsText,
-                )
-            }
-            Text(
-                text = state.title,
-                color = ControlsText,
-                fontSize = 16.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(start = 4.dp, end = 8.dp),
-            )
-        }
-
-        // Center controls: previous / previous chapter / play-pause / next chapter / next
-        // 加载等待期间整排隐藏：加载指示器就画在正中，叠在一起等于让蓝圈绕着播放键转。
-        // 用淡入淡出而不是 if：就绪那一帧整排按钮会凭空出现，与"起播不跳变"的观感相反。
-        // 退出比进入快，让按钮先让位、转圈后消失，两段动画在时间上有重叠而不是硬切。
-        AnimatedVisibility(
-            visible = !state.loading,
-            enter = fadeIn(tween(120)),
-            exit = fadeOut(tween(60)),
-            modifier = Modifier.align(Alignment.Center),
-        ) {
+            // Top bar: back button + title
             Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                PlayerIconButton(
-                    onClick = actions.onPrevious,
-                    iconRes = R.drawable.ic_skip_previous_black_32dp,
-                    contentDescription = stringResource(R.string.playback_previous),
-                    backdrop = true,
-                )
-                if (state.hasChapters) {
-                    PlayerIconButton(
-                        onClick = actions.onPreviousChapter,
-                        iconRes = R.drawable.ic_skip_previous_chapter_black_32dp,
-                        contentDescription = stringResource(R.string.playback_previous_chapter),
-                        backdrop = true,
+                IconButton(onClick = actions.onBack, modifier = Modifier.size(48.dp)) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = stringResource(R.string.back),
+                        modifier = Modifier.size(24.dp),
+                        tint = ControlsText,
                     )
                 }
-                PlayerIconButton(
-                    onClick = actions.onTogglePlayPause,
-                    iconRes = if (state.isPlaying) R.drawable.ic_pause_black_42dp else R.drawable.ic_play_black_42dp,
-                    contentDescription = stringResource(
-                        if (state.isPlaying) R.string.playback_pause else R.string.playback_play,
-                    ),
-                    buttonSize = 66.dp,
-                    iconSize = 42.dp,
-                    backdrop = true,
-                )
-                if (state.hasChapters) {
-                    PlayerIconButton(
-                        onClick = actions.onNextChapter,
-                        iconRes = R.drawable.ic_skip_next_chapter_black_32dp,
-                        contentDescription = stringResource(R.string.playback_next_chapter),
-                        backdrop = true,
-                    )
-                }
-                PlayerIconButton(
-                    onClick = actions.onNext,
-                    iconRes = R.drawable.ic_skip_next_black_32dp,
-                    contentDescription = stringResource(R.string.playback_next),
-                    enabled = state.hasNext,
-                    backdrop = true,
+                Text(
+                    text = state.title,
+                    color = ControlsText,
+                    fontSize = 16.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 4.dp, end = 8.dp),
                 )
             }
-        }
 
-        // Bottom: progress row + button bar
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .fillMaxWidth(),
-        ) {
-            StatusSummary(menus = menus)
-            ProgressRow(state = state, actions = actions)
-            BottomBar(state = state, menus = menus, actions = actions)
+            // Center controls: previous / previous chapter / play-pause / next chapter / next
+            // 加载等待期间整排隐藏：加载指示器就画在正中，叠在一起等于让蓝圈绕着播放键转。
+            // 用淡入淡出而不是 if：就绪那一帧整排按钮会凭空出现，与"起播不跳变"的观感相反。
+            // 退出比进入快，让按钮先让位、转圈后消失，两段动画在时间上有重叠而不是硬切。
+            AnimatedVisibility(
+                visible = !state.loading,
+                enter = fadeIn(tween(120)),
+                exit = fadeOut(tween(60)),
+                modifier = Modifier.align(Alignment.Center),
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PlayerIconButton(
+                        onClick = actions.onPrevious,
+                        iconRes = R.drawable.ic_skip_previous_black_32dp,
+                        contentDescription = stringResource(R.string.playback_previous),
+                        backdrop = true,
+                    )
+                    if (state.hasChapters) {
+                        PlayerIconButton(
+                            onClick = actions.onPreviousChapter,
+                            iconRes = R.drawable.ic_skip_previous_chapter_black_32dp,
+                            contentDescription = stringResource(R.string.playback_previous_chapter),
+                            backdrop = true,
+                        )
+                    }
+                    PlayerIconButton(
+                        onClick = actions.onTogglePlayPause,
+                        iconRes = if (state.isPlaying) R.drawable.ic_pause_black_42dp else R.drawable.ic_play_black_42dp,
+                        contentDescription = stringResource(
+                            if (state.isPlaying) R.string.playback_pause else R.string.playback_play,
+                        ),
+                        buttonSize = 66.dp,
+                        iconSize = 42.dp,
+                        backdrop = true,
+                    )
+                    if (state.hasChapters) {
+                        PlayerIconButton(
+                            onClick = actions.onNextChapter,
+                            iconRes = R.drawable.ic_skip_next_chapter_black_32dp,
+                            contentDescription = stringResource(R.string.playback_next_chapter),
+                            backdrop = true,
+                        )
+                    }
+                    PlayerIconButton(
+                        onClick = actions.onNext,
+                        iconRes = R.drawable.ic_skip_next_black_32dp,
+                        contentDescription = stringResource(R.string.playback_next),
+                        enabled = state.hasNext,
+                        backdrop = true,
+                    )
+                }
+            }
+
+            // Bottom: progress row + button bar
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth(),
+            ) {
+                StatusSummary(menus = menus)
+                ProgressRow(state = state, actions = actions)
+                BottomBar(state = state, menus = menus, actions = actions)
+            }
         }
     }
 }

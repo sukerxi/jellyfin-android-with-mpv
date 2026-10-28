@@ -1314,9 +1314,10 @@ fun PlayerScreen(
                     onTapBackground = { toggleControls() },
                     onDoubleTap = { position -> gestureHandler.onDoubleTap(position) },
                 ),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(controlsPadding),
+                // 刘海/系统栏只作用于按钮内容，遮罩与点击区域仍铺满（见 PlayerControls 的
+                // contentPadding 说明）。
+                contentPadding = controlsPadding,
+                modifier = Modifier.fillMaxSize(),
             )
         }
 
