@@ -1,5 +1,6 @@
 package org.jellyfin.mobile.ui.screens.player
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -148,6 +149,9 @@ fun EpisodePickerPanel(
         Surface(
             color = CardBackground,
             shape = RoundedCornerShape(CardCornerRadius),
+            // 与玻璃浮层同一道白色细边：面板同样是压在视频上的半透明卡片，
+            // 没有描边时边缘会随画面内容忽隐忽现。
+            border = BorderStroke(1.dp, PlayerGlassBorderColor),
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(start = 12.dp, top = 56.dp, end = 12.dp, bottom = 112.dp)

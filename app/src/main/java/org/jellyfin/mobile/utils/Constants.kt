@@ -183,7 +183,14 @@ object Constants {
      */
     const val CONTROLS_TOGGLE_DEBOUNCE_MS = 400L
     const val SWIPE_GESTURE_EXCLUSION_SIZE_VERTICAL = 64
-    const val DEFAULT_CENTER_OVERLAY_TIMEOUT_MS = 250
+
+    /**
+     * 手势结束后，亮度/音量/seek 指示器在画面上的停留时长（毫秒）。
+     *
+     * 松手前最后一眼往往只是瞥到，250ms 来不及读完「亮度 45%」这类数值；停久一点，
+     * 再交给卡片自己的淡出动画收尾。
+     */
+    const val DEFAULT_CENTER_OVERLAY_TIMEOUT_MS = 600
     const val SWIPE_GESTURE_EXCLUSION_SIZE_HORIZONTAL = 48
     const val HORIZONTAL_SWIPE_DISTANCE_PER_SECOND = 20 // base pixels needed to swipe for 1 second seek
     const val SEEK_ACCELERATION_FACTOR = 2.5f // acceleration factor for non-linear seek

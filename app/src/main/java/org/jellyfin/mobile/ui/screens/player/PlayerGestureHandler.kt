@@ -308,7 +308,12 @@ class PlayerGestureHandler(
             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, toSet, 0)
 
             indicator = VolumeBrightnessIndicator(
-                iconRes = R.drawable.ic_volume_white_24dp,
+                // 0% 还画着「有声波」的喇叭会自相矛盾，静音时换成叉号。
+                iconRes = if (toSet == 0) {
+                    R.drawable.ic_volume_off_white_24dp
+                } else {
+                    R.drawable.ic_volume_white_24dp
+                },
                 progress = if (maxVolume > 0) toSet.toFloat() / maxVolume else 0f,
                 text = String.format(volumeTextFormat, if (maxVolume > 0) toSet * Constants.PERCENT_MAX / maxVolume else 0),
             )

@@ -10,12 +10,16 @@ import android.view.Window
 import android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
+import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -56,6 +60,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalConfiguration
@@ -68,6 +73,7 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -127,10 +133,10 @@ import org.jellyfin.mobile.utils.extensions.lockOrientation
 import org.jellyfin.mobile.utils.isAutoRotateOn
 import org.jellyfin.mobile.utils.isOnCellularNetwork
 import org.jellyfin.mobile.utils.koinInject
-import org.jellyfin.mobile.utils.toast
 import org.jellyfin.mobile.webapp.WebappFunctionChannel
 import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.MediaSegmentDto
+import org.jellyfin.sdk.model.api.MediaSegmentType
 import org.jellyfin.sdk.model.api.PlayMethod
 
 /**
@@ -1136,33 +1142,46 @@ fun PlayerScreen(
                 .padding(playerViewPadding),
         )
 
-        // Overlay layer: always padded by the system bars (as the old player_overlay was)
+        // Overlay layer for the unlock entry. Uses the same content padding as the controls so
+        // a landscape display cutout cannot clip the only way out of the locked state.
         Box(
             modifier = Modifier
                 .matchParentSize()
-                .padding(systemBarsPadding),
+                .padding(controlsPadding),
         ) {
             // Unlock screen button
             AnimatedVisibility(
                 visible = unlockButtonVisible,
-                enter = fadeIn(),
-                exit = fadeOut(),
+                enter = fadeIn(tween(CONTROLS_FADE_IN_MS)) +
+                    scaleIn(tween(CONTROLS_FADE_IN_MS), initialScale = 0.94f),
+                exit = fadeOut(tween(CONTROLS_FADE_OUT_MS)) +
+                    scaleOut(tween(CONTROLS_FADE_OUT_MS), targetScale = 0.96f),
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(start = 12.dp, top = 48.dp, end = 12.dp),
             ) {
-                Surface(
-                    color = Color(0x60000000),
-                    shape = RoundedCornerShape(6.dp),
+                // 只画一个图标时用户要猜「这是不是解锁」；带上文字，并与其他浮层共用玻璃卡片。
+                Row(
+                    modifier = Modifier
+                        .playerGlass(RoundedCornerShape(12.dp))
+                        // 让按下的 ripple 也止步于圆角，而不是在圆角外面露出一圈方形水波
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable(role = Role.Button) { unlockScreen() }
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.ic_screen_unlock_white_24dp),
-                        contentDescription = stringResource(R.string.playback_unlock_screen),
-                        modifier = Modifier
-                            .clickable(role = Role.Button) { unlockScreen() }
-                            .padding(16.dp)
-                            .size(24.dp),
-                        tint = Color.White,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = PlayerGlassIconTint,
+                    )
+                    Text(
+                        text = stringResource(R.string.playback_unlock_screen),
+                        color = PlayerGlassTextPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
                     )
                 }
             }
@@ -1333,13 +1352,16 @@ fun PlayerScreen(
         // 画在控件层之上：控件可见时，控件层的空白点击层会先吃掉按下事件，按钮放在下面
         // 就会被判成"点了没反应"——先收控件，再点才生效。位置在底栏上方，不与任何
         // 常驻按钮或进度条重叠。
+        //
+        // 锁定屏幕时隐藏：锁定就是为了防止误触，跳过分段同样是"会改变播放位置"的操作，
+        // 不该在锁定后还能点。内边距与控件层一致（横屏只避刘海），免得被右侧刘海裁掉。
         Box(
             modifier = Modifier
                 .matchParentSize()
-                .padding(systemBarsPadding),
+                .padding(controlsPadding),
         ) {
             AnimatedVisibility(
-                visible = activeSkipSegment != null,
+                visible = activeSkipSegment != null && !locked,
                 enter = fadeIn(),
                 exit = fadeOut(),
                 modifier = Modifier
@@ -1347,27 +1369,31 @@ fun PlayerScreen(
                     .padding(end = 12.dp, bottom = 96.dp),
             ) {
                 val segment: MediaSegmentDto? = activeSkipSegment
-                Surface(
-                    color = Color(0xFF202124),
-                    shape = RoundedCornerShape(6.dp),
+                val shape = RoundedCornerShape(12.dp)
+                // 整块 48dp 高都可点：之前只有文字本身可点，18sp 的「跳过」实际
+                // 触控高度约 34dp，低于最小触控目标。
+                Box(
+                    modifier = Modifier
+                        .playerGlass(shape)
+                        .clip(shape)
+                        .clickable(role = Role.Button) {
+                            segment?.let { viewModel.skipMediaSegment(it) }
+                        }
+                        .padding(horizontal = 20.dp)
+                        .heightIn(min = 48.dp),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    // 整块 48dp 高都可点：之前只有文字本身可点，18sp 的「跳过」实际
-                    // 触控高度约 34dp，低于最小触控目标。
-                    Box(
-                        modifier = Modifier
-                            .clickable(role = Role.Button) {
-                                segment?.let { viewModel.skipMediaSegment(it) }
-                            }
-                            .padding(horizontal = 20.dp)
-                            .heightIn(min = 48.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = stringResource(R.string.skip_media_segment),
-                            color = Color(0xFFDDDDDD),
-                            fontSize = 16.sp,
-                        )
-                    }
+                    Text(
+                        // 说明跳过的是什么（片头/片尾/…），只写「跳过」时用户不知道
+                        // 这一下会跳到哪里。
+                        text = stringResource(
+                            segment?.let { skipSegmentLabelRes(it.type) } ?: R.string.skip_media_segment,
+                        ),
+                        color = PlayerGlassTextPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium,
+                        letterSpacing = 0.2.sp,
+                    )
                 }
             }
         }
@@ -1426,6 +1452,9 @@ fun PlayerScreen(
                             enter = fadeIn(tween(LOADING_INDICATOR_FADE_IN_MS)),
                             exit = fadeOut(tween(LOADING_INDICATOR_FADE_OUT_MS)),
                         ) {
+                            // 与手势 HUD / 跳过按钮同一套玻璃语言：加载期间首帧可能已经
+                            // 上屏，纯半透明底衬在亮画面上会糊成一片。
+                            val hintShape = RoundedCornerShape(10.dp)
                             Text(
                                 text = stringResource(
                                     when {
@@ -1435,15 +1464,15 @@ fun PlayerScreen(
                                         else -> R.string.player_loading_buffering
                                     },
                                 ),
-                                color = Color(0xFFDDDDDD),
+                                color = PlayerGlassTextPrimary,
                                 fontSize = 14.sp,
                                 textAlign = TextAlign.Center,
                                 modifier = Modifier
                                     // 读屏用户看不到转圈：阶段文案变化要让 TalkBack 播报出来，
                                     // 否则整个加载过程在他们的耳朵里是静默的。
                                     .semantics { liveRegion = LiveRegionMode.Polite }
-                                    .background(Color(0x66000000), RoundedCornerShape(4.dp))
-                                    .padding(horizontal = 10.dp, vertical = 3.dp),
+                                    .playerGlass(hintShape, shadowElevation = 0.dp)
+                                    .padding(horizontal = 12.dp, vertical = 5.dp),
                             )
                         }
                         AnimatedVisibility(
@@ -1451,10 +1480,13 @@ fun PlayerScreen(
                             enter = fadeIn(tween(LOADING_INDICATOR_FADE_IN_MS)),
                             exit = fadeOut(tween(LOADING_INDICATOR_FADE_OUT_MS)),
                         ) {
+                            val actionShape = RoundedCornerShape(12.dp)
                             Row(
                                 modifier = Modifier
                                     .padding(top = 8.dp)
-                                    .background(Color(0x4D000000), RoundedCornerShape(8.dp))
+                                    .playerGlass(actionShape)
+                                    // 两个按钮的 ripple 都在卡片边缘，不裁剪会露出圆角外的方角水波。
+                                    .clip(actionShape)
                                     .padding(horizontal = 4.dp),
                             ) {
                                 // 起播阶段（还没有播放器/媒体源）没有可"续播"的位置，
@@ -1467,13 +1499,16 @@ fun PlayerScreen(
                                             viewModel.retryPlayback()
                                         },
                                     ) {
-                                        Text(text = stringResource(R.string.retry), color = Color.White)
+                                        Text(
+                                            text = stringResource(R.string.retry),
+                                            color = PlayerGlassTextPrimary,
+                                        )
                                     }
                                 }
                                 TextButton(onClick = { closePlayer() }) {
                                     Text(
                                         text = stringResource(R.string.player_loading_exit),
-                                        color = Color.White,
+                                        color = PlayerGlassTextPrimary,
                                     )
                                 }
                             }
@@ -1625,6 +1660,19 @@ fun PlayerScreen(
             }
         }
     }
+}
+
+/**
+ * 跳过分段按钮的文案：按分段类型说明将要跳过什么，未知类型回退到通用的「跳过」。
+ */
+@StringRes
+private fun skipSegmentLabelRes(type: MediaSegmentType): Int = when (type) {
+    MediaSegmentType.INTRO -> R.string.skip_media_segment_intro
+    MediaSegmentType.OUTRO -> R.string.skip_media_segment_outro
+    MediaSegmentType.PREVIEW -> R.string.skip_media_segment_preview
+    MediaSegmentType.RECAP -> R.string.skip_media_segment_recap
+    MediaSegmentType.COMMERCIAL -> R.string.skip_media_segment_commercial
+    else -> R.string.skip_media_segment
 }
 
 /**

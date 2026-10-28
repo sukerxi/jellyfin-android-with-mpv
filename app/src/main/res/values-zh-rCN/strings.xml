@@ -175,6 +175,11 @@
     <string name="external_player_mpvkt">mpvKt 播放器</string>
     <string name="pref_exoplayer_allow_press_speed_up">长按可加速播放</string>
     <string name="skip_media_segment">跳过</string>
+    <string name="skip_media_segment_intro">跳过片头</string>
+    <string name="skip_media_segment_outro">跳过片尾</string>
+    <string name="skip_media_segment_preview">跳过预告</string>
+    <string name="skip_media_segment_recap">跳过回顾</string>
+    <string name="skip_media_segment_commercial">跳过广告</string>
     <string name="special_episode">特别篇</string>
     <string name="media_service_unknown_page">未知页面</string>
     <string name="media_service_no_items">未找到结果</string>

@@ -43,6 +43,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -417,6 +418,8 @@ private fun ProgressRow(
             text = formatTime(state.effectivePositionMs()),
             color = ControlsText,
             fontSize = 14.sp,
+            // 等宽数字：秒数每秒变化时文本宽度不抖，进度条两端不会跟着左右晃动。
+            style = TextStyle(fontFeatureSettings = "tnum"),
         )
         var seekBarWidthPx by remember { mutableStateOf(0) }
         Box(
@@ -438,6 +441,7 @@ private fun ProgressRow(
             text = if (durationKnown) formatTime(state.durationMs) else "--:--",
             color = ControlsText,
             fontSize = 14.sp,
+            style = TextStyle(fontFeatureSettings = "tnum"),
         )
     }
 }

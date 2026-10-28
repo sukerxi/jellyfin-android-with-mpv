@@ -5,11 +5,12 @@ import android.content.res.ColorStateList
 import android.graphics.drawable.RippleDrawable
 import android.view.View
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -41,14 +42,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -78,14 +77,8 @@ import org.jellyfin.mobile.utils.Constants
 
 /**
  * 手势 HUD 的统一视觉：深色玻璃卡片 + 1dp 细描边 + 圆角，亮度/音量、横向 seek、倍速角标共用。
- * 之前三处各画各的（纯黑方块、Material 默认进度条、72dp 实心图标），放在一起看不成体系。
+ * 颜色与描边定义见 [PlayerGlassBackground]。
  */
-private val HudBackground = Brush.verticalGradient(listOf(Color(0xF7010101), Color(0xDB010101)))
-private val HudBorderColor = Color.White.copy(alpha = 0.10f)
-private val HudTrackColor = Color.White.copy(alpha = 0.16f)
-private val HudPrimaryText = Color.White.copy(alpha = 0.94f)
-private val HudSecondaryText = Color.White.copy(alpha = 0.62f)
-private val HudIconTint = Color.White.copy(alpha = 0.94f)
 private val HudAccentGradient = Brush.horizontalGradient(
     listOf(JellyfinPrimary.copy(alpha = 0.88f), Color(0xFF6FD7F7)),
 )
@@ -94,6 +87,10 @@ private val HudCornerRadius = 20.dp
 private val HudIconSize = 30.dp
 private val HudProgressHeight = 5.dp
 private val DoubleTapToggleSize = 88.dp
+
+/** HUD 卡片进出场时长（毫秒）：入场略快，退场稍慢，松手时卡片是"淡走"而不是"凭空消失"。 */
+private const val HUD_ENTER_MS = 120
+private const val HUD_EXIT_MS = 170
 
 /** 双击跳转量文字（`+10s` / `-10s`）。 */
 private val RippleLabelWidth = 160.dp
@@ -256,15 +253,18 @@ private fun BoxScope.GestureIndicators(
     LaunchedEffect(handler.speedBoostActive) {
         if (handler.speedBoostActive) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
     }
-    if (handler.speedBoostActive) {
+    AnimatedVisibility(
+        visible = handler.speedBoostActive,
+        enter = fadeIn(tween(HUD_ENTER_MS)) + scaleIn(tween(HUD_ENTER_MS), initialScale = 0.9f),
+        exit = fadeOut(tween(HUD_EXIT_MS)) + scaleOut(tween(HUD_EXIT_MS), targetScale = 0.94f),
+        modifier = Modifier
+            .align(Alignment.TopCenter)
+            .padding(top = 72.dp),
+    ) {
         val badgeShape = RoundedCornerShape(14.dp)
         Box(
             modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 72.dp)
-                .shadow(8.dp, badgeShape, clip = false)
-                .background(HudBackground, badgeShape)
-                .border(1.dp, HudBorderColor, badgeShape)
+                .playerGlass(badgeShape)
                 .padding(horizontal = 16.dp, vertical = 9.dp),
         ) {
             Text(
@@ -272,7 +272,7 @@ private fun BoxScope.GestureIndicators(
                     R.string.playback_speed_boost_active,
                     formatSpeedLabel(Constants.HOLD_SPEEDUP_MULTIPLIER),
                 ),
-                color = HudPrimaryText,
+                color = PlayerGlassTextPrimary,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
                 letterSpacing = 0.2.sp,
@@ -281,62 +281,58 @@ private fun BoxScope.GestureIndicators(
     }
 
     // Brightness / volume indicator
-    handler.indicator?.let { indicator ->
-        HudAppear(modifier = Modifier.align(Alignment.Center)) {
-            HudCard {
-                Icon(
-                    painter = painterResource(indicator.iconRes),
-                    contentDescription = null,
-                    modifier = Modifier.size(HudIconSize),
-                    tint = HudIconTint,
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-                Text(
-                    text = indicator.text,
-                    color = HudPrimaryText,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Medium,
-                    letterSpacing = 0.2.sp,
-                    textAlign = TextAlign.Center,
-                )
-                Spacer(modifier = Modifier.height(14.dp))
-                HudProgressBar(progress = indicator.progress)
-            }
+    HudSlot(value = handler.indicator) { indicator ->
+        HudCard {
+            Icon(
+                painter = painterResource(indicator.iconRes),
+                contentDescription = null,
+                modifier = Modifier.size(HudIconSize),
+                tint = PlayerGlassIconTint,
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = indicator.text,
+                color = PlayerGlassTextPrimary,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+                letterSpacing = 0.2.sp,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+            HudProgressBar(progress = indicator.progress)
         }
     }
 
     // Horizontal seek indicator
-    handler.seekIndicator?.let { seek ->
-        HudAppear(modifier = Modifier.align(Alignment.Center)) {
-            HudCard {
-                Icon(
-                    painter = painterResource(
-                        if (seek.forward) R.drawable.ic_gesture_seek_forward_24dp else R.drawable.ic_gesture_seek_rewind_24dp,
-                    ),
-                    contentDescription = null,
-                    modifier = Modifier.size(HudIconSize),
-                    tint = HudIconTint,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = seek.seekText,
-                    color = Color.White,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    // 等宽数字：拖动过程中「+12:01」不会因为位数变化而左右抖动。
-                    style = TextStyle(fontFeatureSettings = "tnum"),
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = seek.positionText,
-                    color = HudSecondaryText,
-                    fontSize = 12.sp,
-                    letterSpacing = 0.3.sp,
-                    style = TextStyle(fontFeatureSettings = "tnum"),
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                HudProgressBar(progress = seek.progress)
-            }
+    HudSlot(value = handler.seekIndicator) { seek ->
+        HudCard {
+            Icon(
+                painter = painterResource(
+                    if (seek.forward) R.drawable.ic_gesture_seek_forward_24dp else R.drawable.ic_gesture_seek_rewind_24dp,
+                ),
+                contentDescription = null,
+                modifier = Modifier.size(HudIconSize),
+                tint = PlayerGlassIconTint,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = seek.seekText,
+                color = Color.White,
+                fontSize = 22.sp,
+                fontWeight = FontWeight.SemiBold,
+                // 等宽数字：拖动过程中「+12:01」不会因为位数变化而左右抖动。
+                style = TextStyle(fontFeatureSettings = "tnum"),
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = seek.positionText,
+                color = PlayerGlassTextSecondary,
+                fontSize = 12.sp,
+                letterSpacing = 0.3.sp,
+                style = TextStyle(fontFeatureSettings = "tnum"),
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            HudProgressBar(progress = seek.progress)
         }
     }
 
@@ -406,7 +402,7 @@ private fun BoxScope.GestureIndicators(
                         Brush.radialGradient(listOf(Color(0xB3000000), Color(0x73000000))),
                         CircleShape,
                     )
-                    .border(1.dp, HudBorderColor, CircleShape),
+                    .border(1.dp, PlayerGlassBorderColor, CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -423,28 +419,31 @@ private fun BoxScope.GestureIndicators(
 }
 
 /**
- * 卡片出现时的短促淡入 + 轻微放大。
+ * 居中 HUD 卡槽：值变为 null 时不立刻摘掉内容，而是保留最后一帧做淡出 + 微缩。
  *
- * 手势一开始 HUD 就整块「砸」到画面上，在高码率画面里显得很生硬；110~140ms 的入场
- * 让它在拖动起步时不抢视线。卡片只在这一帧被组合一次，之后进度更新只重绘内容。
+ * 松手后指示器只停留很短的时间，若到点直接移除，卡片会在注视下瞬间消失；保留内容
+ * 再退场，收尾和入场（淡入 + 轻微放大）对称。保留值放在普通数组里，写入不触发重组。
  */
 @Composable
-private fun HudAppear(
-    modifier: Modifier = Modifier,
-    content: @Composable () -> Unit,
+private fun <T : Any> BoxScope.HudSlot(
+    value: T?,
+    content: @Composable (T) -> Unit,
 ) {
-    var appeared by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { appeared = true }
-    val appearAlpha by animateFloatAsState(if (appeared) 1f else 0f, tween(110), label = "hudAlpha")
-    val appearScale by animateFloatAsState(if (appeared) 1f else 0.94f, tween(140), label = "hudScale")
-    Box(
-        modifier = modifier.graphicsLayer {
-            alpha = appearAlpha
-            scaleX = appearScale
-            scaleY = appearScale
-        },
+    val retained = remember { arrayOfNulls<Any>(1) }
+    if (value != null) retained[0] = value
+    @Suppress("UNCHECKED_CAST")
+    val shown = (value ?: retained[0]) as T?
+    // 初始目标态为 false、下一帧才置 true：直接让 AnimatedVisibility 以 visible = true
+    // 首次组合时不会播放入场动画，而第一版 HudAppear 正是靠"先 false 再 true"出场的。
+    val visibility = remember { MutableTransitionState(false) }
+    LaunchedEffect(value != null) { visibility.targetState = value != null }
+    AnimatedVisibility(
+        visibleState = visibility,
+        enter = fadeIn(tween(HUD_ENTER_MS)) + scaleIn(tween(HUD_ENTER_MS), initialScale = 0.94f),
+        exit = fadeOut(tween(HUD_EXIT_MS)) + scaleOut(tween(HUD_EXIT_MS), targetScale = 0.96f),
+        modifier = Modifier.align(Alignment.Center),
     ) {
-        content()
+        if (shown != null) content(shown)
     }
 }
 
@@ -454,13 +453,10 @@ private fun HudCard(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val shape = RoundedCornerShape(HudCornerRadius)
     Column(
         modifier = modifier
             .width(HudWidth)
-            .shadow(10.dp, shape, clip = false)
-            .background(HudBackground, shape)
-            .border(1.dp, HudBorderColor, shape)
+            .playerGlass(RoundedCornerShape(HudCornerRadius), shadowElevation = 10.dp)
             .padding(horizontal = 18.dp, vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         content = content,
@@ -484,7 +480,7 @@ private fun HudProgressBar(
             .height(HudProgressHeight),
     ) {
         val barRadius = CornerRadius(size.height / 2f, size.height / 2f)
-        drawRoundRect(color = HudTrackColor, cornerRadius = barRadius)
+        drawRoundRect(color = PlayerGlassTrackColor, cornerRadius = barRadius)
         if (fraction <= 0f) return@Canvas
 
         val barWidth = (size.width * fraction).coerceIn(size.height, size.width)
