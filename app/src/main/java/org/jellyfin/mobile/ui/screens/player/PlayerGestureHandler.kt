@@ -141,6 +141,9 @@ class PlayerGestureHandler(
     }
 
     fun onDoubleTap(position: Offset) {
+        // 锁屏时画面手势整体失效，与旧版 View 实现一致：锁屏后只保留单击呼出解锁按钮，
+        // 双击 seek / 双击暂停都不该在"已锁"的画面上生效。
+        if (isLocked()) return
         val viewWidth = sizeProvider().width
         val viewCenterX = viewWidth / 2
 
@@ -241,6 +244,7 @@ class PlayerGestureHandler(
     }
 
     fun onDrag(position: Offset, dragAmount: Offset) {
+        if (isLocked()) return
         val size = sizeProvider()
         if (size.width == 0 || size.height == 0) {
             return
@@ -466,7 +470,7 @@ class PlayerGestureHandler(
     // region zoom
 
     fun onZoom(zoom: Float) {
-        if (!isLandscape()) return
+        if (isLocked() || !isLandscape()) return
         if (abs(zoom - Constants.ZOOM_SCALE_BASE) > Constants.ZOOM_SCALE_THRESHOLD) {
             isZoomEnabled = zoom > 1
             applyZoomMode()

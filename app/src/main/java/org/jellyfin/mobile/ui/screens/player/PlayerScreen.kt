@@ -17,6 +17,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -26,6 +27,7 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
@@ -62,7 +64,11 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -908,45 +914,67 @@ fun PlayerScreen(
 
     // region insets
 
+    val configuration = LocalConfiguration.current
+
+    // 横屏恒为全屏（见 [updateFullscreenState]）。系统栏的隐藏是异步的：隐藏动画跑完、
+    // insets 回调到达之前，isFullscreen 仍是 false。布局若跟着它走，竖屏切横屏后的头几帧
+    // 里，画面和控件层都会按"系统栏还在"缩进一圈，看上去就是没铺满；而它是否出现，
+    // 取决于旋转前是否已经处于沉浸模式，所以是"有几率"。横屏的留白因此只认刘海 ——
+    // 这恰好等于系统栏隐藏完成后的结果。
+    val isLandscapeConfiguration = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
     val systemBarsPadding = WindowInsets.systemBars.asPaddingValues()
-    val controlsPadding = if (isFullscreen) {
-        // PaddingValues does not implement equals, so a freshly built instance per
-        // recomposition (the position tick fires ~5x/second) defeats Compose's
-        // skipping. Keying the remember on the raw pixel values keeps one instance
-        // until the insets themselves change.
-        val cutout = WindowInsets.displayCutout
-        val systemBars = WindowInsets.systemBars
-        val cutoutLeft = with(density) { cutout.getLeft(density, layoutDirection) }
-        val cutoutTop = with(density) { cutout.getTop(density) }
-        val cutoutRight = with(density) { cutout.getRight(density, layoutDirection) }
-        val cutoutBottom = with(density) { cutout.getBottom(density) }
-        val barsLeft = with(density) { systemBars.getLeft(density, layoutDirection) }
-        val barsTop = with(density) { systemBars.getTop(density) }
-        val barsRight = with(density) { systemBars.getRight(density, layoutDirection) }
-        val barsBottom = with(density) { systemBars.getBottom(density) }
-        remember(
-            cutoutLeft,
-            cutoutTop,
-            cutoutRight,
-            cutoutBottom,
-            barsLeft,
-            barsTop,
-            barsRight,
-            barsBottom,
-        ) {
-            PaddingValues(
-                start = with(density) { max(cutoutLeft, barsLeft).toDp() },
-                top = with(density) { max(cutoutTop, barsTop).toDp() },
-                end = with(density) { max(cutoutRight, barsRight).toDp() },
-                bottom = with(density) { max(cutoutBottom, barsBottom).toDp() },
-            )
+
+    // 刘海留白。PaddingValues 没有 equals 实现，每次重组新建实例会破坏 Compose 的跳过逻辑
+    // （位置轮询每秒触发约 5 次重组），按像素值 remember 复用同一个实例。
+    val cutoutLeft = with(density) { WindowInsets.displayCutout.getLeft(density, layoutDirection) }
+    val cutoutTop = with(density) { WindowInsets.displayCutout.getTop(density) }
+    val cutoutRight = with(density) { WindowInsets.displayCutout.getRight(density, layoutDirection) }
+    val cutoutBottom = with(density) { WindowInsets.displayCutout.getBottom(density) }
+    val cutoutPadding = remember(cutoutLeft, cutoutTop, cutoutRight, cutoutBottom) {
+        PaddingValues(
+            start = with(density) { cutoutLeft.toDp() },
+            top = with(density) { cutoutTop.toDp() },
+            end = with(density) { cutoutRight.toDp() },
+            bottom = with(density) { cutoutBottom.toDp() },
+        )
+    }
+
+    val controlsPadding = when {
+        // 横屏不等系统栏真正隐藏：见上面的说明。
+        isLandscapeConfiguration -> cutoutPadding
+        isFullscreen -> {
+            // 竖屏下的全屏（竖屏视频、或用户手动进入）：系统栏可能被临时划出，
+            // 因此取系统栏与刘海的最大值，控件不会压到临时栏下面。
+            val systemBars = WindowInsets.systemBars
+            val barsLeft = with(density) { systemBars.getLeft(density, layoutDirection) }
+            val barsTop = with(density) { systemBars.getTop(density) }
+            val barsRight = with(density) { systemBars.getRight(density, layoutDirection) }
+            val barsBottom = with(density) { systemBars.getBottom(density) }
+            remember(
+                cutoutLeft,
+                cutoutTop,
+                cutoutRight,
+                cutoutBottom,
+                barsLeft,
+                barsTop,
+                barsRight,
+                barsBottom,
+            ) {
+                PaddingValues(
+                    start = with(density) { max(cutoutLeft, barsLeft).toDp() },
+                    top = with(density) { max(cutoutTop, barsTop).toDp() },
+                    end = with(density) { max(cutoutRight, barsRight).toDp() },
+                    bottom = with(density) { max(cutoutBottom, barsBottom).toDp() },
+                )
+            }
         }
-    } else {
-        systemBarsPadding
+        else -> systemBarsPadding
     }
     // The video surface (and with it the gesture surface) is padded by the system bars
     // unless we're in fullscreen, where it goes edge to edge.
-    val playerViewPadding = if (isFullscreen) PaddingValues(0.dp) else systemBarsPadding
+    val playerViewPadding =
+        if (isLandscapeConfiguration || isFullscreen) PaddingValues(0.dp) else systemBarsPadding
 
     // endregion
 
@@ -1006,7 +1034,6 @@ fun PlayerScreen(
     // endregion
 
     // Configuration changes (orientation): fullscreen state + zoom mode
-    val configuration = LocalConfiguration.current
     LaunchedEffect(configuration.orientation) {
         updateFullscreenState(configuration)
         gestureHandler.handleConfiguration()
@@ -1015,7 +1042,8 @@ fun PlayerScreen(
     // 返回键交给宿主（唯一的仲裁点）派发，本屏只声明"按下返回时怎么处理"。
     // 浮层在网页之上，所以它的返回语义永远优先于 webapp 的 SPA 后退：
     // 先关面板/菜单；控件可见时先把控件收起（播放不中断），再按一次才退出播放器；
-    // 锁屏时吞掉按键（解锁按钮才是出口）。
+    // 锁屏时吞掉按键，但把解锁按钮叫出来 —— 解锁按钮会随超时消失，若返回键什么都不做，
+    // 用户很容易以为触控/按键失灵。
     backDispatcher.RegisterBackHandler {
         when {
             infoPanelVisible || episodePickerVisible || expandedMenu != null || compareVisible -> {
@@ -1024,7 +1052,7 @@ fun PlayerScreen(
                 episodePickerVisible = false
                 compareVisible = false
             }
-            locked -> Unit
+            locked -> peekUnlockButton()
             // 播放失败卡片覆盖在控件之上，返回应直接离开而不是先空收一次控件。
             playbackFailure == null && controlsVisible -> controlsVisible = false
             else -> closePlayer()
@@ -1115,115 +1143,6 @@ fun PlayerScreen(
                 .matchParentSize()
                 .padding(systemBarsPadding),
         ) {
-            // Loading indicator - a Material3 spinner restyled to be thick enough to read at
-            // this size and deliberately polished: 6dp stroke, 24%-alpha track, rounded caps.
-            //
-            // Visibility is driven by the single continuous state above, NOT by the raw
-            // buffering state: mpv's state machine now follows ExoPlayer semantics (READY only
-            // once playback can actually proceed), and the synthesised state absorbs any
-            // residual flicker - disposing and recreating the indicator restarts its rotation
-            // from 0 degrees, which is exactly what made it stutter.
-            //
-            // The fade keeps the unmount off-screen: the spinner leaves as a fade instead of
-            // disappearing between two frames, so handing over to the first video frame reads
-            // as one motion rather than a jump.
-            //
-            // The wait is explained in stages (see loadingStage): a bare spinner for the
-            // first few seconds, a short label after that, and retry/exit actions once the
-            // wait stops looking like normal buffering.
-            AnimatedVisibility(
-                visible = showLoadingIndicator,
-                enter = fadeIn(tween(LOADING_INDICATOR_FADE_IN_MS)),
-                exit = fadeOut(tween(LOADING_INDICATOR_FADE_OUT_MS)),
-                modifier = Modifier.align(Alignment.Center),
-            ) {
-                val indicatorColor = MaterialTheme.colorScheme.primary
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(64.dp),
-                        color = indicatorColor,
-                        strokeWidth = 6.dp,
-                        trackColor = indicatorColor.copy(alpha = 0.24f),
-                        strokeCap = StrokeCap.Round,
-                    )
-                    if (loadingStage != PlayerLoadingStage.ACTIVE) {
-                        Text(
-                            text = stringResource(
-                                when {
-                                    loadingStage == PlayerLoadingStage.STUCK ->
-                                        R.string.player_loading_check_network
-                                    preparingPlayback -> R.string.player_loading_preparing
-                                    else -> R.string.player_loading_buffering
-                                },
-                            ),
-                            color = Color(0xFFDDDDDD),
-                            fontSize = 14.sp,
-                            modifier = Modifier
-                                .padding(top = 12.dp)
-                                .background(Color(0x66000000), RoundedCornerShape(4.dp))
-                                .padding(horizontal = 10.dp, vertical = 3.dp),
-                        )
-                    }
-                    if (loadingStage == PlayerLoadingStage.STUCK) {
-                        Row(modifier = Modifier.padding(top = 4.dp)) {
-                            // 起播阶段（还没有播放器/媒体源）没有可"续播"的位置，
-                            // 重试只会重复同一条网络请求，不如直接退出回网页重新点播；
-                            // 缓冲阶段走 viewModel 的重试链路，从当前位置重载媒体源。
-                            if (!preparingPlayback) {
-                                TextButton(
-                                    onClick = {
-                                        loadingAttempt++
-                                        viewModel.retryPlayback()
-                                    },
-                                ) {
-                                    Text(text = stringResource(R.string.retry), color = Color.White)
-                                }
-                            }
-                            TextButton(onClick = { closePlayer() }) {
-                                Text(
-                                    text = stringResource(R.string.player_loading_exit),
-                                    color = Color.White,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Skip media segment button
-            AnimatedVisibility(
-                visible = activeSkipSegment != null,
-                enter = fadeIn(),
-                exit = fadeOut(),
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 12.dp, bottom = 96.dp),
-            ) {
-                val segment: MediaSegmentDto? = activeSkipSegment
-                Surface(
-                    color = Color(0xFF202124),
-                    shape = RoundedCornerShape(6.dp),
-                ) {
-                    // 整块 48dp 高都可点：之前只有文字本身可点，18sp 的「跳过」实际
-                    // 触控高度约 34dp，低于最小触控目标。
-                    Box(
-                        modifier = Modifier
-                            .clickable(role = Role.Button) {
-                                segment?.let { viewModel.skipMediaSegment(it) }
-                            }
-                            .padding(horizontal = 20.dp)
-                            .heightIn(min = 48.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = stringResource(R.string.skip_media_segment),
-                            color = Color(0xFFDDDDDD),
-                            fontSize = 16.sp,
-                        )
-                    }
-                }
-            }
-
             // Unlock screen button
             AnimatedVisibility(
                 visible = unlockButtonVisible,
@@ -1399,6 +1318,160 @@ fun PlayerScreen(
                     .fillMaxSize()
                     .padding(controlsPadding),
             )
+        }
+
+        // Skip media segment button
+        // 画在控件层之上：控件可见时，控件层的空白点击层会先吃掉按下事件，按钮放在下面
+        // 就会被判成"点了没反应"——先收控件，再点才生效。位置在底栏上方，不与任何
+        // 常驻按钮或进度条重叠。
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .padding(systemBarsPadding),
+        ) {
+            AnimatedVisibility(
+                visible = activeSkipSegment != null,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 12.dp, bottom = 96.dp),
+            ) {
+                val segment: MediaSegmentDto? = activeSkipSegment
+                Surface(
+                    color = Color(0xFF202124),
+                    shape = RoundedCornerShape(6.dp),
+                ) {
+                    // 整块 48dp 高都可点：之前只有文字本身可点，18sp 的「跳过」实际
+                    // 触控高度约 34dp，低于最小触控目标。
+                    Box(
+                        modifier = Modifier
+                            .clickable(role = Role.Button) {
+                                segment?.let { viewModel.skipMediaSegment(it) }
+                            }
+                            .padding(horizontal = 20.dp)
+                            .heightIn(min = 48.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.skip_media_segment),
+                            color = Color(0xFFDDDDDD),
+                            fontSize = 16.sp,
+                        )
+                    }
+                }
+            }
+        }
+
+        // Loading indicator - a Material3 spinner restyled to be thick enough to read at
+        // this size and deliberately polished: 6dp stroke, 24%-alpha track, rounded caps.
+        //
+        // Visibility is driven by the single continuous state above, NOT by the raw
+        // buffering state: mpv's state machine now follows ExoPlayer semantics (READY only
+        // once playback can actually proceed), and the synthesised state absorbs any
+        // residual flicker - disposing and recreating the indicator restarts its rotation
+        // from 0 degrees, which is exactly what made it stutter.
+        //
+        // The fade keeps the unmount off-screen: the spinner leaves as a fade instead of
+        // disappearing between two frames, so handing over to the first video frame reads
+        // as one motion rather than a jump.
+        //
+        // 画在控件层之上：超时后的「重试 / 退出」必须始终可点 —— 控件可见时，控件层的
+        // 空白点击层会覆盖整屏，这一块若在下面就点不到，画面也会被底部按钮压住。
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .padding(systemBarsPadding),
+        ) {
+            AnimatedVisibility(
+                visible = showLoadingIndicator,
+                enter = fadeIn(tween(LOADING_INDICATOR_FADE_IN_MS)),
+                exit = fadeOut(tween(LOADING_INDICATOR_FADE_OUT_MS)),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                val indicatorColor = MaterialTheme.colorScheme.primary
+                // 转圈锚定在画面正中，说明文案与按钮在它下方展开。
+                // 如果把它们放进同一个居中的 Column，每多一行整列就被顶高一截（3s 的
+                // 文案一次、12s 的按钮再一次），画面中心的转圈反而在"加载"过程中不断上移，
+                // 与上一轮"起播不跳变"的目标相悖。
+                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                    CircularProgressIndicator(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .size(64.dp),
+                        color = indicatorColor,
+                        strokeWidth = 6.dp,
+                        trackColor = indicatorColor.copy(alpha = 0.24f),
+                        strokeCap = StrokeCap.Round,
+                    )
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .offset(y = maxHeight / 2 + 44.dp)
+                            .widthIn(max = 320.dp)
+                            .padding(horizontal = 12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        AnimatedVisibility(
+                            visible = loadingStage != PlayerLoadingStage.ACTIVE,
+                            enter = fadeIn(tween(LOADING_INDICATOR_FADE_IN_MS)),
+                            exit = fadeOut(tween(LOADING_INDICATOR_FADE_OUT_MS)),
+                        ) {
+                            Text(
+                                text = stringResource(
+                                    when {
+                                        loadingStage == PlayerLoadingStage.STUCK ->
+                                            R.string.player_loading_check_network
+                                        preparingPlayback -> R.string.player_loading_preparing
+                                        else -> R.string.player_loading_buffering
+                                    },
+                                ),
+                                color = Color(0xFFDDDDDD),
+                                fontSize = 14.sp,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier
+                                    // 读屏用户看不到转圈：阶段文案变化要让 TalkBack 播报出来，
+                                    // 否则整个加载过程在他们的耳朵里是静默的。
+                                    .semantics { liveRegion = LiveRegionMode.Polite }
+                                    .background(Color(0x66000000), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 10.dp, vertical = 3.dp),
+                            )
+                        }
+                        AnimatedVisibility(
+                            visible = loadingStage == PlayerLoadingStage.STUCK,
+                            enter = fadeIn(tween(LOADING_INDICATOR_FADE_IN_MS)),
+                            exit = fadeOut(tween(LOADING_INDICATOR_FADE_OUT_MS)),
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .padding(top = 8.dp)
+                                    .background(Color(0x4D000000), RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 4.dp),
+                            ) {
+                                // 起播阶段（还没有播放器/媒体源）没有可"续播"的位置，
+                                // 重试只会重复同一条网络请求，不如直接退出回网页重新点播；
+                                // 缓冲阶段走 viewModel 的重试链路，从当前位置重载媒体源。
+                                if (!preparingPlayback) {
+                                    TextButton(
+                                        onClick = {
+                                            loadingAttempt++
+                                            viewModel.retryPlayback()
+                                        },
+                                    ) {
+                                        Text(text = stringResource(R.string.retry), color = Color.White)
+                                    }
+                                }
+                                TextButton(onClick = { closePlayer() }) {
+                                    Text(
+                                        text = stringResource(R.string.player_loading_exit),
+                                        color = Color.White,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // 播放失败卡片：盖住控件栏（此时也点不动它们），只留「重试 / 返回」两条出路。

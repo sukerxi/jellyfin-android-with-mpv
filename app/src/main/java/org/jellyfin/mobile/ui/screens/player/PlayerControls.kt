@@ -2,6 +2,10 @@ package org.jellyfin.mobile.ui.screens.player
 
 import android.view.LayoutInflater
 import android.view.ViewGroup
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -293,9 +297,15 @@ fun PlayerControls(
 
         // Center controls: previous / previous chapter / play-pause / next chapter / next
         // 加载等待期间整排隐藏：加载指示器就画在正中，叠在一起等于让蓝圈绕着播放键转。
-        if (!state.loading) {
+        // 用淡入淡出而不是 if：就绪那一帧整排按钮会凭空出现，与"起播不跳变"的观感相反。
+        // 退出比进入快，让按钮先让位、转圈后消失，两段动画在时间上有重叠而不是硬切。
+        AnimatedVisibility(
+            visible = !state.loading,
+            enter = fadeIn(tween(120)),
+            exit = fadeOut(tween(60)),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
             Row(
-                modifier = Modifier.align(Alignment.Center),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
