@@ -9,8 +9,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -39,7 +37,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -173,21 +170,6 @@ class PlayerControlsActions(
      * 照样把控件（连同正在操作的菜单）收走。按下期间挂起隐藏，抬手后再重新计时。
      */
     val onTouchActiveChanged: (Boolean) -> Unit,
-    /**
-     * 单击控件层的空白处（不是按钮、不是进度条）。
-     *
-     * 控件可见时单击画面任意空白位置立刻收起控件，这是视频播放器的通用手势：用户想让出
-     * 画面时不该被迫等自动隐藏计时走完。之前只有手势层处理单击，而控件可见时手势层被
-     * 控件层挡住，点击等于无效 —— 于是「想收起控件」只能干等。
-     */
-    val onTapBackground: () -> Unit,
-    /**
-     * 控件层空白处的双击，转发给手势处理器（暂停/播放或快进/快退，取决于用户设置）。
-     *
-     * 控件可见时手势层被控件层挡住，双击收不到——不转发的话用户得先点一下收起控件、
-     * 再双击，体感就是「双击要按三下」。
-     */
-    val onDoubleTap: (Offset) -> Unit,
 )
 
 /** DefaultTimeBar 的 scrub 监听转发（字段由 SideEffect 保持最新）。 */
@@ -220,6 +202,11 @@ fun PlayerControls(
     menus: PlayerMenusState,
     actions: PlayerControlsActions,
     /**
+     * 空白处的手势处理。与手势层共用同一份实现：控件可见时命中测试只落到控件层，
+     * 同级的手势层收不到任何事件（见 [playerGestureInput]）。
+     */
+    gestureHandler: PlayerGestureHandler,
+    /**
      * 按钮内容的安全区（系统栏 / 刘海）。遮罩与空白点击层不使用它：
      * 横屏时刘海只该把按钮推开，不该让压暗层跟着缩进一条。
      */
@@ -230,8 +217,6 @@ fun PlayerControls(
     // pointerInput 的 key 保持稳定，避免手势进行中被取消重启。
     val onUserInteraction by rememberUpdatedState(actions.onUserInteraction)
     val onTouchActiveChanged by rememberUpdatedState(actions.onTouchActiveChanged)
-    val onTapBackground by rememberUpdatedState(actions.onTapBackground)
-    val onDoubleTap by rememberUpdatedState(actions.onDoubleTap)
 
     Box(
         modifier = modifier
@@ -244,33 +229,30 @@ fun PlayerControls(
                     awaitFirstDown(requireUnconsumed = false)
                     onUserInteraction()
                     onTouchActiveChanged(true)
-                    // 抬手或被系统取消都要解除挂起，否则控件会永久留在屏幕上。
-                    waitForUpOrCancellation()
+                    // 只等指针全部抬起，不用 waitForUpOrCancellation：后者在「位置变更被
+                    // 其他手势消费」时也会返回，而空白处的拖拽手势恰好会消费位置变更——
+                    // 那样按住滑动的过程中就会被误判成已抬手，自动隐藏计时恢复，控件可能
+                    // 在手势进行到一半时被抽走（拖拽层随之销毁，seek 也不会落地）。
+                    var pressed: Boolean
+                    do {
+                        pressed = awaitPointerEvent().changes.any { it.pressed }
+                    } while (pressed)
                     onTouchActiveChanged(false)
                     onUserInteraction()
                 }
             },
     ) {
-        // 空白处的单击 / 双击。
+        // 空白处的指针手势：单击收起控件、双击转发给手势处理器，以及横向 seek、
+        // 纵向亮度/音量、捏合缩放、长按倍速（与手势层共用 playerGestureInput）。
         //
         // 单独一层、放在所有控件**下面**（同级后绘制者优先命中）：点按钮时事件根本不会到
         // 这里，点空白才由这一层收下。反过来说，这一层绝不能挂在父节点上——detectTapGestures
         // 会 consume 掉 DOWN，父节点的这个 consume 会让子按钮 clickable 的后续事件判定成
         // 「已被消费」而取消，整个控件栏就点不动了（第一版就踩了这个坑）。
-        //
-        // detectTapGestures 自带单击/双击区分（单击要等一个双击窗口才回调），这也是为什么
-        // 收起控件会慢约 300ms：不和双击抢手势，就只能等窗口过期。
         Box(
             modifier = Modifier
                 .matchParentSize()
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onTap = { onTapBackground() },
-                        onDoubleTap = { offset -> onDoubleTap(offset) },
-                        // 长按不算轻点：按住看画面再松手不该把控件收走。
-                        onLongPress = {},
-                    )
-                },
+                .playerGestureInput(gestureHandler),
         )
 
         // 安全区内的控件内容。外层（遮罩、按下观察者、空白点击层）始终铺满整屏，

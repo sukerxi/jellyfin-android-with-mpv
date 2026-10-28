@@ -4,13 +4,15 @@ import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.drawable.RippleDrawable
 import android.view.View
-import android.view.ViewConfiguration
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -18,6 +20,7 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -29,7 +32,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -39,8 +41,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -49,6 +57,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
@@ -67,11 +76,24 @@ import org.jellyfin.mobile.utils.Constants
  * 亮度/音量、横向 seek、双击反馈等浮层（全部由 [PlayerGestureHandler] 的状态驱动）。
  */
 
-private val IndicatorBackground = Color(0xCC000000)
-private val IndicatorTrackColor = Color.White.copy(alpha = 0.24f)
-private val SeekPositionTextColor = Color(0xFFAAAAAA)
-private val IndicatorWidth = 160.dp
-private val DoubleTapToggleSize = 96.dp
+/**
+ * 手势 HUD 的统一视觉：深色玻璃卡片 + 1dp 细描边 + 圆角，亮度/音量、横向 seek、倍速角标共用。
+ * 之前三处各画各的（纯黑方块、Material 默认进度条、72dp 实心图标），放在一起看不成体系。
+ */
+private val HudBackground = Brush.verticalGradient(listOf(Color(0xF7010101), Color(0xDB010101)))
+private val HudBorderColor = Color.White.copy(alpha = 0.10f)
+private val HudTrackColor = Color.White.copy(alpha = 0.16f)
+private val HudPrimaryText = Color.White.copy(alpha = 0.94f)
+private val HudSecondaryText = Color.White.copy(alpha = 0.62f)
+private val HudIconTint = Color.White.copy(alpha = 0.94f)
+private val HudAccentGradient = Brush.horizontalGradient(
+    listOf(JellyfinPrimary.copy(alpha = 0.88f), Color(0xFF6FD7F7)),
+)
+private val HudWidth = 176.dp
+private val HudCornerRadius = 20.dp
+private val HudIconSize = 30.dp
+private val HudProgressHeight = 5.dp
+private val DoubleTapToggleSize = 88.dp
 
 /** 双击跳转量文字（`+10s` / `-10s`）。 */
 private val RippleLabelWidth = 160.dp
@@ -83,121 +105,145 @@ fun GestureOverlay(
     onSurfaceSizeChanged: (IntSize) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val longPressTimeoutMs = ViewConfiguration.getLongPressTimeout().toLong()
-    var surfaceSize by remember { mutableStateOf(IntSize.Zero) }
-
+    // 只负责接收指针输入、上报手势区域大小；指示器由 [GestureIndicatorsOverlay] 画在控件层之上。
     Box(
         modifier = modifier
-            .onSizeChanged { size ->
-                surfaceSize = size
-                onSurfaceSizeChanged(size)
-            }
-            // Non-consuming pointer-count observer: while a pinch (2+ pointers) is in
-            // progress, drags are ignored (mirrors the old per-event pointerCount dispatch).
-            .pointerInput(handler) {
-                awaitPointerEventScope {
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        handler.onPointerCountChanged(event.changes.count { change -> change.pressed })
-                    }
-                }
-            }
-            .pointerInput(handler) {
-                detectTapGestures(
-                    onPress = {
-                        handler.startLongPressDetection(longPressTimeoutMs)
-                        tryAwaitRelease()
-                        handler.onPressReleased()
-                    },
-                    onTap = { handler.onTap() },
-                    onDoubleTap = { offset -> handler.onDoubleTap(offset) },
-                )
-            }
-            // Pinch zoom. Must stay OUTSIDE the single-pointer drag detector below:
-            // detectTransformGestures consumes every position change once the touch
-            // slop is reached, so the drag detector (innermost) claims single-pointer
-            // drags first and makes this one cancel itself for them. For a genuine
-            // two-pointer pinch the drag detector bails out without consuming, and
-            // this detector handles the zoom.
-            .pointerInput(handler) {
-                detectTransformGestures { _, _, zoom, _ ->
-                    handler.onZoom(zoom)
-                    false
-                }
-            }
-            // Single-pointer drag (horizontal seek / vertical brightness & volume).
-            // Custom implementation: the stock detectDragGestures cannot be chained
-            // with detectTransformGestures on the same node, because the transform
-            // detector (innermost in the old ordering) consumed the drag movements
-            // before the drag detector could see them, cancelling its touch-slop
-            // detection and disabling all swipe gestures. Here the drag detector is
-            // the innermost pointerInput and therefore receives events first:
-            // - it claims single-pointer drags (consuming the movements so the tap
-            //   and transform detectors cancel themselves),
-            // - it releases multi-pointer gestures unconsumed so the transform
-            //   detector above can handle pinch zoom,
-            // - taps/double-taps (no movement past the slop) are never consumed and
-            //   keep working through detectTapGestures.
-            .pointerInput(handler) {
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    val touchSlop = viewConfiguration.touchSlop
-                    var lastPosition = down.position
-                    var dragging = false
-                    // Phase 1: wait for the touch slop to be exceeded, a second
-                    // pointer (pinch), or the release (plain tap).
-                    while (!dragging) {
-                        val event = awaitPointerEvent()
-                        if (event.changes.count { change -> change.pressed } > 1) {
-                            // Multi-touch gesture: leave everything unconsumed so
-                            // detectTransformGestures can take over the zoom.
-                            return@awaitEachGesture
-                        }
-                        val change = event.changes.firstOrNull { it.id == down.id }
-                            ?: return@awaitEachGesture
-                        if (!change.pressed) return@awaitEachGesture
-                        val distance = (change.position - down.position).getDistance()
-                        if (distance > touchSlop) {
-                            dragging = true
-                            change.consume()
-                            handler.onDragStart(down.position)
-                            // Report only the portion beyond the slop, mirroring the
-                            // old GestureDetector.onScroll / stock detector behavior.
-                            val slopPosition = down.position +
-                                (change.position - down.position) * (touchSlop / distance)
-                            handler.onDrag(change.position, change.position - slopPosition)
-                            lastPosition = change.position
-                        }
-                    }
-                    // Phase 2: drag until the pointer is released or canceled.
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == down.id }
-                        if (change == null) {
-                            handler.onDragCancel()
-                            return@awaitEachGesture
-                        }
-                        val dragAmount = change.position - lastPosition
-                        if (!change.pressed) {
-                            if (dragAmount != Offset.Zero) {
-                                handler.onDrag(change.position, dragAmount)
-                                lastPosition = change.position
-                            }
-                            handler.onDragEnd()
-                            return@awaitEachGesture
-                        }
-                        if (dragAmount != Offset.Zero) {
-                            handler.onDrag(change.position, dragAmount)
-                            lastPosition = change.position
-                            change.consume()
-                        }
-                    }
-                }
-            },
+            .onSizeChanged(onSurfaceSizeChanged)
+            .playerGestureInput(handler),
+    )
+}
+
+/**
+ * 手势指示浮层：亮度/音量、横向 seek、双击跳转量、长按倍速角标。
+ *
+ * 画在控件层之上：控件可见时也能滑动 seek / 调亮度音量，指示器若还在控件层下面，会被
+ * 上下渐变压暗，并和中央那排按钮叠在一起。这一层没有任何指针输入，不会挡住下面的控件。
+ */
+@Composable
+fun GestureIndicatorsOverlay(
+    handler: PlayerGestureHandler,
+    modifier: Modifier = Modifier,
+) {
+    var surfaceSize by remember { mutableStateOf(IntSize.Zero) }
+    Box(
+        modifier = modifier.onSizeChanged { surfaceSize = it },
     ) {
         GestureIndicators(handler = handler, surfaceSize = surfaceSize)
     }
 }
+
+/**
+ * 播放器手势输入：单击/双击/长按、双指缩放、单指拖拽（横向 seek、纵向亮度音量）。
+ *
+ * 手势层与控件层的空白处共用这一份实现：控件可见时命中测试只落到控件层，同级的手势层
+ * 根本收不到事件 —— 控件层空白处不自己挂一遍的话，控件显示期间滑动 seek / 亮度音量、
+ * 捏合缩放、长按倍速就会全部失效。
+ */
+fun Modifier.playerGestureInput(handler: PlayerGestureHandler): Modifier = this
+    // Non-consuming pointer-count observer: while a pinch (2+ pointers) is in
+    // progress, drags are ignored (mirrors the old per-event pointerCount dispatch).
+    .pointerInput(handler) {
+        awaitPointerEventScope {
+            while (true) {
+                val event = awaitPointerEvent()
+                handler.onPointerCountChanged(event.changes.count { change -> change.pressed })
+            }
+        }
+    }
+    .pointerInput(handler) {
+        detectTapGestures(
+            onPress = {
+                tryAwaitRelease()
+                handler.onPressReleased()
+            },
+            // 长按交给手势探测器自己的计时：这样长按触发后抬手不会再算成一次轻点
+            // （否则「长按倍速 → 松手」会把控件栏弹出来 / 收起来）。
+            onLongPress = { handler.onLongPressStarted() },
+            onTap = { handler.onTap() },
+            onDoubleTap = { offset -> handler.onDoubleTap(offset) },
+        )
+    }
+    // Pinch zoom. Must stay OUTSIDE the single-pointer drag detector below:
+    // detectTransformGestures consumes every position change once the touch
+    // slop is reached, so the drag detector (innermost) claims single-pointer
+    // drags first and makes this one cancel itself for them. For a genuine
+    // two-pointer pinch the drag detector bails out without consuming, and
+    // this detector handles the zoom.
+    .pointerInput(handler) {
+        detectTransformGestures { _, _, zoom, _ ->
+            handler.onZoom(zoom)
+            false
+        }
+    }
+    // Single-pointer drag (horizontal seek / vertical brightness & volume).
+    // Custom implementation: the stock detectDragGestures cannot be chained
+    // with detectTransformGestures on the same node, because the transform
+    // detector (innermost in the old ordering) consumed the drag movements
+    // before the drag detector could see them, cancelling its touch-slop
+    // detection and disabling all swipe gestures. Here the drag detector is
+    // the innermost pointerInput and therefore receives events first:
+    // - it claims single-pointer drags (consuming the movements so the tap
+    //   and transform detectors cancel themselves),
+    // - it releases multi-pointer gestures unconsumed so the transform
+    //   detector above can handle pinch zoom,
+    // - taps/double-taps (no movement past the slop) are never consumed and
+    //   keep working through detectTapGestures.
+    .pointerInput(handler) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            val touchSlop = viewConfiguration.touchSlop
+            var lastPosition = down.position
+            var dragging = false
+            // Phase 1: wait for the touch slop to be exceeded, a second
+            // pointer (pinch), or the release (plain tap).
+            while (!dragging) {
+                val event = awaitPointerEvent()
+                if (event.changes.count { change -> change.pressed } > 1) {
+                    // Multi-touch gesture: leave everything unconsumed so
+                    // detectTransformGestures can take over the zoom.
+                    return@awaitEachGesture
+                }
+                val change = event.changes.firstOrNull { it.id == down.id }
+                    ?: return@awaitEachGesture
+                if (!change.pressed) return@awaitEachGesture
+                val distance = (change.position - down.position).getDistance()
+                if (distance > touchSlop) {
+                    dragging = true
+                    change.consume()
+                    handler.onDragStart(down.position)
+                    // Report only the portion beyond the slop, mirroring the
+                    // old GestureDetector.onScroll / stock detector behavior.
+                    val slopPosition = down.position +
+                        (change.position - down.position) * (touchSlop / distance)
+                    handler.onDrag(change.position, change.position - slopPosition)
+                    lastPosition = change.position
+                }
+            }
+            // Phase 2: drag until the pointer is released or canceled.
+            while (true) {
+                val event = awaitPointerEvent()
+                val change = event.changes.firstOrNull { it.id == down.id }
+                if (change == null) {
+                    handler.onDragCancel()
+                    return@awaitEachGesture
+                }
+                val dragAmount = change.position - lastPosition
+                if (!change.pressed) {
+                    if (dragAmount != Offset.Zero) {
+                        handler.onDrag(change.position, dragAmount)
+                        lastPosition = change.position
+                    }
+                    handler.onDragEnd()
+                    return@awaitEachGesture
+                }
+                if (dragAmount != Offset.Zero) {
+                    handler.onDrag(change.position, dragAmount)
+                    lastPosition = change.position
+                    change.consume()
+                }
+            }
+        }
+    }
 
 @Composable
 private fun BoxScope.GestureIndicators(
@@ -211,102 +257,85 @@ private fun BoxScope.GestureIndicators(
         if (handler.speedBoostActive) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
     }
     if (handler.speedBoostActive) {
+        val badgeShape = RoundedCornerShape(14.dp)
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .padding(top = 72.dp)
-                .background(IndicatorBackground, RoundedCornerShape(16.dp))
-                .padding(horizontal = 14.dp, vertical = 8.dp),
+                .shadow(8.dp, badgeShape, clip = false)
+                .background(HudBackground, badgeShape)
+                .border(1.dp, HudBorderColor, badgeShape)
+                .padding(horizontal = 16.dp, vertical = 9.dp),
         ) {
             Text(
                 text = stringResource(
                     R.string.playback_speed_boost_active,
                     formatSpeedLabel(Constants.HOLD_SPEEDUP_MULTIPLIER),
                 ),
-                color = Color.White,
+                color = HudPrimaryText,
                 fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.2.sp,
             )
         }
     }
 
     // Brightness / volume indicator
     handler.indicator?.let { indicator ->
-        Box(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .width(IndicatorWidth)
-                .background(IndicatorBackground, RoundedCornerShape(16.dp))
-                .padding(16.dp),
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        HudAppear(modifier = Modifier.align(Alignment.Center)) {
+            HudCard {
                 Icon(
                     painter = painterResource(indicator.iconRes),
                     contentDescription = null,
-                    modifier = Modifier.size(72.dp),
-                    tint = Color.White,
+                    modifier = Modifier.size(HudIconSize),
+                    tint = HudIconTint,
                 )
-                Spacer(modifier = Modifier.height(16.dp))
-                LinearProgressIndicator(
-                    progress = { indicator.progress },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(4.dp),
-                    color = JellyfinPrimary,
-                    trackColor = IndicatorTrackColor,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(10.dp))
                 Text(
                     text = indicator.text,
-                    color = Color.White,
-                    fontSize = 14.sp,
+                    color = HudPrimaryText,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    letterSpacing = 0.2.sp,
+                    textAlign = TextAlign.Center,
                 )
+                Spacer(modifier = Modifier.height(14.dp))
+                HudProgressBar(progress = indicator.progress)
             }
         }
     }
 
     // Horizontal seek indicator
     handler.seekIndicator?.let { seek ->
-        Box(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .width(IndicatorWidth)
-                .background(IndicatorBackground, RoundedCornerShape(16.dp))
-                .padding(16.dp),
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        HudAppear(modifier = Modifier.align(Alignment.Center)) {
+            HudCard {
                 Icon(
                     painter = painterResource(
-                        if (seek.forward) R.drawable.ic_fast_forward_black_32dp else R.drawable.ic_rewind_black_32dp,
+                        if (seek.forward) R.drawable.ic_gesture_seek_forward_24dp else R.drawable.ic_gesture_seek_rewind_24dp,
                     ),
                     contentDescription = null,
-                    modifier = Modifier
-                        .size(72.dp)
-                        .padding(top = 8.dp),
-                    tint = Color.White,
+                    modifier = Modifier.size(HudIconSize),
+                    tint = HudIconTint,
                 )
+                Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = seek.seekText,
                     color = Color.White,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(top = 8.dp),
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    // 等宽数字：拖动过程中「+12:01」不会因为位数变化而左右抖动。
+                    style = TextStyle(fontFeatureSettings = "tnum"),
                 )
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = seek.positionText,
-                    color = SeekPositionTextColor,
-                    fontSize = 14.sp,
-                    modifier = Modifier.padding(top = 4.dp),
+                    color = HudSecondaryText,
+                    fontSize = 12.sp,
+                    letterSpacing = 0.3.sp,
+                    style = TextStyle(fontFeatureSettings = "tnum"),
                 )
-                LinearProgressIndicator(
-                    progress = { seek.progress },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp, bottom = 4.dp)
-                        .height(4.dp),
-                    color = JellyfinPrimary,
-                    trackColor = IndicatorTrackColor,
-                )
+                Spacer(modifier = Modifier.height(12.dp))
+                HudProgressBar(progress = seek.progress)
             }
         }
     }
@@ -322,8 +351,13 @@ private fun BoxScope.GestureIndicators(
             text = ripple.label,
             color = Color.White,
             fontSize = 28.sp,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 0.5.sp,
             textAlign = TextAlign.Center,
+            // 涟漪上的文字直接压在画面高光上，纯白 28sp 在亮场景里会糊掉，加一层投影兜底。
+            style = TextStyle(
+                shadow = Shadow(color = Color(0xB3000000), blurRadius = 12f, offset = Offset(0f, 2f)),
+            ),
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .offset {
@@ -368,7 +402,11 @@ private fun BoxScope.GestureIndicators(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0x99000000), CircleShape),
+                    .background(
+                        Brush.radialGradient(listOf(Color(0xB3000000), Color(0x73000000))),
+                        CircleShape,
+                    )
+                    .border(1.dp, HudBorderColor, CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -376,11 +414,91 @@ private fun BoxScope.GestureIndicators(
                         if (toggle.willPause) R.drawable.ic_pause_black_42dp else R.drawable.ic_play_black_42dp,
                     ),
                     contentDescription = null,
-                    modifier = Modifier.size(44.dp),
+                    modifier = Modifier.size(40.dp),
                     tint = Color.White,
                 )
             }
         }
+    }
+}
+
+/**
+ * 卡片出现时的短促淡入 + 轻微放大。
+ *
+ * 手势一开始 HUD 就整块「砸」到画面上，在高码率画面里显得很生硬；110~140ms 的入场
+ * 让它在拖动起步时不抢视线。卡片只在这一帧被组合一次，之后进度更新只重绘内容。
+ */
+@Composable
+private fun HudAppear(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    var appeared by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { appeared = true }
+    val appearAlpha by animateFloatAsState(if (appeared) 1f else 0f, tween(110), label = "hudAlpha")
+    val appearScale by animateFloatAsState(if (appeared) 1f else 0.94f, tween(140), label = "hudScale")
+    Box(
+        modifier = modifier.graphicsLayer {
+            alpha = appearAlpha
+            scaleX = appearScale
+            scaleY = appearScale
+        },
+    ) {
+        content()
+    }
+}
+
+/** 手势 HUD 的统一卡片容器：玻璃底 + 细描边 + 圆角，内容垂直居中。 */
+@Composable
+private fun HudCard(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val shape = RoundedCornerShape(HudCornerRadius)
+    Column(
+        modifier = modifier
+            .width(HudWidth)
+            .shadow(10.dp, shape, clip = false)
+            .background(HudBackground, shape)
+            .border(1.dp, HudBorderColor, shape)
+            .padding(horizontal = 18.dp, vertical = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        content = content,
+    )
+}
+
+/**
+ * 手势 HUD 的进度条：圆头轨道 + 品牌色渐变填充 + 末端小圆点。
+ *
+ * Material 的 LinearProgressIndicator 是方头、带末端 stop 点，放在这块小卡片里显得粗糙；这里自己画，几行 Canvas 就能对齐卡片的圆角语言。
+ */
+@Composable
+private fun HudProgressBar(
+    progress: Float,
+    modifier: Modifier = Modifier,
+) {
+    val fraction = progress.coerceIn(0f, 1f)
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(HudProgressHeight),
+    ) {
+        val barRadius = CornerRadius(size.height / 2f, size.height / 2f)
+        drawRoundRect(color = HudTrackColor, cornerRadius = barRadius)
+        if (fraction <= 0f) return@Canvas
+
+        val barWidth = (size.width * fraction).coerceIn(size.height, size.width)
+        drawRoundRect(
+            brush = HudAccentGradient,
+            size = Size(barWidth, size.height),
+            cornerRadius = barRadius,
+        )
+        // 末端圆点：进度很低时这一小截几乎不可见，点能让"当前值"始终有个落点。
+        drawCircle(
+            color = Color.White.copy(alpha = 0.85f),
+            radius = size.height * 0.34f,
+            center = Offset(barWidth - size.height / 2f, size.height / 2f),
+        )
     }
 }
 

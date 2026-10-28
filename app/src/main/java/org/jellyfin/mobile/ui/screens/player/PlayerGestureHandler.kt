@@ -16,7 +16,6 @@ import androidx.media3.common.Player
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.IntSize
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.jellyfin.mobile.R
@@ -125,7 +124,6 @@ class PlayerGestureHandler(
     private var seekStartPosition = 0L
     private var mediaDuration = 0L
     private var isOnPressingSpeedUp = false
-    private var longPressJob: Job? = null
     private var isZoomEnabled = false
     private var toggleToken = 0L
     private var rippleToken = 0L
@@ -177,7 +175,7 @@ class PlayerGestureHandler(
     }
 
     /**
-     * 长按开始（由 onPress 中的延迟任务触发，超过系统长按阈值且未发生拖拽时）。
+     * 长按开始（由手势探测器的长按回调触发，超过系统长按阈值且未发生拖拽时）。
      */
     fun onLongPressStarted() {
         if (isLocked() || !appPreferences.exoPlayerAllowPressSpeedUp) return
@@ -197,23 +195,10 @@ class PlayerGestureHandler(
     }
 
     /**
-     * 按压结束（抬起或取消）：取消长按检测并释放倍速。
+     * 按压结束（抬起或取消）：释放长按倍速。
      */
     fun onPressReleased() {
-        longPressJob?.cancel()
-        longPressJob = null
         releaseSpeedUp()
-    }
-
-    /**
-     * 在 onPress 中启动长按检测；[timeoutMs] 通常取 ViewConfiguration 的长按阈值。
-     */
-    fun startLongPressDetection(timeoutMs: Long) {
-        longPressJob?.cancel()
-        longPressJob = scope.launch {
-            delay(timeoutMs)
-            onLongPressStarted()
-        }
     }
 
     // endregion
@@ -221,9 +206,7 @@ class PlayerGestureHandler(
     // region drags
 
     fun onDragStart(position: Offset) {
-        // A drag supersedes any pending long press
-        longPressJob?.cancel()
-        longPressJob = null
+        // A drag supersedes the long-press speed-up started by the tap detector.
         releaseSpeedUp()
 
         dragStartPosition = position
@@ -489,11 +472,7 @@ class PlayerGestureHandler(
     // endregion
 }
 
-/**
- * 创建并记住 [PlayerGestureHandler]。
- *
- * @param longPressTimeoutMs 长按阈值（通常 ViewConfiguration.getLongPressTimeout()）
- */
+/** 创建并记住 [PlayerGestureHandler]。 */
 @Composable
 fun rememberPlayerGestureHandler(
     appPreferences: AppPreferences,
@@ -515,7 +494,6 @@ fun rememberPlayerGestureHandler(
     onZoomChanged: (Boolean) -> Unit,
     onHideControls: () -> Unit,
     seekStepLabel: (forward: Boolean) -> String,
-    longPressTimeoutMs: Long,
     exclusionSizeVerticalPx: Int,
     exclusionSizeHorizontalPx: Int,
 ): PlayerGestureHandler {
@@ -527,7 +505,6 @@ fun rememberPlayerGestureHandler(
         scope,
         volumeTextFormat,
         brightnessTextFormat,
-        longPressTimeoutMs,
         exclusionSizeVerticalPx,
         exclusionSizeHorizontalPx,
     ) {

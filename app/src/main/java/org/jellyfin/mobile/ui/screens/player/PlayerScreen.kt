@@ -1026,7 +1026,6 @@ fun PlayerScreen(
                 seconds,
             )
         },
-        longPressTimeoutMs = android.view.ViewConfiguration.getLongPressTimeout().toLong(),
         exclusionSizeVerticalPx = exclusionSizeVerticalPx,
         exclusionSizeHorizontalPx = exclusionSizeHorizontalPx,
     )
@@ -1311,15 +1310,24 @@ fun PlayerScreen(
                     // 而空白处单击要能把它收起——旧的 showControls() 会在收起后立刻又弹回来。
                     onUserInteraction = { controlsToken++ },
                     onTouchActiveChanged = { active -> touchActive = active },
-                    onTapBackground = { toggleControls() },
-                    onDoubleTap = { position -> gestureHandler.onDoubleTap(position) },
                 ),
+                gestureHandler = gestureHandler,
                 // 刘海/系统栏只作用于按钮内容，遮罩与点击区域仍铺满（见 PlayerControls 的
                 // contentPadding 说明）。
                 contentPadding = controlsPadding,
                 modifier = Modifier.fillMaxSize(),
             )
         }
+
+        // 手势反馈指示器（亮度/音量、横向 seek、长按倍速角标）。
+        // 画在控件层之上：控件可见时滑动 seek / 调亮度音量已经可用（空白处的手势层），
+        // 指示器若留在控件层下面，会被上下渐变压暗、被中央按钮盖住。
+        GestureIndicatorsOverlay(
+            handler = gestureHandler,
+            modifier = Modifier
+                .matchParentSize()
+                .padding(playerViewPadding),
+        )
 
         // Skip media segment button
         // 画在控件层之上：控件可见时，控件层的空白点击层会先吃掉按下事件，按钮放在下面
