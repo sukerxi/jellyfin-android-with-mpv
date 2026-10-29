@@ -94,6 +94,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.Player
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.compose.state.ProgressStateWithTickInterval
 import androidx.media3.ui.compose.state.rememberProgressStateWithTickInterval
 import io.github.peerless2012.ass.media.AssHandler
 import io.github.peerless2012.ass.media.widget.AssSubtitleView
@@ -102,6 +103,8 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -117,6 +120,7 @@ import org.jellyfin.mobile.player.mpv.MpvPlayer
 import org.jellyfin.mobile.player.mpv.bench.FrameCompareViewModel
 import org.jellyfin.mobile.player.qualityoptions.QualityOptionsProvider
 import org.jellyfin.mobile.player.source.RemoteJellyfinMediaSource
+import org.jellyfin.mobile.player.ui.ChapterMarkingState
 import org.jellyfin.mobile.player.ui.DecoderType
 import org.jellyfin.mobile.player.ui.PlayerFullscreenHelper
 import org.jellyfin.mobile.player.ui.TrickplayHelper
@@ -206,6 +210,17 @@ private class PlaybackFailure(
     val maxStreamingBitrateOverride: Int?,
 )
 
+/**
+ * 自动隐藏计时器的观察输入：当前是否该计时，以及最近一次用户交互的序号。
+ *
+ * 两个字段一起作为 [snapshotFlow] 的输出，[interactionTick] 变化即重置倒计时；
+ * 计时条件本身变化（菜单打开、手指按下、暂停……）则取消倒计时。
+ */
+private data class AutoHideSignal(
+    val eligible: Boolean,
+    val interactionTick: Int,
+)
+
 @Composable
 fun PlayerScreen(
     onClose: () -> Unit,
@@ -254,7 +269,14 @@ fun PlayerScreen(
 
     // UI state
     var controlsVisible by remember { mutableStateOf(true) }
-    var controlsToken by remember { mutableIntStateOf(0) }
+    /**
+     * 交互信号：控件层上每发生一次触摸就自增。
+     *
+     * 只在事件回调里写、在协程里读（见下方的自动隐藏计时）。若在组合期读取（例如当成
+     * `LaunchedEffect` 的 key），用户每按一下屏幕都会让整个播放器界面重组一次，而它
+     * 的语义仅仅是「重置一个计时器」。
+     */
+    val interactionTick = remember { mutableIntStateOf(0) }
     // 手指是否还按在控件层上：按住期间不隐藏，抬手后重新计时。
     var touchActive by remember { mutableStateOf(false) }
     // 自动隐藏时长由用户决定（3s / 5s / 10s / 永不），不再写死。
@@ -302,7 +324,7 @@ fun PlayerScreen(
 
     fun showControls() {
         controlsVisible = true
-        controlsToken++
+        interactionTick.intValue++
     }
 
     /*
@@ -752,14 +774,24 @@ fun PlayerScreen(
     // - 手指按在控件上时不隐藏 —— 只「重置计时」不够，按住超过计时长度照样会消失；
     // - 时长为 0 表示永不隐藏，完全交给用户的意愿；
     // - 菜单/面板/拖动进度条期间不隐藏（原有规则）。
-    val controlsSuppressed = expandedMenu != null || infoPanelVisible || episodePickerVisible ||
-        compareVisible || isScrubbing || touchActive
+    //
+    // 这些抑制条件与「最近一次交互」全部由 snapshotFlow 在协程里观察，组合期一个都不读：
+    // 否则按下/抬起手指、每拖一下进度条、开关一次菜单，都会让整个播放器界面（含视频
+    // AndroidView 与两侧控件栏）重组一遍——而它们的作用只是「重置一个倒计时」。
+    fun isControlsSuppressed(): Boolean = expandedMenu != null || infoPanelVisible ||
+        episodePickerVisible || compareVisible || isScrubbing || touchActive
 
-    LaunchedEffect(controlsVisible, controlsSuppressed, controlsToken, controlsTimeoutMs, isPlaying) {
+    LaunchedEffect(controlsTimeoutMs) {
         val timeout = controlsTimeoutMs
-        val shouldHide = controlsVisible && !controlsSuppressed && timeout > 0 &&
-            isPlaying && !isScreenReaderActive()
-        if (shouldHide) {
+        if (timeout <= 0) return@LaunchedEffect
+        snapshotFlow {
+            AutoHideSignal(
+                eligible = controlsVisible && !isControlsSuppressed() && isPlaying &&
+                    !isScreenReaderActive(),
+                interactionTick = interactionTick.intValue,
+            )
+        }.collectLatest { signal ->
+            if (!signal.eligible) return@collectLatest
             delay(timeout.toLong())
             controlsVisible = false
         }
@@ -773,12 +805,14 @@ fun PlayerScreen(
     //
     // 只在本次会话第一次真正播起来时触发：中途缓冲（网络抖动）结束时，若用户正开着菜单
     // 或在看进度，收起控件反而是干扰。
+    //
+    // 抑制条件在协程里现读（不走 composition），触摸与菜单开关不再触发本屏重组。
     var initialLoadFinished by remember { mutableStateOf(false) }
-    LaunchedEffect(showLoadingIndicator, isPlaying, controlsSuppressed, controlsTimeoutMs) {
+    LaunchedEffect(showLoadingIndicator, isPlaying) {
         if (initialLoadFinished || showLoadingIndicator || !isPlaying) return@LaunchedEffect
         initialLoadFinished = true
         val timeout = controlsTimeoutMs
-        if (controlsVisible && !controlsSuppressed && timeout > 0 && !isScreenReaderActive()) {
+        if (controlsVisible && !isControlsSuppressed() && timeout > 0 && !isScreenReaderActive()) {
             controlsVisible = false
         }
     }
@@ -1135,9 +1169,8 @@ fun PlayerScreen(
 
         // Double tap seek ripple. Sits below the gesture layer and does not take part in
         // gesture handling.
-        SeekRippleOverlay(
-            trigger = gestureHandler.ripple,
-            onFinished = gestureHandler::hideRipple,
+        SeekRippleLayer(
+            handler = gestureHandler,
             modifier = Modifier
                 .matchParentSize()
                 .padding(playerViewPadding),
@@ -1311,7 +1344,7 @@ fun PlayerScreen(
                     },
                     // 只重置自动隐藏计时，不改变可见性：能走到这里说明控件本来就是可见的，
                     // 而空白处单击要能把它收起——旧的 showControls() 会在收起后立刻又弹回来。
-                    onUserInteraction = { controlsToken++ },
+                    onUserInteraction = { interactionTick.intValue++ },
                     onTouchActiveChanged = { active -> touchActive = active },
                 )
             }
@@ -1344,15 +1377,16 @@ fun PlayerScreen(
                 ),
                 actions = controlsActions,
                 // 进度行自己读取 200ms tick / scrub / trickplay / 章节状态：这些高频值
-                // 不进 PlayerControlsState，tick 就不会重组上下两条栏。
+                // 不进 PlayerControlsState。读取点还要再下沉一层（见 PlayerProgressSlot）：
+                // 这个 lambda 不是 restartable 的，在 lambda 体内读状态会让整条控件栏
+                // 一起重组——写上值在这里、读取在更里层，才算真正隔离。
                 progress = {
-                    val chapterMarkings by viewModel.chapterMarkings.collectAsStateWithLifecycle()
-                    PlayerProgressRow(
+                    PlayerProgressSlot(
                         progressState = progressState,
-                        trickplay = trickplayHelper.state,
-                        chapterMarkings = chapterMarkings,
-                        scrubPositionMs = scrubPositionMs,
-                        pendingSeekPositionMs = pendingSeekPositionMs,
+                        trickplayHelper = trickplayHelper,
+                        chapterMarkingsFlow = viewModel.chapterMarkings,
+                        scrubPositionMs = { scrubPositionMs },
+                        pendingSeekPositionMs = { pendingSeekPositionMs },
                         actions = controlsActions,
                     )
                 },
@@ -1722,6 +1756,53 @@ private fun skipSegmentLabelRes(type: MediaSegmentType): Int = when (type) {
     MediaSegmentType.RECAP -> R.string.skip_media_segment_recap
     MediaSegmentType.COMMERCIAL -> R.string.skip_media_segment_commercial
     else -> R.string.skip_media_segment
+}
+
+/**
+ * 进度行插槽：把高频状态的全部读取收进一个 restartable 的组合作用域。
+ *
+ * 传给 [PlayerControls] 的 `progress` lambda 不是 restartable 的（编译器只为它生成
+ * replace group），在 lambda 体内读快照状态会把失效上报给**外层** [PlayerControls]
+ * 的重组作用域：一次 200ms tick、一个拖动触摸事件，重建的就是整条控件栏。读取移到这里
+ * 之后，进度条、时间文本、trickplay 预览与章节标记的更新只重组这一行。
+ */
+@Composable
+private fun PlayerProgressSlot(
+    progressState: ProgressStateWithTickInterval,
+    trickplayHelper: TrickplayHelper,
+    chapterMarkingsFlow: StateFlow<List<ChapterMarkingState>>,
+    scrubPositionMs: () -> Long?,
+    pendingSeekPositionMs: () -> Long?,
+    actions: PlayerControlsActions,
+) {
+    val chapterMarkings by chapterMarkingsFlow.collectAsStateWithLifecycle()
+    PlayerProgressRow(
+        progressState = progressState,
+        trickplay = trickplayHelper.state,
+        chapterMarkings = chapterMarkings,
+        scrubPositionMs = scrubPositionMs(),
+        pendingSeekPositionMs = pendingSeekPositionMs(),
+        actions = actions,
+    )
+}
+
+/**
+ * 双击 seek 涟漪层：把 [PlayerGestureHandler.ripple] 的读取收进独立的 restartable 作用域。
+ *
+ * 直接在 [PlayerScreen] 组合期读取时，双击一次会让整个播放器界面重组两次——
+ * 包括视频 [AndroidView] 的 update 与其余所有浮层。下沉之后，涟漪的
+ * 显示/消失只重组这一层。
+ */
+@Composable
+private fun SeekRippleLayer(
+    handler: PlayerGestureHandler,
+    modifier: Modifier = Modifier,
+) {
+    SeekRippleOverlay(
+        trigger = handler.ripple,
+        onFinished = handler::hideRipple,
+        modifier = modifier,
+    )
 }
 
 /**
