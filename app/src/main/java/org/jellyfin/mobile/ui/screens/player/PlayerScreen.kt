@@ -1764,7 +1764,8 @@ private fun skipSegmentLabelRes(type: MediaSegmentType): Int = when (type) {
  * 传给 [PlayerControls] 的 `progress` lambda 不是 restartable 的（编译器只为它生成
  * replace group），在 lambda 体内读快照状态会把失效上报给**外层** [PlayerControls]
  * 的重组作用域：一次 200ms tick、一个拖动触摸事件，重建的就是整条控件栏。读取移到这里
- * 之后，进度条、时间文本、trickplay 预览与章节标记的更新只重组这一行。
+ * 之后，进度条、时间文本与 trickplay 预览的更新只重组这一行；章节标记再下沉一层
+ * （见 PlayerControls 的 ChapterMarkingsSlot）。
  */
 @Composable
 private fun PlayerProgressSlot(
@@ -1775,7 +1776,10 @@ private fun PlayerProgressSlot(
     pendingSeekPositionMs: () -> Long?,
     actions: PlayerControlsActions,
 ) {
-    val chapterMarkings by chapterMarkingsFlow.collectAsStateWithLifecycle()
+    // 章节标记以 State 下传而不是在这里读成列表：读取点越深，200ms tick 的重组范围越小
+    // （见 PlayerControls 的 ChapterMarkingsSlot）。State 是稳定类型，进度行重组时这一层
+    // 可以被跳过。
+    val chapterMarkings = chapterMarkingsFlow.collectAsStateWithLifecycle()
     PlayerProgressRow(
         progressState = progressState,
         trickplay = trickplayHelper.state,

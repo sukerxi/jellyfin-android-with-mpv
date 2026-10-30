@@ -23,6 +23,7 @@ import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.brightness
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * 阶段 5：手势逻辑（亮度/音量/横向 seek/双击/长按倍速/缩放）。
@@ -119,6 +120,19 @@ class PlayerGestureHandler(
 
     /** Tracks a value during a swipe gesture; reset to -1f when a gesture starts. */
     private var swipeGestureValueTracker = -1f
+    /**
+     * 本次手势内缓存的最大音量。`getStreamMaxVolume` 是一次 Binder 调用，手指移动期间每个
+     * 触摸事件都问一次等于每秒上百次 IPC；输出设备在手势中途切换的概率可以忽略。
+     */
+    private var cachedMaxVolume = -1
+    /** 最近一次真正写入系统的音量档位：整数档位不变时重复 `setStreamVolume` 也是 IPC。 */
+    private var lastAppliedVolume = -1
+    /** 最近一次写入 HUD 的音量档位：档位不变时不必重组指示浮层。 */
+    private var lastShownVolume = -1
+    /** 最近一次真正写入窗口的亮度百分比（亮度按 1% 量化后再写，见 [handleVerticalSwipe]）。 */
+    private var lastAppliedBrightnessPercent = -1
+    /** 本次手势是否改过亮度：偏好落盘从「每个触摸事件」挪到手势结束（见 [finishGesture]）。 */
+    private var brightnessChanged = false
     private var isHorizontalSeeking = false
     private var seekTimeAccumulator = 0L
     private var seekStartPosition = 0L
@@ -209,9 +223,18 @@ class PlayerGestureHandler(
         // A drag supersedes the long-press speed-up started by the tap detector.
         releaseSpeedUp()
 
+        // 上一次手势若因系统抢占而没走到 finishGesture，亮度改动在这里补一次落盘。
+        persistBrightnessIfChanged()
+
         dragStartPosition = position
         currentGesture = GestureDirection.NONE
         swipeGestureValueTracker = -1f
+        // 每次手势重新读取输出设备与窗口状态：音量被其他应用改动、蓝牙切换都发生在手势之间。
+        cachedMaxVolume = -1
+        lastAppliedVolume = -1
+        lastShownVolume = -1
+        lastAppliedBrightnessPercent = -1
+        brightnessChanged = false
         isHorizontalSeeking = false
         seekTimeAccumulator = 0L
         seekStartPosition = 0L
@@ -298,14 +321,26 @@ class PlayerGestureHandler(
         val start = dragStartPosition ?: return
         if (start.x > viewCenterX) {
             // Swiping on the right, change volume
-            val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-            if (swipeGestureValueTracker == -1f) swipeGestureValueTracker = currentVolume.toFloat()
+            val maxVolume = cachedMaxVolume.takeIf { it > 0 } ?: run {
+                audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).also { cachedMaxVolume = it }
+            }
+            // 只在本手势的第一个事件读一次当前音量；之后由累加器跟踪，避免每帧一次
+            // getStreamVolume（Binder IPC）。
+            if (swipeGestureValueTracker == -1f) {
+                swipeGestureValueTracker = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat()
+            }
 
-            val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
             swipeGestureValueTracker += ratioChange * maxVolume
 
             val toSet = swipeGestureValueTracker.toInt().coerceIn(0, maxVolume)
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, toSet, 0)
+            // 触摸事件的细分变化通常不跨整数档位：档位没变时写系统音量和重建 HUD 都不会
+            // 产生任何可见效果，只会各多一次 IPC / 重组。
+            if (toSet != lastAppliedVolume) {
+                lastAppliedVolume = toSet
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, toSet, 0)
+            }
+            if (toSet == lastShownVolume) return
+            lastShownVolume = toSet
 
             indicator = VolumeBrightnessIndicator(
                 // 0% 还画着「有声波」的喇叭会自相矛盾，静音时换成叉号。
@@ -340,15 +375,23 @@ class PlayerGestureHandler(
             }
 
             swipeGestureValueTracker = (swipeGestureValueTracker + ratioChange).coerceIn(brightnessRange)
-            window.brightness = swipeGestureValueTracker
-            if (appPreferences.exoPlayerRememberBrightness) {
-                appPreferences.exoPlayerBrightness = swipeGestureValueTracker
-            }
+            // 亮度按 1% 量化后再写窗口：`Window.brightness` 的 setter 会触发一次
+            // updateViewLayout（Binder IPC + WindowManagerService 重排），而 120Hz 屏幕上
+            // 触摸事件可达每秒上百个，亚百分比的变化既看不出来、成本又是每事件一次。
+            // 量化后的整数百分比同时也是 HUD 文案与偏好里保存的值，三者始终一致。
+            val percent = (swipeGestureValueTracker * Constants.PERCENT_MAX).roundToInt()
+                .coerceIn(0, Constants.PERCENT_MAX)
+            if (percent == lastAppliedBrightnessPercent) return
+            lastAppliedBrightnessPercent = percent
+
+            val appliedBrightness = percent / Constants.PERCENT_MAX.toFloat()
+            window.brightness = appliedBrightness
+            brightnessChanged = true
 
             indicator = VolumeBrightnessIndicator(
                 iconRes = R.drawable.ic_brightness_white_24dp,
-                progress = swipeGestureValueTracker.coerceIn(0f, 1f),
-                text = String.format(brightnessTextFormat, (swipeGestureValueTracker * Constants.PERCENT_MAX).toInt()),
+                progress = appliedBrightness,
+                text = String.format(brightnessTextFormat, percent),
             )
         }
     }
@@ -423,7 +466,23 @@ class PlayerGestureHandler(
         finishGesture()
     }
 
+    /**
+     * 「记住亮度」在手势结束时落盘一次。
+     *
+     * 原先每个触摸事件都会写一次 DataStore：每次 edit 都会重写整份偏好快照，并让所有
+     * `dataStore.data` 派生 Flow 重新发射，而手指移动期间这些写入的收益为零。
+     */
+    private fun persistBrightnessIfChanged() {
+        if (!brightnessChanged) return
+        brightnessChanged = false
+        if (appPreferences.exoPlayerRememberBrightness) {
+            appPreferences.exoPlayerBrightness = lastAppliedBrightnessPercent / Constants.PERCENT_MAX.toFloat()
+        }
+    }
+
     private fun finishGesture() {
+        persistBrightnessIfChanged()
+
         // Release press-to-speed-up if active
         releaseSpeedUp()
 

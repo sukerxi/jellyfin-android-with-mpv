@@ -30,6 +30,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -176,6 +177,13 @@ private class TimeBarCallbacks {
     var onScrubStop: (Long) -> Unit = {}
     var isScrubbing = false
 
+    // 上次真正写进 TimeBar 的值。每个 setter 都会 update() + invalidate()，而暂停时位置、
+    // 时长、缓冲都不变，控件可见时这些写入仍会随每次进度重组发生一遍。
+    var lastPosition = Long.MIN_VALUE
+    var lastDuration = Long.MIN_VALUE
+    var lastBuffered = Long.MIN_VALUE
+    var lastEnabled: Boolean? = null
+
     val listener = object : TimeBar.OnScrubListener {
         override fun onScrubStart(timeBar: TimeBar, position: Long) {
             isScrubbing = true
@@ -188,6 +196,9 @@ private class TimeBarCallbacks {
 
         override fun onScrubStop(timeBar: TimeBar, position: Long, cancelled: Boolean) {
             isScrubbing = false
+            // 让下一次 update 无条件回写位置：拖动/取消期间 TimeBar 内部位置可能与播放器
+            // 不一致，去重缓存不能沿用拖动前的值。
+            lastPosition = Long.MIN_VALUE
             onScrubStop(position)
         }
     }
@@ -407,15 +418,15 @@ private fun StatusSummary(menus: PlayerMenusState) {
 /**
  * 进度行：播放位置、时间文本、进度条、章节标记与 trickplay 预览。
  *
- * 这些状态全部随 200ms tick / 拖动触摸更新，因此由这一层自己读取：调用方只传入
- * 稳定的对象引用与 [PlayerControlsActions]（remember 过的同一实例），tick 不会向上
- * 传播成整屏重组。
+ * 播放位置等高频值由这一层自己读取（调用方只传稳定对象与 [PlayerControlsActions]），
+ * 200ms tick 与拖动因此不会向上传播成整条控件栏重组；章节标记再下沉一层，见
+ * [ChapterMarkingsSlot]。
  */
 @Composable
 fun PlayerProgressRow(
     progressState: ProgressStateWithTickInterval,
     trickplay: TrickplayState,
-    chapterMarkings: List<ChapterMarkingState>,
+    chapterMarkings: State<List<ChapterMarkingState>>,
     scrubPositionMs: Long?,
     pendingSeekPositionMs: Long?,
     actions: PlayerControlsActions,
@@ -426,6 +437,10 @@ fun PlayerProgressRow(
     val bufferedMs = progressState.bufferedPositionMs
     val durationKnown = durationMs != C.TIME_UNSET && durationMs > 0
     val effectivePositionMs = scrubPositionMs ?: pendingSeekPositionMs ?: positionMs
+    // 时长的格式化结果只在时长变化时才会变，没必要跟着 200ms tick 每帧算一遍 String.format。
+    val durationText = remember(durationKnown, durationMs) {
+        if (durationKnown) formatTime(durationMs) else "--:--"
+    }
 
     Row(
         modifier = modifier.padding(horizontal = 12.dp),
@@ -453,16 +468,28 @@ fun PlayerProgressRow(
                 actions = actions,
                 modifier = Modifier.fillMaxWidth(),
             )
-            ChapterMarkingsOverlay(markings = chapterMarkings)
+            ChapterMarkingsSlot(markings = chapterMarkings)
             TrickplayPreview(state = trickplay, seekBarWidthPx = seekBarWidthPx)
         }
         Text(
-            text = if (durationKnown) formatTime(durationMs) else "--:--",
+            text = durationText,
             color = ControlsText,
             fontSize = 14.sp,
             style = TextStyle(fontFeatureSettings = "tnum"),
         )
     }
+}
+
+/**
+ * 章节标记槽：把 [State] 的读取收进独立的 restartable 作用域。
+ *
+ * 之前章节列表作为普通参数在 [PlayerProgressRow] 里读取时，200ms 的播放 tick 每次都会把
+ * BoxWithConstraints 与每个标记一起重组一遍。章节状态本身每秒才由 ViewModel 刷新一次
+ * （内容不变时 StateFlow 不会发射），读取下沉之后，进度 tick 与章节标记彻底解耦。
+ */
+@Composable
+private fun BoxScope.ChapterMarkingsSlot(markings: State<List<ChapterMarkingState>>) {
+    ChapterMarkingsOverlay(markings = markings.value)
 }
 
 @Composable
@@ -494,10 +521,24 @@ private fun PlayerTimeBar(
         },
         update = { timeBar ->
             // Don't fight the user's finger while scrubbing
-            if (!callbacks.isScrubbing) timeBar.setPosition(positionMs)
-            timeBar.setDuration(durationMs)
-            timeBar.setBufferedPosition(bufferedMs)
-            timeBar.isEnabled = durationKnown
+            if (!callbacks.isScrubbing && positionMs != callbacks.lastPosition) {
+                callbacks.lastPosition = positionMs
+                timeBar.setPosition(positionMs)
+            }
+            // 只在值真正变化时调用 setter：三个 setter 各自 update() + invalidate()，
+            // 暂停时这些重绘完全是空转（播放中真正变化的是位置）。
+            if (durationMs != callbacks.lastDuration) {
+                callbacks.lastDuration = durationMs
+                timeBar.setDuration(durationMs)
+            }
+            if (bufferedMs != callbacks.lastBuffered) {
+                callbacks.lastBuffered = bufferedMs
+                timeBar.setBufferedPosition(bufferedMs)
+            }
+            if (durationKnown != callbacks.lastEnabled) {
+                callbacks.lastEnabled = durationKnown
+                timeBar.isEnabled = durationKnown
+            }
         },
         onRelease = { timeBar ->
             timeBar.removeListener(callbacks.listener)
