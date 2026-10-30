@@ -93,6 +93,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * 页面状态（SPA 路由、滚动位置、JS 上下文）也因此不需要"保留/复用"逻辑：实例与
  * 页面同寿命，只有切换服务器时才随 [server] 的 id 整体重建（旧实例在 onRelease 销毁）。
+ *
+ * @param obscured 网页被播放器等全屏不透明浮层完全盖住。此时 WebView 仍保持 VISIBLE
+ * （保持 webapp 的定时器不被节流），但 alpha 压到 0，让 HWUI 跳过它的绘制。
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -100,6 +103,7 @@ fun WebViewHost(
     server: ServerEntity,
     state: WebViewHostState,
     visible: Boolean,
+    obscured: Boolean,
     mainViewModel: MainViewModel,
     onSelectServer: (error: Boolean) -> Unit,
     appPreferences: AppPreferences = koinInject(),
@@ -116,6 +120,7 @@ fun WebViewHost(
             server = server,
             state = state,
             visible = visible,
+            obscured = obscured,
             mainViewModel = mainViewModel,
             onSelectServer = onSelectServer,
             appPreferences = appPreferences,
@@ -134,6 +139,7 @@ private fun WebViewHostContent(
     server: ServerEntity,
     state: WebViewHostState,
     visible: Boolean,
+    obscured: Boolean,
     mainViewModel: MainViewModel,
     onSelectServer: (error: Boolean) -> Unit,
     appPreferences: AppPreferences,
@@ -160,6 +166,8 @@ private fun WebViewHostContent(
     // 每个 WebView 实例只在首次出现（连接成功）时淡入一次；之后路由进出只切可见性，
     // 不再给 WebView 套 alpha 动画（alpha 层合成是另一类黑帧来源）。
     val shownOnce = remember { booleanArrayOf(false) }
+    // 浮层遮挡期间是否把 WebView 的 alpha 压到 0（见 update 中的说明）。
+    val alphaHidden = remember { booleanArrayOf(false) }
 
     // External file chooser
     var fileChooserCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
@@ -384,6 +392,27 @@ private fun WebViewHostContent(
                         webView.fadeIn()
                     }
                     else -> webView.visibility = View.VISIBLE
+                }
+                // 播放器浮层是不透明白底层，它盖住网页期间 WebView 仍必须是 VISIBLE
+                // （见上），否则 webapp 会被 Chromium 按 hidden 页面节流。但「可见」
+                // 不等于「需要绘制」：只要窗口出帧（200ms 位置 tick、手势 HUD、控件
+                // 动画），底下这个 VISIBLE 的 WebView 就会跟着执行一次
+                // WebViewFunctor::drawGl，实测单帧 20~50ms 的 RenderThread 开销。
+                //
+                // 用 alpha=0 而不是 INVISIBLE/移出屏幕：alpha 不参与可见性聚合，
+                // Chromium 侧的 document.visibilityState 仍是 visible（已用 CDP 验证
+                // 定时器不被节流），而 HWUI 会整段跳过 alpha 为 0 的 RenderNode，
+                // 绘制回调一次都不会发生。浮层关闭时恢复 alpha=1，页面立即重绘。
+                val covered = show && obscured
+                if (covered) {
+                    // 取消可能仍在进行的淡入动画，否则它的终态会把 alpha 拉回 1
+                    webView.animate().cancel()
+                    webView.alpha = 0f
+                    alphaHidden[0] = true
+                } else if (alphaHidden[0]) {
+                    alphaHidden[0] = false
+                    webView.animate().cancel()
+                    webView.alpha = 1f
                 }
             },
             onRelease = { webView ->
