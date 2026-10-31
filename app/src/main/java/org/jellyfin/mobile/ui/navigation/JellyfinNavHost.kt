@@ -138,6 +138,7 @@ fun JellyfinNavHost(
                 server = server,
                 state = webViewState,
                 visible = webVisible,
+                obscured = playerVisible,
                 mainViewModel = mainViewModel,
                 onSelectServer = { error ->
                     connectExternalError = error
