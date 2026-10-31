@@ -207,6 +207,7 @@
     <string name="mobile_data_playback_play_low_bitrate">低码率播放</string>
     <string name="mobile_data_playback_play_original">继续原画质</string>
     <string name="mobile_data_playback_cancel">取消播放</string>
+    <string name="mobile_data_playback_dont_ask_again">不再提示（可在设置中重新开启）</string>
     <string name="media_service_car_section_playlists">播放列表</string>
     <string name="downloading_title">正在下载%1$s</string>
     <string name="download_cancel">取消</string>

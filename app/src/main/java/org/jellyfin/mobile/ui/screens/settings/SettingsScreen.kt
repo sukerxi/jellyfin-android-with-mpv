@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -42,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
@@ -582,12 +584,28 @@ private fun PreferenceRow(
     enabled: Boolean,
     onClick: (() -> Unit)?,
     trailing: @Composable (() -> Unit)?,
+    /** 非 null 时整行按开关语义处理，与 [onClick] 互斥。 */
+    toggleValue: Boolean? = null,
+    onToggle: ((Boolean) -> Unit)? = null,
 ) {
     val contentAlpha = if (enabled) 1f else 0.38f
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (enabled && onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(
+                when {
+                    // 开关行整行做成一个 Switch 语义节点：行和 Switch 各自可点会被读屏读成
+                    // 两个可操作项，且焦点顺序里"点开关"和"点这一行"是两回事。
+                    enabled && toggleValue != null && onToggle != null -> Modifier.toggleable(
+                        value = toggleValue,
+                        enabled = true,
+                        role = Role.Switch,
+                        onValueChange = onToggle,
+                    )
+                    enabled && onClick != null -> Modifier.clickable(onClick = onClick)
+                    else -> Modifier
+                },
+            )
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -626,12 +644,15 @@ private fun SwitchPreferenceRow(
         title = title,
         summary = summary,
         enabled = enabled,
-        onClick = { onCheckedChange(!checked) },
+        onClick = null,
+        toggleValue = checked,
+        onToggle = onCheckedChange,
         trailing = {
             Switch(
                 checked = checked,
                 enabled = enabled,
-                onCheckedChange = onCheckedChange,
+                // 点击由整行的 toggleable 处理，Switch 不再自带一份 pointer input。
+                onCheckedChange = null,
             )
         },
     )

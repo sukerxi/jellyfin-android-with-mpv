@@ -142,7 +142,6 @@ class PlayerControlsActions(
     val onPreviousChapter: () -> Unit,
     val onNextChapter: () -> Unit,
     val onLockScreen: () -> Unit,
-    val onToggleSubtitles: () -> Unit,
     val onAudioTrackSelected: (Int) -> Unit,
     val onSubtitleTrackSelected: (Int) -> Unit,
     val onSpeedSelected: (Float) -> Unit,
@@ -608,14 +607,10 @@ private fun BottomBar(
         if (state.subtitleCount > 0) {
             PlayerMenuAnchor(modifier = Modifier.weight(1f)) {
                 PlayerIconButton(
-                    onClick = {
-                        // A single track toggles directly, multiple tracks open the menu
-                        if (state.subtitleCount == 1) {
-                            actions.onToggleSubtitles()
-                        } else {
-                            actions.onMenuExpand(PlayerMenuType.SUBTITLES)
-                        }
-                    },
+                    // 字幕按钮永远打开菜单：只有一个字幕轨时「直接开关」、多轨时「打开菜单」，
+                    // 同一个图标两种结果，点之前无法知道会发生什么。菜单第一项就是「无字幕」，
+                    // 单轨场景也只多一次点按，换来行为可预测。
+                    onClick = { actions.onMenuExpand(PlayerMenuType.SUBTITLES) },
                     iconRes = if (state.subtitlesEnabled) {
                         R.drawable.ic_subtitles_white_24dp
                     } else {
@@ -624,14 +619,12 @@ private fun BottomBar(
                     contentDescription = stringResource(R.string.playback_subtitles),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                if (state.subtitleCount > 1) {
-                    SubtitleTracksMenu(
-                        expanded = menus.expanded == PlayerMenuType.SUBTITLES,
-                        items = menus.subtitleTracks,
-                        onSelect = actions.onSubtitleTrackSelected,
-                        onDismiss = { actions.onMenuExpand(null) },
-                    )
-                }
+                SubtitleTracksMenu(
+                    expanded = menus.expanded == PlayerMenuType.SUBTITLES,
+                    items = menus.subtitleTracks,
+                    onSelect = actions.onSubtitleTrackSelected,
+                    onDismiss = { actions.onMenuExpand(null) },
+                )
             }
         }
         PlayerMenuAnchor(modifier = Modifier.weight(1f)) {

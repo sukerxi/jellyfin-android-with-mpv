@@ -63,9 +63,9 @@ fun DownloadsList(
     onToggleSelection: (DownloadEntity) -> Unit = {},
     progress: Map<Long, Float> = emptyMap(),
     onCancel: (DownloadEntity) -> Unit = {},
+    /** 由宿主维护：进入选择态不必先选中任何条目，因此不能从 [selection] 反推。 */
+    selectionMode: Boolean = selection.isNotEmpty(),
 ) {
-    val selectionMode = selection.isNotEmpty()
-
     LazyColumn(
         modifier = modifier,
         contentPadding = contentPadding,
@@ -241,7 +241,9 @@ fun DownloadItem(
                 }
             }
         },
-        trailingContent = if (download.status == DownloadStatus.DOWNLOADING) {
+        trailingContent = if (
+            download.status == DownloadStatus.DOWNLOADING || download.status == DownloadStatus.QUEUED
+        ) {
             {
                 IconButton(onClick = onCancel, modifier = Modifier.size(48.dp)) {
                     Icon(

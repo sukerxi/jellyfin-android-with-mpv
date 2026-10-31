@@ -73,8 +73,9 @@ fun DownloadsScreen(
     val selection = remember { mutableStateSetOf<Long>() }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
-
-    val selectionMode = selection.isNotEmpty()
+    // 多选状态与「选中几条」分开：原先 selection.isNotEmpty() 兼任开关，进入选择就得先
+    // 选中一条（顶栏「选择」因此会自动勾上第一条），也没法呈现「0 条选中」的空态。
+    var selectionMode by remember { mutableStateOf(false) }
 
     val storageLocationPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) viewModel.changeStorageLocation(uri)
@@ -85,6 +86,7 @@ fun DownloadsScreen(
     if (selectionMode) {
         backDispatcher.RegisterBackHandler {
             selection.clear()
+            selectionMode = false
         }
     }
 
@@ -101,6 +103,7 @@ fun DownloadsScreen(
                     viewModel.removeDownload(download, deleteFiles = !keepLocalFiles)
                 }
                 selection.clear()
+                selectionMode = false
                 showDeleteConfirm = false
             },
             onDismiss = { showDeleteConfirm = false },
@@ -141,7 +144,10 @@ fun DownloadsScreen(
                     ) { isSelectionMode ->
                         if (isSelectionMode) {
                             IconButton(
-                                onClick = { selection.clear() },
+                                onClick = {
+                                    selection.clear()
+                                    selectionMode = false
+                                },
                             ) {
                                 Icon(
                                     imageVector = Icons.Outlined.Close,
@@ -171,7 +177,9 @@ fun DownloadsScreen(
                         ) {
                             IconButton(
                                 onClick = {
-                                    downloads.firstOrNull()?.let { selection.add(it.download.id) }
+                                    // 进入选择态不预选任何条目：用户接下来点哪条就选哪条，
+                                    // 避免"刚进选择页删除按钮就亮了"（实际上已勾中第一条）。
+                                    selectionMode = true
                                 },
                             ) {
                                 Icon(
@@ -186,7 +194,11 @@ fun DownloadsScreen(
                             exit = fadeOut(),
                         ) {
                             Row {
-                                IconButton(onClick = { showDeleteConfirm = true }) {
+                                IconButton(
+                                    onClick = { showDeleteConfirm = true },
+                                    // 空选择态下删除没有意义，置灰而不是让用户点了才发现没选中东西。
+                                    enabled = selection.isNotEmpty(),
+                                ) {
                                     Icon(
                                         imageVector = Icons.Outlined.Delete,
                                         contentDescription = stringResource(R.string.delete),
@@ -260,10 +272,13 @@ fun DownloadsScreen(
                         onCancel = { viewModel.cancelDownload(it) },
                         selection = selection,
                         onToggleSelection = { download ->
+                            // 长按从普通列表进入选择态：先切模式，再把这一条选上。
+                            selectionMode = true
                             if (selection.contains(download.id)) selection.remove(download.id)
                             else selection.add(download.id)
                         },
                         progress = downloadProgress,
+                        selectionMode = selectionMode,
                         modifier = Modifier.weight(1f),
                     )
                 }

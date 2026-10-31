@@ -67,7 +67,7 @@ fun DownloadRemoveDialog(
             TextButton(
                 onClick = { onConfirm(keepLocalFiles) },
             ) {
-                Text(text = stringResource(R.string.yes))
+                Text(text = stringResource(R.string.delete))
             }
         },
         dismissButton = {

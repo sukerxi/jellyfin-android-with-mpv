@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -1213,6 +1214,9 @@ fun PlayerScreen(
                         // 让按下的 ripple 也止步于圆角，而不是在圆角外面露出一圈方形水波
                         .clip(RoundedCornerShape(12.dp))
                         .clickable(role = Role.Button) { unlockScreen() }
+                        // 20dp 图标加上下 12dp 内边距只有 44dp，补到 48dp 最小触控目标。
+                        // 顺序必须是 heightIn 在外、padding 在内，否则 48dp 是内容高度、再加 24 会变成 72。
+                        .heightIn(min = 48.dp)
                         .padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1255,11 +1259,6 @@ fun PlayerScreen(
                     onPreviousChapter = { viewModel.previousChapter() },
                     onNextChapter = { viewModel.nextChapter() },
                     onLockScreen = { lockScreen() },
-                    onToggleSubtitles = {
-                        scope.launch {
-                            subtitlesEnabled = viewModel.trackSelectionHelper.toggleSubtitles()
-                        }
-                    },
                     onAudioTrackSelected = { index ->
                         scope.launch {
                             viewModel.trackSelectionHelper.selectAudioTrack(index)
@@ -1613,6 +1612,8 @@ fun PlayerScreen(
         // 移动网络播放确认：默认推荐低码率播放，也可选择继续原画质或取消（退出播放器返回网页）。
         pendingMobileDataRequest?.let { request ->
             val mobileDataBitrate = appPreferences.mobileDataMaxBitrate
+            // 每次弹窗都从未勾选开始，不沿用上一次的选择。
+            var dontAskAgain by remember(request) { mutableStateOf(false) }
             val qualityLabel = stringResource(
                 when (mobileDataBitrate) {
                     Constants.MOBILE_DATA_BITRATE_480P -> R.string.mobile_data_bitrate_480p
@@ -1651,10 +1652,29 @@ fun PlayerScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodyMedium,
                         )
+                        // 「不再提示」写回设置里的同一个开关，而不是只在本次弹窗里藏起来：
+                        // 设置页还能再打开，用户下次遇到时也有据可查。
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .padding(top = 8.dp)
+                                .clickable { dontAskAgain = !dontAskAgain },
+                        ) {
+                            Checkbox(
+                                checked = dontAskAgain,
+                                onCheckedChange = null,
+                            )
+                            Text(
+                                text = stringResource(R.string.mobile_data_playback_dont_ask_again),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
                         // 竖排按钮：三个 TextButton 平铺时看起来同等重要，窄屏还会换行挤压。
                         Button(
                             onClick = {
                                 pendingMobileDataRequest = null
+                                if (dontAskAgain) appPreferences.mobileDataPlaybackPrompt = false
                                 scope.launch { startPlayback(request, mobileDataBitrate) }
                             },
                             modifier = Modifier
@@ -1666,6 +1686,7 @@ fun PlayerScreen(
                         OutlinedButton(
                             onClick = {
                                 pendingMobileDataRequest = null
+                                if (dontAskAgain) appPreferences.mobileDataPlaybackPrompt = false
                                 scope.launch { startPlayback(request, null) }
                             },
                             modifier = Modifier

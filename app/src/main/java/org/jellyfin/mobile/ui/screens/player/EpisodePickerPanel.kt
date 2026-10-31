@@ -189,7 +189,7 @@ fun EpisodePickerPanel(
                         fontSize = 13.sp,
                         modifier = Modifier.weight(1f),
                     )
-                    IconButton(onClick = onDismiss, modifier = Modifier.size(36.dp)) {
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(48.dp)) {
                         Icon(
                             painter = painterResource(R.drawable.ic_close_white_24dp),
                             contentDescription = stringResource(R.string.close),

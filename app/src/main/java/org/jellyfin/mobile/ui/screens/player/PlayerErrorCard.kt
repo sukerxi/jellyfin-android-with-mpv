@@ -1,5 +1,6 @@
 package org.jellyfin.mobile.ui.screens.player
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -47,9 +48,11 @@ fun PlaybackErrorCard(
         contentAlignment = Alignment.Center,
     ) {
         Surface(
-            color = MaterialTheme.colorScheme.surface,
+            // 卡片压在视频上，深色主题的 surface 在浅色主题下会变成一块亮白板，
+            // 与播放器其余浮层（玻璃卡片）完全脱节。这里固定用播放器的近黑色玻璃。
+            color = Color(0xE61A1A1A),
             shape = MaterialTheme.shapes.large,
-            tonalElevation = 3.dp,
+            border = BorderStroke(1.dp, PlayerGlassBorderColor),
             modifier = Modifier
                 .padding(24.dp)
                 .widthIn(max = 360.dp),
@@ -58,20 +61,20 @@ fun PlaybackErrorCard(
                 Text(
                     text = stringResource(R.string.player_error_title),
                     style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = PlayerGlassTextPrimary,
                 )
                 Text(
                     text = message,
                     modifier = Modifier.padding(top = 8.dp),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = PlayerGlassTextPrimary,
                     textAlign = TextAlign.Start,
                 )
                 Text(
                     text = stringResource(R.string.player_error_detail_hint),
                     modifier = Modifier.padding(top = 6.dp),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = PlayerGlassTextSecondary,
                 )
                 Row(
                     modifier = Modifier.padding(top = 16.dp),
