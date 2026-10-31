@@ -144,6 +144,41 @@ class PlayerGestureHandler(
 
     // region taps
 
+    /**
+     * 上一次轻点的抬手时间与位置，供**所有**手势输入层共享。
+     *
+     * 控件隐藏时第一击由手势层收到，抬手立即呼出控件；第二击因此落到刚出现的控件层上。
+     * 若每层各自保存「上一击」（pointerInput 的局部变量），第二击在控件层看来就是新的
+     * 第一击——双击在控件隐藏时永远不成立，用户必须先把控件叫出来才能双击暂停/快进。
+     */
+    private var lastTapUpTime = -1L
+    private var lastTapPosition = Offset.Zero
+    private var hasPendingTap = false
+
+    /**
+     * 这次按下是否落在上一次轻点的双击窗口内。
+     *
+     * @param downTimeMs 本次按下的事件时间
+     * @param downPosition 本次按下的位置（与该层上一次轻点所在层的坐标系可能不同，只在
+     * 控件呼出/收起的交界处发生；容差足够吸收这点偏移）
+     */
+    fun isSecondTap(downTimeMs: Long, downPosition: Offset, timeoutMs: Long, slopPx: Float): Boolean =
+        hasPendingTap &&
+            downTimeMs - lastTapUpTime in 0..timeoutMs &&
+            (downPosition - lastTapPosition).getDistance() <= slopPx
+
+    /** 记录一次轻点（抬手时调用）。 */
+    fun recordTap(upTimeMs: Long, upPosition: Offset) {
+        hasPendingTap = true
+        lastTapUpTime = upTimeMs
+        lastTapPosition = upPosition
+    }
+
+    /** 清空双击候选（拖拽/长按/多指结束、或双击已被消费）。 */
+    fun clearPendingTap() {
+        hasPendingTap = false
+    }
+
     fun onTap() {
         if (isLocked()) {
             onPeekUnlockButton()
@@ -153,6 +188,8 @@ class PlayerGestureHandler(
     }
 
     fun onDoubleTap(position: Offset) {
+        // 双击一旦成立，上一击就不再是候选：否则紧接着的第三下会被误判成新的第二击。
+        clearPendingTap()
         // 锁屏时画面手势整体失效，与旧版 View 实现一致：锁屏后只保留单击呼出解锁按钮，
         // 双击 seek / 双击暂停都不该在"已锁"的画面上生效。
         if (isLocked()) return

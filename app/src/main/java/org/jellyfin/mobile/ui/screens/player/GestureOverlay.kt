@@ -156,16 +156,18 @@ fun Modifier.playerGestureInput(handler: PlayerGestureHandler): Modifier = this
     // 这比每次单击都延迟 300ms 更可接受。
     .pointerInput(handler) {
         val doubleTapSlop = 48.dp.toPx()
-        var lastTapUpTime = -1L
-        var lastTapPosition = Offset.Zero
-        var hasLastTap = false
 
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
-            // 时间与位移都在窗口内，才把这次按下当作上一击的第二击。
-            val isSecondTap = hasLastTap &&
-                (down.uptimeMillis - lastTapUpTime) in 0..viewConfiguration.doubleTapTimeoutMillis &&
-                (down.position - lastTapPosition).getDistance() <= doubleTapSlop
+            // 时间与位移都在窗口内，才把这次按下当作上一击的第二击。状态由
+            // [PlayerGestureHandler] 共享：控件隐藏时第一击会立刻呼出控件，第二击随之落到
+            // 控件层的这份探测器上——各自持有「上一击」的话，双击在那里永远不成立。
+            val isSecondTap = handler.isSecondTap(
+                downTimeMs = down.uptimeMillis,
+                downPosition = down.position,
+                timeoutMs = viewConfiguration.doubleTapTimeoutMillis,
+                slopPx = doubleTapSlop,
+            )
 
             var canceled = false
             var longPressTriggered = false
@@ -230,18 +232,15 @@ fun Modifier.playerGestureInput(handler: PlayerGestureHandler): Modifier = this
             val upChange = up
             if (upChange != null && !canceled && !longPressTriggered) {
                 if (isSecondTap) {
-                    hasLastTap = false
                     handler.onDoubleTap(upChange.position)
                 } else {
                     // 抬手即响应，不再等双击超时。
-                    hasLastTap = true
-                    lastTapUpTime = upChange.uptimeMillis
-                    lastTapPosition = upChange.position
+                    handler.recordTap(upChange.uptimeMillis, upChange.position)
                     handler.onTap()
                 }
             } else {
                 // 拖拽/长按/多指结束：清空双击候选，避免下一次轻点被误判成第二击。
-                hasLastTap = false
+                handler.clearPendingTap()
             }
         }
     }
