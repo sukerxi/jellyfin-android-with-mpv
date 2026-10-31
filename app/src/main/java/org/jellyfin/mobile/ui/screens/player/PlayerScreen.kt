@@ -1088,12 +1088,13 @@ fun PlayerScreen(
         gestureHandler.handleConfiguration()
     }
 
-    // 返回键交给宿主（唯一的仲裁点）派发，本屏只声明"按下返回时怎么处理"。
-    // 浮层在网页之上，所以它的返回语义永远优先于 webapp 的 SPA 后退：
-    // 先关面板/菜单；控件可见时先把控件收起（播放不中断），再按一次才退出播放器；
-    // 锁屏时吞掉按键，但把解锁按钮叫出来 —— 解锁按钮会随超时消失，若返回键什么都不做，
-    // 用户很容易以为触控/按键失灵。
-    backDispatcher.RegisterBackHandler {
+    // 系统返回与顶栏返回箭头共用这一套语义（见 PlayerControlsActions.onBack）：
+    // 先关面板/菜单；锁屏时把解锁按钮叫出来；否则退出播放器。
+    //
+    // 「收起控件」不再由返回键承担：点画面就能收起，让返回键兼职收控件会让
+    // 「按一次收控件、再按一次退出」和顶栏箭头「按一次退出」变成两套答案，
+    // 用户无法预测同一个返回动作为什么结果不同。
+    fun handlePlayerBack() {
         when {
             infoPanelVisible || episodePickerVisible || expandedMenu != null || compareVisible -> {
                 expandedMenu = null
@@ -1101,12 +1102,14 @@ fun PlayerScreen(
                 episodePickerVisible = false
                 compareVisible = false
             }
+            // 锁屏时解锁按钮会随超时消失；返回键什么都不做会被当成按键失灵。
             locked -> peekUnlockButton()
-            // 播放失败卡片覆盖在控件之上，返回应直接离开而不是先空收一次控件。
-            playbackFailure == null && controlsVisible -> controlsVisible = false
             else -> closePlayer()
         }
     }
+
+    // 返回键交给宿主（唯一的仲裁点）派发，本屏只声明"按下返回时怎么处理"。
+    backDispatcher.RegisterBackHandler { handlePlayerBack() }
 
     Box(
         modifier = Modifier
@@ -1244,7 +1247,8 @@ fun PlayerScreen(
             // Composable 的入参都会"变"，进度 tick 就能穿透整棵控件树。
             val controlsActions = remember {
                 PlayerControlsActions(
-                    onBack = { closePlayer() },
+                    // 与系统返回同语义：面板/锁屏优先，最后才是退出播放。
+                    onBack = { handlePlayerBack() },
                     onTogglePlayPause = { viewModel.togglePlayPause() },
                     onPrevious = { viewModel.skipToPrevious() },
                     onNext = { viewModel.skipToNext() },

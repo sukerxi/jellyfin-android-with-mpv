@@ -3,6 +3,7 @@ package org.jellyfin.mobile.ui.screens.player
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,6 +38,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -137,15 +139,20 @@ fun EpisodePickerPanel(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .padding(controlsBounds)
-            // Dismiss when tapping outside of the card, without covering the control bars:
-            // they sit on top of this layer and keep receiving their own clicks.
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onDismiss,
-            ),
+            .padding(controlsBounds),
     ) {
+        // 点外部关闭：只铺画面区，让出上下控制条。面板组合在控件层之后（z 序更高），
+        // 这层若铺满全屏，返回、播放/暂停、进度条的点按都会被它吞成「关闭面板」。
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(top = PlayerTopBarClearance, bottom = PlayerBottomBarClearance)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss,
+                ),
+        )
         Surface(
             color = CardBackground,
             shape = RoundedCornerShape(CardCornerRadius),
@@ -154,9 +161,17 @@ fun EpisodePickerPanel(
             border = BorderStroke(1.dp, PlayerGlassBorderColor),
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(start = 12.dp, top = 56.dp, end = 12.dp, bottom = 112.dp)
+                .padding(
+                    start = 12.dp,
+                    top = PlayerTopBarClearance,
+                    end = 12.dp,
+                    bottom = PlayerBottomBarClearance,
+                )
                 .widthIn(max = 460.dp)
-                .fillMaxHeight(),
+                .fillMaxHeight()
+                // 卡片自己吞掉点击，否则点在卡片空白处会穿透到下面的关闭层。
+                // 用 pointerInput 而不是空 clickable：只想拦截事件，不想多出一个语义上的可点区域。
+                .pointerInput(Unit) { detectTapGestures { } },
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 // Header

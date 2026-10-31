@@ -21,6 +21,7 @@ import org.jellyfin.mobile.MainViewModel
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.events.ActivityEvent
 import org.jellyfin.mobile.events.ActivityEventHandler
+import org.jellyfin.mobile.ui.navigation.BackNavigationDispatcher
 import org.jellyfin.mobile.ui.utils.CenterRow
 import org.jellyfin.mobile.utils.koinInject
 
@@ -28,6 +29,7 @@ import org.jellyfin.mobile.utils.koinInject
 fun ConnectScreen(
     mainViewModel: MainViewModel,
     showExternalConnectionError: Boolean,
+    backDispatcher: BackNavigationDispatcher,
     activityEventHandler: ActivityEventHandler = koinInject(),
 ) {
     Surface(color = MaterialTheme.colorScheme.background) {
@@ -40,6 +42,7 @@ fun ConnectScreen(
             LogoHeader()
             ServerSelection(
                 showExternalConnectionError = showExternalConnectionError,
+                backDispatcher = backDispatcher,
                 onConnected = { hostname ->
                     mainViewModel.switchServer(hostname)
                 },

@@ -16,7 +16,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -49,6 +48,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.onSizeChanged
@@ -147,18 +147,103 @@ fun Modifier.playerGestureInput(handler: PlayerGestureHandler): Modifier = this
             }
         }
     }
+    // Tap / double-tap / long-press.
+    //
+    // 这里没有用 detectTapGestures：只要注册了 onDoubleTap，它就必须等双击超时
+    // （约 300ms）才派发 onTap，单击切换控件会一直「慢半拍」。这里改成抬手即响应，
+    // 若在双击窗口内收到第二击，再按双击语义覆盖。代价只在「控件隐藏时双击 seek」
+    // 这一种情况：第一击会先亮一下控件，第二击随即把它收起——玩家已经抬手在 seek，
+    // 这比每次单击都延迟 300ms 更可接受。
     .pointerInput(handler) {
-        detectTapGestures(
-            onPress = {
-                tryAwaitRelease()
-                handler.onPressReleased()
-            },
-            // 长按交给手势探测器自己的计时：这样长按触发后抬手不会再算成一次轻点
-            // （否则「长按倍速 → 松手」会把控件栏弹出来 / 收起来）。
-            onLongPress = { handler.onLongPressStarted() },
-            onTap = { handler.onTap() },
-            onDoubleTap = { offset -> handler.onDoubleTap(offset) },
-        )
+        val doubleTapSlop = 48.dp.toPx()
+        var lastTapUpTime = -1L
+        var lastTapPosition = Offset.Zero
+        var hasLastTap = false
+
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            // 时间与位移都在窗口内，才把这次按下当作上一击的第二击。
+            val isSecondTap = hasLastTap &&
+                (down.uptimeMillis - lastTapUpTime) in 0..viewConfiguration.doubleTapTimeoutMillis &&
+                (down.position - lastTapPosition).getDistance() <= doubleTapSlop
+
+            var canceled = false
+            var longPressTriggered = false
+            var up: PointerInputChange? = null
+
+            // 第一阶段：长按超时前等抬手 / 拖拽 / 多指。
+            // withTimeoutOrNull 是 AwaitPointerEventScope 的成员；这里不能用普通协程的
+            // launch + delay —— 指针输入是受限挂起作用域，编译器不允许调用外部 suspend 函数。
+            val endedBeforeTimeout = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                while (true) {
+                    val event = awaitPointerEvent()
+                    // 多指（捏合缩放）不是轻点，交给外层 transform 检测器。
+                    if (event.changes.count { it.pressed } > 1) {
+                        canceled = true
+                        break
+                    }
+                    val change = event.changes.firstOrNull { it.id == down.id }
+                    if (change == null) {
+                        canceled = true
+                        break
+                    }
+                    if (!change.pressed) {
+                        up = change
+                        break
+                    }
+                    // 越过 touch slop 即视为拖拽（横向 seek / 亮度音量），不再等抬手。
+                    if ((change.position - down.position).getDistance() > viewConfiguration.touchSlop) {
+                        canceled = true
+                        break
+                    }
+                }
+                true
+            }
+
+            if (endedBeforeTimeout == null) {
+                // 长按已生效：继续等抬手/拖拽，但不再产生轻点。
+                longPressTriggered = true
+                handler.onLongPressStarted()
+                while (up == null && !canceled) {
+                    val event = awaitPointerEvent()
+                    if (event.changes.count { it.pressed } > 1) {
+                        canceled = true
+                        break
+                    }
+                    val change = event.changes.firstOrNull { it.id == down.id }
+                    if (change == null) {
+                        canceled = true
+                        break
+                    }
+                    if (!change.pressed) {
+                        up = change
+                    } else if ((change.position - down.position).getDistance() > viewConfiguration.touchSlop) {
+                        canceled = true
+                        break
+                    }
+                }
+            }
+
+            // 与旧实现一致：任何按压结束都释放长按倍速。
+            handler.onPressReleased()
+
+            val upChange = up
+            if (upChange != null && !canceled && !longPressTriggered) {
+                if (isSecondTap) {
+                    hasLastTap = false
+                    handler.onDoubleTap(upChange.position)
+                } else {
+                    // 抬手即响应，不再等双击超时。
+                    hasLastTap = true
+                    lastTapUpTime = upChange.uptimeMillis
+                    lastTapPosition = upChange.position
+                    handler.onTap()
+                }
+            } else {
+                // 拖拽/长按/多指结束：清空双击候选，避免下一次轻点被误判成第二击。
+                hasLastTap = false
+            }
+        }
     }
     // Pinch zoom. Must stay OUTSIDE the single-pointer drag detector below:
     // detectTransformGestures consumes every position change once the touch
@@ -184,7 +269,7 @@ fun Modifier.playerGestureInput(handler: PlayerGestureHandler): Modifier = this
     // - it releases multi-pointer gestures unconsumed so the transform
     //   detector above can handle pinch zoom,
     // - taps/double-taps (no movement past the slop) are never consumed and
-    //   keep working through detectTapGestures.
+    //   keep working through the tap detector above.
     .pointerInput(handler) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)

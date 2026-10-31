@@ -25,6 +25,17 @@ internal val PlayerGlassTextPrimary = Color.White.copy(alpha = 0.94f)
 internal val PlayerGlassTextSecondary = Color.White.copy(alpha = 0.62f)
 internal val PlayerGlassIconTint = Color.White.copy(alpha = 0.94f)
 
+/**
+ * 顶部标题栏（返回 + 标题）的高度。
+ *
+ * 视频信息/选集面板卡片要让出这一条；面板自己的「点外部关闭」层也要让出同一条，
+ * 否则它盖在控件层之上时会把返回、播放/暂停等按钮的点击吞成「关闭面板」。
+ */
+internal val PlayerTopBarClearance = 56.dp
+
+/** 底部进度条 + 功能按钮行的高度，用途同 [PlayerTopBarClearance]。 */
+internal val PlayerBottomBarClearance = 112.dp
+
 /** 玻璃卡片背景（不含内容与内边距）。 */
 internal fun Modifier.playerGlass(
     shape: Shape,

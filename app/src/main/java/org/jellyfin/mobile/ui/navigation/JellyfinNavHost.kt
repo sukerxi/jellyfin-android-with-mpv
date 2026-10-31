@@ -5,6 +5,7 @@ import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -12,7 +13,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -25,6 +28,7 @@ import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.events.ActivityEventHandler
 import org.jellyfin.mobile.events.NavigationEvent
 import org.jellyfin.mobile.settings.VideoPlayerType
+import org.jellyfin.mobile.ui.components.AppSnackbarHost
 import org.jellyfin.mobile.ui.screens.connect.ConnectScreen
 import org.jellyfin.mobile.ui.screens.downloads.DownloadsScreen
 import org.jellyfin.mobile.ui.screens.player.PlayerScreen
@@ -159,6 +163,7 @@ fun JellyfinNavHost(
                 ConnectScreen(
                     mainViewModel = mainViewModel,
                     showExternalConnectionError = connectExternalError,
+                    backDispatcher = backDispatcher,
                 )
             }
             // 空壳目的地：网页由 NavHost 下方的常驻宿主渲染。它仍然需要存在 ——
@@ -211,5 +216,14 @@ fun JellyfinNavHost(
             // 优先级 3：没有可处理的语义（浮层刚组合、处理器尚未登记）——吞掉，
             // 不把按键误传给下方页面，也避免误退出应用。
         }
+
+        // 全局提示宿主：放在这里（而不是 Activity）才能读到播放器浮层状态。
+        // 播放器可见时抬到底栏之上，否则「播放信息已复制」这类提示会正好盖住
+        // 进度条与操作按钮，反馈反而挡住了它正在反馈的控件。
+        AppSnackbarHost(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = if (playerVisible) 120.dp else 0.dp),
+        )
     }
 }

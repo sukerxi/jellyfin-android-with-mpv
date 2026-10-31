@@ -55,6 +55,8 @@ import kotlinx.coroutines.launch
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.app.ApiClientController
 import org.jellyfin.mobile.setup.ConnectionHelper
+import org.jellyfin.mobile.ui.navigation.BackNavigationDispatcher
+import org.jellyfin.mobile.ui.navigation.RegisterBackHandler
 import org.jellyfin.mobile.ui.state.CheckUrlState
 import org.jellyfin.mobile.ui.state.ServerSelectionMode
 import org.jellyfin.mobile.ui.utils.CenterRow
@@ -65,6 +67,7 @@ import org.jellyfin.mobile.utils.koinInject
 @Composable
 fun ServerSelection(
     showExternalConnectionError: Boolean,
+    backDispatcher: BackNavigationDispatcher,
     apiClientController: ApiClientController = koinInject(),
     connectionHelper: ConnectionHelper = koinInject(),
     onConnected: suspend (String) -> Unit,
@@ -76,6 +79,14 @@ fun ServerSelection(
     val serverSuggestions = remember { mutableStateListOf<ServerSuggestion>() }
     var checkUrlState by remember<MutableState<CheckUrlState>> { mutableStateOf(CheckUrlState.Unchecked) }
     var externalError by remember { mutableStateOf(showExternalConnectionError) }
+
+    // 自动发现是页面内的子模式，不是新的路由：系统返回必须和页面里的返回箭头
+    // 同语义（回到地址输入），否则会落到 Activity 默认行为，直接退出应用。
+    if (serverSelectionMode == ServerSelectionMode.AUTO_DISCOVERY) {
+        backDispatcher.RegisterBackHandler {
+            serverSelectionMode = ServerSelectionMode.ADDRESS
+        }
+    }
 
     // Prefill currently selected server if available
     LaunchedEffect(Unit) {
