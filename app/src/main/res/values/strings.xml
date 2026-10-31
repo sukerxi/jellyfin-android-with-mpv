@@ -109,6 +109,7 @@
     <string name="playback_info_copy">Copy</string>
     <string name="playback_info_copied">Playback info copied</string>
     <string name="episode_picker_title">Episodes</string>
+    <string name="episode_picker_episode_number">Episode %1$d</string>
     <string name="episode_picker_count">%1$d / %2$d</string>
     <string name="episode_picker_loading">Loading episodes…</string>
     <string name="episode_picker_watched">Watched</string>

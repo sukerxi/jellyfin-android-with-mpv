@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -47,6 +48,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -62,8 +64,8 @@ import org.jellyfin.mobile.player.ui.TrickplayState
 /**
  * 阶段 5：播放器控件栏（替代 exo_player_control_view.xml 290 行布局与 media3 内置控制器）。
  *
- * 结构：顶部返回+标题、中部播放/上下集/上下章、底部进度区（DefaultTimeBar + 章节标记 +
- * trickplay）与功能按钮行（锁屏/音轨/字幕/倍速/清晰度/解码器/信息/选集/全屏）。
+ * 结构：顶部返回 + 标题 + 右上角「更多」、中部播放/上下集/上下章、底部进度区
+ * （DefaultTimeBar + 章节标记 + trickplay）与功能按钮行（音轨/字幕/倍速/选集/转屏）。
  */
 
 /** 全屏模态层（对比面板等）用的均匀压暗。 */
@@ -274,33 +276,7 @@ fun PlayerControls(
                 .matchParentSize()
                 .padding(contentPadding),
         ) {
-            // Top bar: back button + title
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(onClick = actions.onBack, modifier = Modifier.size(48.dp)) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = stringResource(R.string.back),
-                        modifier = Modifier.size(24.dp),
-                        tint = ControlsText,
-                    )
-                }
-                Text(
-                    text = state.title,
-                    color = ControlsText,
-                    fontSize = 16.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(start = 4.dp, end = 8.dp),
-                )
-            }
+            TopBar(state = state, menus = menus, actions = actions)
 
             // Center controls: previous / previous chapter / play-pause / next chapter / next
             // 加载等待期间整排隐藏：加载指示器就画在正中，叠在一起等于让蓝圈绕着播放键转。
@@ -368,6 +344,89 @@ fun PlayerControls(
                 progress()
                 BottomBar(state = state, menus = menus, actions = actions)
             }
+        }
+    }
+}
+
+/**
+ * 顶部栏：返回、标题、右上角「更多」。
+ *
+ * 低频入口（清晰度/解码器/播放信息/对比/锁屏）从底栏收进右上角的菜单，因此底栏只剩
+ * 音轨、字幕、倍速、选集、转屏五个高频按钮。菜单锚点就在屏幕右缘，向右展开会直接出屏，
+ * 所以菜单宽度固定，并让右缘与按钮右缘对齐。
+ */
+@Composable
+private fun TopBar(
+    state: PlayerControlsState,
+    menus: PlayerMenusState,
+    actions: PlayerControlsActions,
+) {
+    val qualityLabel = menus.qualities.firstOrNull { it.selected }?.title
+    val decoderLabel = menus.decoders.firstOrNull { it.selected }?.title
+    val menuWidth = 240.dp
+    // 菜单右缘对齐按钮右缘（锚点浮在最右侧，向右展开会出屏）。
+    val menuOffset = DpOffset(x = 48.dp - menuWidth, y = 4.dp)
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = actions.onBack, modifier = Modifier.size(48.dp)) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = stringResource(R.string.back),
+                modifier = Modifier.size(24.dp),
+                tint = ControlsText,
+            )
+        }
+        Text(
+            text = state.title,
+            color = ControlsText,
+            fontSize = 16.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 4.dp, end = 8.dp),
+        )
+        PlayerMenuAnchor(modifier = Modifier.size(48.dp)) {
+            PlayerIconButton(
+                onClick = { actions.onMenuExpand(PlayerMenuType.MORE) },
+                iconRes = R.drawable.ic_more_vert_white_24dp,
+                contentDescription = stringResource(R.string.playback_more),
+            )
+            MoreMenu(
+                expanded = menus.expanded == PlayerMenuType.MORE,
+                qualityLabel = qualityLabel.takeIf { state.qualityAvailable },
+                decoderLabel = decoderLabel,
+                compareAvailable = state.mpvCompareEnabled,
+                onOpenQuality = { actions.onMenuExpand(PlayerMenuType.QUALITY) },
+                onOpenDecoder = { actions.onMenuExpand(PlayerMenuType.DECODER) },
+                onShowInfo = actions.onShowInfo,
+                onShowCompare = actions.onShowCompare,
+                onLockScreen = actions.onLockScreen,
+                onDismiss = { actions.onMenuExpand(null) },
+                modifier = Modifier.width(menuWidth),
+                offset = menuOffset,
+            )
+            QualityMenu(
+                expanded = menus.expanded == PlayerMenuType.QUALITY,
+                items = menus.qualities,
+                onSelect = actions.onQualitySelected,
+                onDismiss = { actions.onMenuExpand(null) },
+                modifier = Modifier.width(menuWidth),
+                offset = menuOffset,
+            )
+            DecoderMenu(
+                expanded = menus.expanded == PlayerMenuType.DECODER,
+                items = menus.decoders,
+                onSelect = actions.onDecoderSelected,
+                onDismiss = { actions.onMenuExpand(null) },
+                modifier = Modifier.width(menuWidth),
+                offset = menuOffset,
+            )
         }
     }
 }
@@ -578,12 +637,11 @@ private fun BottomBar(
     actions: PlayerControlsActions,
     modifier: Modifier = Modifier,
 ) {
-    val qualityLabel = menus.qualities.firstOrNull { it.selected }?.title
-    val decoderLabel = menus.decoders.firstOrNull { it.selected }?.title
-
-    // 入口数量随「有字幕 / 有队列」变化（4~6 个），所以用等分权重而不是固定宽度的顺序排列：
+    // 底栏只保留高频入口：音轨、字幕（有字幕时）、倍速、选集（有多集时）、转屏。
+    //
+    // 入口数量随「有字幕 / 有队列」变化（3~5 个），所以用等分权重而不是固定宽度的顺序排列：
     // 固定宽度在 320~360dp 的竖屏上会把末尾按钮压成 0 宽——既看不见也点不到。等分之后
-    // 每个入口至少拿到「可用宽度 / 6」，最窄的竖屏也能保持 ≥48dp 的触控宽度。
+    // 每个入口至少拿到「可用宽度 / 5」，最窄的竖屏也能保持 ≥48dp 的触控宽度。
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -680,41 +738,6 @@ private fun BottomBar(
                     },
                 ),
                 modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        // 「更多」：清晰度 / 解码器 / 播放信息 / 对比 / 锁屏。子菜单同样从这个锚点展开，
-        // 层级变化与用户看到的菜单来源一致。清晰度只在服务端播放时出现，其当前值直接写在
-        // 标题里，不必为了确认状态再打开一次子菜单。
-        PlayerMenuAnchor(modifier = Modifier.weight(1f)) {
-            PlayerIconButton(
-                onClick = { actions.onMenuExpand(PlayerMenuType.MORE) },
-                iconRes = R.drawable.ic_more_vert_white_24dp,
-                contentDescription = stringResource(R.string.playback_more),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            MoreMenu(
-                expanded = menus.expanded == PlayerMenuType.MORE,
-                qualityLabel = qualityLabel.takeIf { state.qualityAvailable },
-                decoderLabel = decoderLabel,
-                compareAvailable = state.mpvCompareEnabled,
-                onOpenQuality = { actions.onMenuExpand(PlayerMenuType.QUALITY) },
-                onOpenDecoder = { actions.onMenuExpand(PlayerMenuType.DECODER) },
-                onShowInfo = actions.onShowInfo,
-                onShowCompare = actions.onShowCompare,
-                onLockScreen = actions.onLockScreen,
-                onDismiss = { actions.onMenuExpand(null) },
-            )
-            QualityMenu(
-                expanded = menus.expanded == PlayerMenuType.QUALITY,
-                items = menus.qualities,
-                onSelect = actions.onQualitySelected,
-                onDismiss = { actions.onMenuExpand(null) },
-            )
-            DecoderMenu(
-                expanded = menus.expanded == PlayerMenuType.DECODER,
-                items = menus.decoders,
-                onSelect = actions.onDecoderSelected,
-                onDismiss = { actions.onMenuExpand(null) },
             )
         }
     }

@@ -13,6 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.player.ui.DecoderType
@@ -165,11 +166,14 @@ fun QualityMenu(
     items: List<QualityItem>,
     onSelect: (bitrate: Int?) -> Unit,
     onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    offset: DpOffset = DpOffset.Zero,
 ) {
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
-        modifier = Modifier.widthIn(min = 160.dp),
+        modifier = modifier.widthIn(min = 160.dp),
+        offset = offset,
     ) {
         items.forEach { item ->
             DropdownMenuItem(
@@ -192,10 +196,14 @@ fun DecoderMenu(
     items: List<DecoderItem>,
     onSelect: (type: DecoderType) -> Unit,
     onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    offset: DpOffset = DpOffset.Zero,
 ) {
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
+        modifier = modifier,
+        offset = offset,
     ) {
         items.forEach { item ->
             DropdownMenuItem(
@@ -235,11 +243,14 @@ fun MoreMenu(
     onShowCompare: () -> Unit,
     onLockScreen: () -> Unit,
     onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    offset: DpOffset = DpOffset.Zero,
 ) {
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
-        modifier = Modifier.widthIn(min = 200.dp),
+        modifier = modifier.widthIn(min = 200.dp),
+        offset = offset,
     ) {
         if (qualityLabel != null) {
             MoreMenuItem(

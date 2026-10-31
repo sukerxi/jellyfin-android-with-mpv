@@ -54,6 +54,7 @@
     <string name="playback_info_chip_forced">强制</string>
     <string name="playback_info_chip_default">默认</string>
     <string name="episode_picker_title">选集</string>
+    <string name="episode_picker_episode_number">第%1$d集</string>
     <string name="episode_picker_count">%1$d / %2$d</string>
     <string name="episode_picker_loading">正在加载剧集…</string>
     <string name="episode_picker_watched">已看</string>
