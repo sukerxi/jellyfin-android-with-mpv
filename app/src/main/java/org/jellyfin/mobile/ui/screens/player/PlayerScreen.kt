@@ -323,14 +323,11 @@ fun PlayerScreen(
 
     // region helpers
 
-    /** 手势层判定双击用的同一个窗口长度（Compose 的 ViewConfiguration 也取自这里）。 */
-    val doubleTapTimeoutMs = remember { android.view.ViewConfiguration.getDoubleTapTimeout().toLong() }
-
     /**
      * 「单击呼出控件」的待生效任务（见 [toggleControls]）。
      *
      * 控件隐藏时，双击的第一击走的也是单击分支：若这一击立刻把控件亮出来，第二击随即把它
-     * 收起，用户看到的就是双击「闪一下控件」。所以显示要等过一个双击窗口，收起仍然即时。
+     * 收起，用户看到的就是双击「闪一下控件」。所以显示要等过双击窗口，收起仍然即时。
      */
     var pendingControlsShowJob by remember { mutableStateOf<Job?>(null) }
 
@@ -365,7 +362,7 @@ fun PlayerScreen(
             controlsVisible = false
         } else {
             pendingControlsShowJob = scope.launch {
-                delay(doubleTapTimeoutMs)
+                delay(Constants.PLAYER_DOUBLE_TAP_TIMEOUT_MS)
                 // 先清引用再显示：showControls() 自己会取消待生效任务，不能把当前协程取消掉。
                 pendingControlsShowJob = null
                 showControls()

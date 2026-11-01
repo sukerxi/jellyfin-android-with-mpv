@@ -219,6 +219,15 @@ object Constants {
      */
     const val SEEK_POSITION_SETTLE_EPSILON_MS = 500L
 
+    /**
+     * 双击判定窗口（毫秒）。从第一击抬手算起，第二击的按下必须落在这个窗口内。
+     *
+     * 它同时也是控件隐藏时「单击呼出控件」的延迟：两者必须相等，第二击来得晚一点时控件
+     * 还没亮出来，双击才不会闪一下控件层。平台默认是 300ms，这里收紧到 200ms——拖得比
+     * 这更久的两次轻点本来就更像两次独立的单击。
+     */
+    const val PLAYER_DOUBLE_TAP_TIMEOUT_MS = 200L
+
     const val DOUBLE_TAP_RIPPLE_DURATION_MS = 100L
     const val DOUBLE_TAP_TOGGLE_OVERLAY_SIZE_DP = 96
     const val DOUBLE_TAP_TOGGLE_POP_DURATION_MS = 120L

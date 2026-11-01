@@ -166,7 +166,7 @@ fun Modifier.playerGestureInput(handler: PlayerGestureHandler): Modifier = this
             val isSecondTap = handler.isSecondTap(
                 downTimeMs = down.uptimeMillis,
                 downPosition = down.position,
-                timeoutMs = viewConfiguration.doubleTapTimeoutMillis,
+                timeoutMs = Constants.PLAYER_DOUBLE_TAP_TIMEOUT_MS,
                 slopPx = doubleTapSlop,
             )
             // 第二击一按下就通知宿主：控件隐藏时第一击会挂起「稍后显示控件」，这个待办
