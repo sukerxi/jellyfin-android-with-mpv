@@ -160,14 +160,18 @@ fun Modifier.playerGestureInput(handler: PlayerGestureHandler): Modifier = this
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
             // 时间与位移都在窗口内，才把这次按下当作上一击的第二击。状态由
-            // [PlayerGestureHandler] 共享：控件隐藏时第一击会立刻呼出控件，第二击随之落到
-            // 控件层的这份探测器上——各自持有「上一击」的话，双击在那里永远不成立。
+            // [PlayerGestureHandler] 共享：控件隐藏时第一击的「呼出控件」会延后一个双击
+            // 窗口，这期间控件层还没出现，两次轻点都落在手势层的这份探测器上；控件可见时
+            // 控件层与手势层又各有一份探测器——各自持有「上一击」的话，双击会时灵时不灵。
             val isSecondTap = handler.isSecondTap(
                 downTimeMs = down.uptimeMillis,
                 downPosition = down.position,
                 timeoutMs = viewConfiguration.doubleTapTimeoutMillis,
                 slopPx = doubleTapSlop,
             )
+            // 第二击一按下就通知宿主：控件隐藏时第一击会挂起「稍后显示控件」，这个待办
+            // 必须在它生效前作废——否则双击的第二击按得久一点，控件会在两次抬手之间闪出来。
+            if (isSecondTap) handler.onSecondTapStarted()
 
             var canceled = false
             var longPressTriggered = false

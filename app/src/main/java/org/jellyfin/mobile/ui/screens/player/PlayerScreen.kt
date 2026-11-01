@@ -323,7 +323,24 @@ fun PlayerScreen(
 
     // region helpers
 
+    /** 手势层判定双击用的同一个窗口长度（Compose 的 ViewConfiguration 也取自这里）。 */
+    val doubleTapTimeoutMs = remember { android.view.ViewConfiguration.getDoubleTapTimeout().toLong() }
+
+    /**
+     * 「单击呼出控件」的待生效任务（见 [toggleControls]）。
+     *
+     * 控件隐藏时，双击的第一击走的也是单击分支：若这一击立刻把控件亮出来，第二击随即把它
+     * 收起，用户看到的就是双击「闪一下控件」。所以显示要等过一个双击窗口，收起仍然即时。
+     */
+    var pendingControlsShowJob by remember { mutableStateOf<Job?>(null) }
+
+    fun cancelPendingControlsShow() {
+        pendingControlsShowJob?.cancel()
+        pendingControlsShowJob = null
+    }
+
     fun showControls() {
+        cancelPendingControlsShow()
         controlsVisible = true
         interactionTick.intValue++
     }
@@ -334,6 +351,10 @@ fun PlayerScreen(
      * 控件隐藏时由手势层收到点击，控件可见时手势层被控件层挡住、由控件层的空白处点击收到
      * —— 两个入口都调到这里。极少数情况下同一次抬手会同时命中两层（重叠命中），因此加一个
      * 很短的窗口去抖，避免「收起又立刻弹出」。
+     *
+     * 显示延后一个双击窗口：双击（暂停 / 快进快退）由同一次轻点起手，第一击若立刻亮出
+     * 控件，双击就变成了「先把控件叫出来、再把它收起」。延后只作用于「显示」，收起仍然
+     * 即时，所以高频的「点一下收控件」没有可感知的延迟。
      */
     var lastControlsToggleUptime by remember { mutableStateOf(0L) }
     fun toggleControls() {
@@ -343,7 +364,12 @@ fun PlayerScreen(
         if (controlsVisible) {
             controlsVisible = false
         } else {
-            showControls()
+            pendingControlsShowJob = scope.launch {
+                delay(doubleTapTimeoutMs)
+                // 先清引用再显示：showControls() 自己会取消待生效任务，不能把当前协程取消掉。
+                pendingControlsShowJob = null
+                showControls()
+            }
         }
     }
 
@@ -1067,7 +1093,14 @@ fun PlayerScreen(
         // 双击只做「跳转 / 暂停」这两件事：不再顺手把控件弹出来。以前每次双击都会
         // showControls()，控件可见时用户的第一次单击又只会把控件收起——于是「双击暂停」
         // 需要三下才生效。双击时顺手收起控件（画面让位给反馈图标），语义才对。
-        onHideControls = { if (controlsVisible) controlsVisible = false },
+        // 控件隐藏时，第一击刚挂起的「稍后显示控件」也必须一并取消，否则它会在双击结束后
+        // 约一个双击窗口自己弹出来——那正是「双击会呼出控件」的来源。
+        onHideControls = {
+            cancelPendingControlsShow()
+            if (controlsVisible) controlsVisible = false
+        },
+        // 双击的第二击按下时，第一击挂起的「稍后显示控件」立刻作废（见 toggleControls）。
+        onSecondTapStarted = { cancelPendingControlsShow() },
         // 双击跳转量与快进/快退按钮共用服务端下发的步长，文案必须反映真实值，
         // 否则用户会以为自己跳的是固定 10 秒。
         seekStepLabel = { forward ->

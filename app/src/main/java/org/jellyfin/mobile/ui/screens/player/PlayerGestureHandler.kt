@@ -98,6 +98,8 @@ class PlayerGestureHandler(
     private val onPressSpeedUp: (Boolean) -> Unit,
     private val onZoomChanged: (Boolean) -> Unit,
     private val onHideControls: () -> Unit,
+    /** 双击的第二击已经按下（双击动作还在等抬手）：宿主据此作废第一击挂起的「稍后显示控件」。 */
+    private val notifySecondTapStarted: () -> Unit,
     /** 双击跳转量的可读文案（`+10s` / `-10s`），步长来自服务端偏好。 */
     private val seekStepLabel: (forward: Boolean) -> String,
 ) {
@@ -173,6 +175,11 @@ class PlayerGestureHandler(
         lastTapUpTime = upTimeMs
         lastTapPosition = upPosition
     }
+
+    /**
+     * 第二击已经按下（双击成立与否还要等这一击抬手，但第一击的单击语义已经不可能生效）。
+     */
+    fun onSecondTapStarted() = notifySecondTapStarted()
 
     /** 清空双击候选（拖拽/长按/多指结束、或双击已被消费）。 */
     fun clearPendingTap() {
@@ -594,6 +601,7 @@ fun rememberPlayerGestureHandler(
     onPressSpeedUp: (Boolean) -> Unit,
     onZoomChanged: (Boolean) -> Unit,
     onHideControls: () -> Unit,
+    onSecondTapStarted: () -> Unit,
     seekStepLabel: (forward: Boolean) -> String,
     exclusionSizeVerticalPx: Int,
     exclusionSizeHorizontalPx: Int,
@@ -631,6 +639,7 @@ fun rememberPlayerGestureHandler(
             onPressSpeedUp = onPressSpeedUp,
             onZoomChanged = onZoomChanged,
             onHideControls = onHideControls,
+            notifySecondTapStarted = onSecondTapStarted,
             seekStepLabel = seekStepLabel,
         )
     }
