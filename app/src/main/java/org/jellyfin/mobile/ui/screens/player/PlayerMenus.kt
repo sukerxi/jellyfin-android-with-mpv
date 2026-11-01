@@ -229,6 +229,7 @@ fun DecoderMenu(
  *
  * @param qualityLabel 当前清晰度；null 表示本次播放不支持切换（本地文件等），该项隐藏
  * @param decoderLabel 当前解码器
+ * @param playbackStatusLabel 播放方式标记（转码 / 直接播放 / 直接串流）；null 时标题保持原文案
  * @param compareAvailable 是否展示同帧对比入口（仅 mpv + 用户未关闭）
  */
 @Composable
@@ -236,6 +237,7 @@ fun MoreMenu(
     expanded: Boolean,
     qualityLabel: String?,
     decoderLabel: String?,
+    playbackStatusLabel: String?,
     compareAvailable: Boolean,
     onOpenQuality: () -> Unit,
     onOpenDecoder: () -> Unit,
@@ -277,7 +279,17 @@ fun MoreMenu(
         }
         MoreMenuItem(
             iconRes = R.drawable.ic_info_white_24dp,
-            label = stringResource(R.string.playback_info_title),
+            label = if (playbackStatusLabel == null) {
+                stringResource(R.string.playback_info_title)
+            } else {
+                // 与「清晰度 · 自动」同一种写法：打开菜单就能知道画面有没有被服务端重编码，
+                // 不必先点进面板再找「播放方式」那一行。
+                stringResource(
+                    R.string.playback_menu_item_with_value,
+                    stringResource(R.string.playback_info_title),
+                    playbackStatusLabel,
+                )
+            },
             onClick = {
                 onDismiss()
                 onShowInfo()

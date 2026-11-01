@@ -108,6 +108,14 @@ data class PlayerControlsState(
     val subtitlesEnabled: Boolean,
     val qualityAvailable: Boolean,
     val isPlaying: Boolean,
+    /**
+     * 「播放信息」项要附带的状态标记（转码 / 直接播放 / 直接串流）；null 表示播放方式尚未确定
+     * （起播前向服务端要播放信息的这段时间），此时标题保持原文案。
+     *
+     * 只在切换清晰度或换一集时变化，属于低频状态；计算放在宿主（PlayerScreen）而不是控件层
+     * 内部，控件层就只负责渲染，也不必知道 mediaSource 长什么样。
+     */
+    val playbackStatusLabel: String? = null,
     /** Whether the configuration comparison entry should be offered (mpv engine, not switched off). */
     val mpvCompareEnabled: Boolean = false,
     /**
@@ -401,6 +409,7 @@ private fun TopBar(
                 expanded = menus.expanded == PlayerMenuType.MORE,
                 qualityLabel = qualityLabel.takeIf { state.qualityAvailable },
                 decoderLabel = decoderLabel,
+                playbackStatusLabel = state.playbackStatusLabel,
                 compareAvailable = state.mpvCompareEnabled,
                 onOpenQuality = { actions.onMenuExpand(PlayerMenuType.QUALITY) },
                 onOpenDecoder = { actions.onMenuExpand(PlayerMenuType.DECODER) },

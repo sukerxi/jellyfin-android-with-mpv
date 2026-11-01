@@ -211,13 +211,14 @@ private fun buildPlaybackInfoModel(
     // ---- Overview ----
     val overviewRows = mutableListOf<PlaybackInfoRow>()
     // 枚举名不能直接上屏：面板里其他行都是本地化中文，DIRECTPLAY / TRANSCODE 混在里面
-    // 既看不懂，也和「转码原因」那一行的解释对不上。
-    val playMethodLabel = when (mediaSource.playMethod) {
-        PlayMethod.DIRECT_PLAY -> labels.playMethodDirectPlay
-        PlayMethod.DIRECT_STREAM -> labels.playMethodDirectStream
-        PlayMethod.TRANSCODE -> labels.playMethodTranscode
-        else -> mediaSource.playMethod.toString()
-    }
+    // 既看不懂，也和「转码原因」那一行的解释对不上。映射与「更多」菜单里的状态后缀共用
+    // 同一个函数，「播放信息 · 转码」和这里的「播放方式」永远不会出现两种叫法。
+    val playMethodLabel = formatPlayMethodLabel(
+        playMethod = mediaSource.playMethod,
+        directPlayLabel = labels.playMethodDirectPlay,
+        directStreamLabel = labels.playMethodDirectStream,
+        transcodeLabel = labels.playMethodTranscode,
+    ) ?: mediaSource.playMethod.toString()
     overviewRows += PlaybackInfoRow(labels.labelPlayMethod, playMethodLabel)
     buildEngineInfo(player, decoderType, mediaSource, appPreferences, labels).takeUnless(String::isBlank)?.let { engine ->
         overviewRows += PlaybackInfoRow(labels.labelEngine, engine)

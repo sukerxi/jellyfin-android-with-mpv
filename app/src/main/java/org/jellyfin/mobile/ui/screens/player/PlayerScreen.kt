@@ -884,6 +884,14 @@ fun PlayerScreen(
         transcodeReasons = transcodeReasons.orEmpty(),
     )
 
+    // 「播放信息」项自带状态：用户最关心的是画面有没有被服务端重新编码，直连也明确写出来。
+    val playbackStatusLabel = formatPlayMethodLabel(
+        playMethod = mediaSource?.playMethod,
+        directPlayLabel = stringResource(R.string.playback_info_play_method_direct_play),
+        directStreamLabel = stringResource(R.string.playback_info_play_method_direct_stream),
+        transcodeLabel = stringResource(R.string.playback_info_play_method_transcode),
+    )
+
     val volumeTextFormat = stringResource(R.string.gesture_overlay_volume)
     val brightnessTextFormat = stringResource(R.string.gesture_overlay_brightness)
     val autoLabel = stringResource(R.string.menu_item_auto)
@@ -1393,6 +1401,7 @@ fun PlayerScreen(
                     subtitlesEnabled = subtitlesEnabled,
                     qualityAvailable = mediaSource is RemoteJellyfinMediaSource,
                     isPlaying = isPlaying,
+                    playbackStatusLabel = playbackStatusLabel,
                     mpvCompareEnabled = mpvCompareEntryEnabled && player is MpvPlayer,
                     // 与下面 onToggleFullscreen 的判定保持一致：横屏（或未知）视频走转屏，
                     // 竖屏视频才是沉浸式切换。

@@ -1,6 +1,7 @@
 package org.jellyfin.mobile.ui.screens.player
 
 import org.jellyfin.mobile.player.ui.DecoderType
+import org.jellyfin.sdk.model.api.PlayMethod
 import java.util.Locale
 
 /**
@@ -90,6 +91,27 @@ fun formatStreamFallbackTitle(codec: String?, language: String?): String =
 /** 引擎信息：mpv / ExoPlayer（+ 解码器）。 */
 fun formatEngineInfo(engine: String, decoder: String?): String =
     listOfNotNull(engine, decoder).joinToString(" · ")
+
+/**
+ * 「播放信息」菜单项要追加的状态标记：转码 / 直连。
+ *
+ * 用户最在意的是这一件事：画面到底有没有被服务端重新编码。所以直连也要明确写出来，
+ * 而不是「只有转码时才出现」—— 不写反而让人怀疑这一行是不是没生效。
+ *
+ * 文案与信息面板「播放方式」那一行共用同一套资源，菜单和面板不会出现两种叫法。
+ * DIRECT_STREAM 单列：画面不重编码但容器/音频被重封装，直接标成「直接播放」是撒谎。
+ */
+fun formatPlayMethodLabel(
+    playMethod: PlayMethod?,
+    directPlayLabel: String,
+    directStreamLabel: String,
+    transcodeLabel: String,
+): String? = when (playMethod) {
+    PlayMethod.DIRECT_PLAY -> directPlayLabel
+    PlayMethod.DIRECT_STREAM -> directStreamLabel
+    PlayMethod.TRANSCODE -> transcodeLabel
+    else -> null
+}
 
 /** 倍速菜单步进（与旧 SPEED_MENU_STEP_* 一致）：0.5x .. 2.0x。 */
 val SPEED_MENU_STEPS: List<Float> = (SPEED_MENU_STEP_MIN..SPEED_MENU_STEP_MAX).map { it * SPEED_MENU_STEP_SIZE }
