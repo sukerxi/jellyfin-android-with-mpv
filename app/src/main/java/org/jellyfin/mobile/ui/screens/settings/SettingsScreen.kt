@@ -33,6 +33,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -46,6 +47,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.launch
@@ -60,6 +62,7 @@ import org.jellyfin.mobile.update.UpdateCheckResult
 import org.jellyfin.mobile.update.UpdateChannel
 import org.jellyfin.mobile.update.UpdateChecker
 import org.jellyfin.mobile.ui.components.SnackbarController
+import org.jellyfin.mobile.ui.dialog.DialogCoordinator
 import org.jellyfin.mobile.update.UpdateDialogStateHolder
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.isPackageInstalled
@@ -75,6 +78,7 @@ fun SettingsScreen(
     updateChecker: UpdateChecker = koinInject(),
     updateDialogState: UpdateDialogStateHolder = koinInject(),
     snackbarController: SnackbarController = koinInject(),
+    dialogCoordinator: DialogCoordinator = koinInject(),
 ) {
     val context = LocalContext.current
     val scope = androidx.compose.runtime.rememberCoroutineScope()
@@ -557,11 +561,27 @@ fun SettingsScreen(
         }
     }
 
+    val choiceDialogVisible = choiceDialog != null
     choiceDialog?.let { dialog ->
         SingleSelectDialog(
             dialog = dialog,
             onDismiss = { choiceDialog = null },
         )
+    }
+
+    // 单选框（含「视频播放器类型」）显示期间，通知根宿主 AppDialogHost 摘掉自己的窗口。
+    // 两边都是带 FLAG_DIM_BEHIND 的独立窗口：同时存在时 dim 叠加（整屏变暗），后挂的
+    // 窗口还会盖住选择框并接管触摸 —— 这正是「点播放器类型，框没出来、屏幕却暗了、
+    // 点哪儿都没反应」的成因。绑定状态而不是在 onClick 里置位：选中项、点外部、按返回，
+    // 乃至设置页在对话框打开时被弹出返回栈，占用都一定会被释放，不会留下永久遮罩。
+    DisposableEffect(choiceDialogVisible) {
+        if (choiceDialogVisible) {
+            dialogCoordinator.onPageDialogShown()
+            onDispose { dialogCoordinator.onPageDialogDismissed() }
+        } else {
+            dialogCoordinator.onPageDialogDismissed()
+            onDispose { }
+        }
     }
 }
 
@@ -726,6 +746,14 @@ private fun SingleSelectDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        // 显式固定窗口行为：可返回、可点外部关闭、平台默认宽度。选择框与它的 scrim
+        // 是同一个窗口 —— scrim 只压暗背景，不拦截框内点击；这里不给窗口任何
+        // 「不可取消 / 触摸模态」的机会，避免它留在屏幕上变成一层关不掉的死遮罩。
+        properties = DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true,
+            usePlatformDefaultWidth = true,
+        ),
         title = {
             Text(text = dialog.title, fontWeight = FontWeight.SemiBold)
         },

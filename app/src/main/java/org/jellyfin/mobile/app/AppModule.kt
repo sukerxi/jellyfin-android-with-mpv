@@ -54,6 +54,7 @@ import org.jellyfin.mobile.update.GitHubReleaseSource
 import org.jellyfin.mobile.update.UpdateChecker
 import org.jellyfin.mobile.update.UpdateDialogStateHolder
 import org.jellyfin.mobile.update.UpdateManager
+import org.jellyfin.mobile.ui.dialog.DialogCoordinator
 import org.jellyfin.mobile.ui.dialog.WebViewDialogState
 import org.jellyfin.mobile.ui.components.SnackbarController
 import org.jellyfin.mobile.utils.Constants
@@ -225,5 +226,6 @@ val applicationModule = module {
     single { UpdateManager() }
     single { UpdateDialogStateHolder(get()) }
     single { WebViewDialogState() }
+    single { DialogCoordinator() }
     single { SnackbarController() }
 }

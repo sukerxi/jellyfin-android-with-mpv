@@ -69,65 +69,74 @@ fun UpdateDialogHost(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    holder.prompt?.let { prompt ->
-        UpdateAvailableDialog(
-            prompt = prompt,
-            updateManager = updateManager,
-            onDownloadNow = {
-                val workId = updateManager.enqueueDownload(context, prompt.info)
-                holder.showProgress(prompt.info, workId)
-                // 缺权限时不再"边弹权限引导边下载"两个对话框叠着走：
-                // 先记下待安装版本，权限对话框优先展示，下载在后台照常进行。
-                if (!updateManager.hasInstallPermission(context)) {
-                    holder.requestInstallAfterPermission(prompt.info)
-                }
-            },
-            onDownloadInBackground = {
-                updateManager.enqueueDownload(context, prompt.info)
-                snackbarController.show(context.getString(R.string.update_download_started))
-                holder.dismissPrompt()
-            },
-            onIgnore = { holder.ignoreVersion(prompt.info.versionName) },
-            onDismiss = holder::dismissPrompt,
-        )
-    }
+    // 同一宿主内也只允许一个对话框窗口。每个 AlertDialog 都是带 FLAG_DIM_BEHIND 的
+    // 独立窗口，两个同时组合就会 dim 叠加、后挂的窗口盖住先挂的并接管触摸。
+    // 旧逻辑只用 takeIf 排除了 progress/permission 这一对，prompt 仍可能与权限引导叠加。
+    // 优先级：安装权限引导 > 更新提示 > 下载进度；状态都留在 holder 里，前一个关掉后
+    // 本块重新组合，后一个自然接上，不丢任何一步。
+    val permissionVisible = holder.installPermissionVisible
+    val prompt = holder.prompt
+    val progressState = holder.progressState
 
-    // 权限引导优先展示；关闭后再显示进度，避免两个对话框叠在一起
-    holder.progressState?.takeIf { !holder.installPermissionVisible }?.let { state ->
-        UpdateProgressDialog(
-            info = state.info,
-            workId = state.workId,
-            onDismiss = holder::hideProgress,
-            onCancel = {
-                updateManager.cancelDownload(context)
-                holder.hideProgress()
-                holder.clearPendingInstall()
-            },
-            onSuccess = {
-                holder.hideProgress()
-                if (updateManager.hasInstallPermission(context)) {
-                    updateManager.launchInstall(context, state.info)
-                } else {
-                    // 下载好了但装不了：记下来，授权返回后自动继续
-                    holder.requestInstallAfterPermission(state.info)
-                }
-            },
-            onFailed = {
-                holder.hideProgress()
-                holder.clearPendingInstall()
-                snackbarController.show(context.getString(R.string.update_download_failed))
-            },
-        )
-    }
-
-    if (holder.installPermissionVisible) {
-        InstallPermissionDialog(
-            onOpenSettings = {
-                updateManager.openInstallPermissionSettings(context)
-                holder.hideInstallPermission()
-            },
-            onDismiss = holder::hideInstallPermission,
-        )
+    when {
+        permissionVisible -> {
+            InstallPermissionDialog(
+                onOpenSettings = {
+                    updateManager.openInstallPermissionSettings(context)
+                    holder.hideInstallPermission()
+                },
+                onDismiss = holder::hideInstallPermission,
+            )
+        }
+        prompt != null -> {
+            UpdateAvailableDialog(
+                prompt = prompt,
+                updateManager = updateManager,
+                onDownloadNow = {
+                    val workId = updateManager.enqueueDownload(context, prompt.info)
+                    holder.showProgress(prompt.info, workId)
+                    // 缺权限时不再"边弹权限引导边下载"两个对话框叠着走：
+                    // 先记下待安装版本，权限对话框优先展示，下载在后台照常进行。
+                    if (!updateManager.hasInstallPermission(context)) {
+                        holder.requestInstallAfterPermission(prompt.info)
+                    }
+                },
+                onDownloadInBackground = {
+                    updateManager.enqueueDownload(context, prompt.info)
+                    snackbarController.show(context.getString(R.string.update_download_started))
+                    holder.dismissPrompt()
+                },
+                onIgnore = { holder.ignoreVersion(prompt.info.versionName) },
+                onDismiss = holder::dismissPrompt,
+            )
+        }
+        progressState != null -> {
+            UpdateProgressDialog(
+                info = progressState.info,
+                workId = progressState.workId,
+                onDismiss = holder::hideProgress,
+                onCancel = {
+                    updateManager.cancelDownload(context)
+                    holder.hideProgress()
+                    holder.clearPendingInstall()
+                },
+                onSuccess = {
+                    holder.hideProgress()
+                    if (updateManager.hasInstallPermission(context)) {
+                        updateManager.launchInstall(context, progressState.info)
+                    } else {
+                        // 下载好了但装不了：记下来，授权返回后自动继续
+                        holder.requestInstallAfterPermission(progressState.info)
+                    }
+                },
+                onFailed = {
+                    holder.hideProgress()
+                    holder.clearPendingInstall()
+                    snackbarController.show(context.getString(R.string.update_download_failed))
+                },
+            )
+        }
+        else -> Unit
     }
 }
 
