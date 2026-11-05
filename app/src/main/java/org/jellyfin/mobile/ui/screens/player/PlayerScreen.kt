@@ -1,13 +1,9 @@
 package org.jellyfin.mobile.ui.screens.player
 
-import android.app.PictureInPictureParams
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.res.Configuration
-import android.graphics.Rect
-import android.view.View
 import android.view.Window
-import android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.annotation.StringRes
@@ -86,7 +82,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.ViewCompat
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.Observer
@@ -113,7 +108,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.app.AppPreferences
-import org.jellyfin.mobile.player.PlayerException
 import org.jellyfin.mobile.player.PlayerUiError
 import org.jellyfin.mobile.player.PlayerViewModel
 import org.jellyfin.mobile.player.interaction.PlaybackController
@@ -136,13 +130,9 @@ import org.jellyfin.mobile.ui.screens.mpvcompare.InPlayerCompareOverlay
 import org.jellyfin.mobile.utils.AndroidVersion
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.SmartOrientationListener
-import org.jellyfin.mobile.utils.brightness
-import org.jellyfin.mobile.utils.extensions.aspectRational
 import org.jellyfin.mobile.utils.extensions.isLandscape
-import org.jellyfin.mobile.utils.extensions.keepScreenOn
 import org.jellyfin.mobile.utils.extensions.lockOrientation
 import org.jellyfin.mobile.utils.isAutoRotateOn
-import org.jellyfin.mobile.utils.isOnCellularNetwork
 import org.jellyfin.mobile.utils.koinInject
 import org.jellyfin.mobile.webapp.WebappFunctionChannel
 import org.jellyfin.sdk.model.api.BaseItemDto
@@ -209,7 +199,7 @@ private enum class PlayerLoadingStage { ACTIVE, SLOW, STUCK }
  * 保留原始播放请求，重试时按同样的参数（含移动网络码率上限）再走一遍，
  * 不需要用户退回网页重新点一次播放。
  */
-private class PlaybackFailure(
+internal class PlaybackFailure(
     val messageRes: Int,
     val request: PlaybackRequest,
     val maxStreamingBitrateOverride: Int?,
@@ -294,7 +284,8 @@ fun PlayerScreen(
      * 播放失败的落地状态。非 null 时播放器停在原位显示错误卡片，而不是
      * "toast 一句然后被踢回网页"——后者让用户看不到原因，也没有重试入口。
      */
-    var playbackFailure by remember { mutableStateOf<PlaybackFailure?>(null) }
+    val playbackFailureState = remember { mutableStateOf<PlaybackFailure?>(null) }
+    var playbackFailure by playbackFailureState
     var unlockButtonVisible by remember { mutableStateOf(false) }
     // 面板状态留在屏幕（remember + MutableState），抽出去的只是互斥与返回仲裁规则。
     // 用 `val x by xState` 保留原变量名，读取点无需改动；写入统一走 panels。
@@ -318,22 +309,27 @@ fun PlayerScreen(
             menu = expandedMenuState,
         )
     }
-    var isFullscreen by remember { mutableStateOf(false) }
+    val isFullscreenState = remember { mutableStateOf(false) }
+    var isFullscreen by isFullscreenState
     var gestureSurfaceSize by remember { mutableStateOf(IntSize.Zero) }
-    var isPlaying by remember { mutableStateOf(false) }
+    val isPlayingState = remember { mutableStateOf(false) }
+    var isPlaying by isPlayingState
     var scrubPositionMs by remember { mutableStateOf<Long?>(null) }
     // 拖动状态只关心「有没有在拖」：直接读 scrubPositionMs 会让整个屏幕在拖动时跟着
     // 每个触摸事件重组，用派生态把订阅收窄成布尔值（开始/结束各触发一次）。
     val isScrubbing by remember { derivedStateOf { scrubPositionMs != null } }
     // 松手后正在生效的 seek 目标位置：进度 state 的位置追上目标（或超时）后置空
     var pendingSeekPositionMs by remember { mutableStateOf<Long?>(null) }
-    var pipMode by remember { mutableStateOf(activity.isInPictureInPictureMode) }
-    var subtitlesEnabled by remember { mutableStateOf(false) }
+    val pipModeState = remember { mutableStateOf(activity.isInPictureInPictureMode) }
+    var pipMode by pipModeState
+    val subtitlesEnabledState = remember { mutableStateOf(false) }
+    var subtitlesEnabled by subtitlesEnabledState
     var episodeItemMap by remember { mutableStateOf<Map<UUID, BaseItemDto>?>(null) }
     var episodeItemsLoaded by remember { mutableStateOf(false) }
     var unlockHideJob by remember { mutableStateOf<Job?>(null) }
     // 移动网络播放确认：蜂窝网络下待用户选择的播放请求；非空时展示确认弹窗且尚未开始播放。
-    var pendingMobileDataRequest by remember { mutableStateOf<PlaybackRequest?>(null) }
+    val pendingMobileDataRequestState = remember { mutableStateOf<PlaybackRequest?>(null) }
+    var pendingMobileDataRequest by pendingMobileDataRequestState
 
     val playerViewHolder = remember { arrayOfNulls<PlayerView>(1) }
     val trickplayHelper = remember(context) { TrickplayHelper(context) }
@@ -375,7 +371,8 @@ fun PlayerScreen(
     // Set once a player instance has been attached during this session. The player starts
     // out null while the playback request is resolved, so "player == null" only means
     // "playback ended" after a player has existed to end.
-    var playbackStarted by remember { mutableStateOf(false) }
+    val playbackStartedState = remember { mutableStateOf(false) }
+    var playbackStarted by playbackStartedState
 
     // Set (once) when this session is over, either because the user left the screen or
     // because playback ended on its own. Guards every other effect from running again and
@@ -433,29 +430,42 @@ fun PlayerScreen(
     // 控件层的 actions 只在首次组合时创建（见下方 remember），内部的 closePlayer() 会
     // 捕获当次组合的 onClose 参数。onClose 来自调用方，可能随上级重组换实例，
     // 用 rememberUpdatedState 保证事件触发时读到的是最新引用。
-    val currentOnClose by rememberUpdatedState(onClose)
+    val currentOnClose = rememberUpdatedState(onClose)
 
-    /**
-     * Leave the player screen: the web app takes playback over again and the native player
-     * is stopped unless the user enabled background playback (or the web app is casting).
-     * Every exit path (back button, the toolbar back arrow, the WebView's back handling)
-     * goes through here, otherwise the foreground service keeps playing behind the UI.
-     */
-    fun closePlayer() {
-        if (closingSoon.value || playbackEnded.value) return
-        closingSoon.value = true
-        viewModel.onPlayerClosed()
-
-        // The player has to be gone by the time the session ends: [PlayerViewModel.onPlayerClosed]
-        // only stops it (and only when the user did not opt into background playback), leaving a
-        // live player behind for the next session. Binding the next media source to a player
-        // that is still attached to the previous one is what made the second "play" of a session
-        // run into the state it was left in.
-        if (!viewModel.keepPlaybackOnExit()) {
-            playbackEnded.value = true
-        }
-        currentOnClose()
+    // 会话规则（起播 / 关闭 / PiP / 方向 / 亮度）已搬到 PlayerSessionCoordinator。
+    // 状态仍是本屏的 remember，副作用也仍挂在本屏的组合生命周期上；这里只组装一次。
+    val sessionState = remember {
+        PlayerSessionState(
+            closingSoon = closingSoon,
+            playbackEnded = playbackEnded,
+            playbackStarted = playbackStartedState,
+            pipMode = pipModeState,
+            isPlaying = isPlayingState,
+            isFullscreen = isFullscreenState,
+            subtitlesEnabled = subtitlesEnabledState,
+            playbackFailure = playbackFailureState,
+            pendingMobileDataRequest = pendingMobileDataRequestState,
+        )
     }
+    val session = remember(activity) {
+        PlayerSessionCoordinator(
+            viewModel = viewModel,
+            activity = activity,
+            window = window,
+            appPreferences = appPreferences,
+            playbackLauncher = playbackLauncher,
+            playerFullscreenHelper = playerFullscreenHelper,
+            orientationListener = orientationListener,
+            trickplayHelper = trickplayHelper,
+            webappFunctionChannel = webappFunctionChannel,
+            playerViewHolder = playerViewHolder,
+            state = sessionState,
+            onClose = currentOnClose,
+        )
+    }
+
+    // 所有退出路径共用 session 里的同一条关闭规则，避免前台服务在 UI 后面继续播放。
+    fun closePlayer() = session.closePlayer()
 
     fun hideUnlockButton() {
         unlockHideJob?.cancel()
@@ -499,128 +509,24 @@ fun PlayerScreen(
         showControls()
     }
 
-    fun isLandscapeOrientation(): Boolean =
-        activity.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-
-    fun updateFullscreenState(configuration: Configuration) {
-        // Do not handle any orientation changes while being in Picture-in-Picture mode
-        if (AndroidVersion.isAtLeastN && activity.isInPictureInPictureMode) {
-            return
-        }
-
-        when {
-            configuration.orientation == Configuration.ORIENTATION_LANDSCAPE -> {
-                // Landscape orientation is always fullscreen
-                playerFullscreenHelper.enableFullscreen()
-            }
-            viewModel.mediaSourceOrNull?.selectedVideoStream?.isLandscape != false -> {
-                // Disable fullscreen for landscape video in portrait orientation
-                playerFullscreenHelper.disableFullscreen()
-            }
-        }
-    }
-
-    fun enterPictureInPicture() {
-        if (!AndroidVersion.isAtLeastN || viewModel.playerOrNull == null) return
-        val playerView = playerViewHolder[0] ?: return
-
-        if (AndroidVersion.isAtLeastO) {
-            val aspectRational = viewModel.mediaSourceOrNull?.selectedVideoStream?.aspectRational?.let { rational ->
-                when {
-                    rational < Constants.PIP_MIN_RATIONAL -> Constants.PIP_MIN_RATIONAL
-                    rational > Constants.PIP_MAX_RATIONAL -> Constants.PIP_MAX_RATIONAL
-                    else -> rational
-                }
-            }
-            val params = PictureInPictureParams.Builder().apply {
-                setAspectRatio(aspectRational)
-                val contentFrame: View = playerView.findViewById(androidx.media3.ui.R.id.exo_content_frame)
-                val contentRect = with(contentFrame) {
-                    val (x, y) = intArrayOf(0, 0).also(::getLocationInWindow)
-                    Rect(x, y, x + width, y + height)
-                }
-                setSourceRectHint(contentRect)
-            }.build()
-            activity.enterPictureInPictureMode(params)
-        } else {
-            @Suppress("DEPRECATION")
-            activity.enterPictureInPictureMode()
-        }
-    }
+    fun isLandscapeOrientation(): Boolean = session.isLandscapeOrientation()
 
     // endregion
 
     // region effects
 
-    /**
-     * 真正开始播放：确保播放器已就绪后初始化播放队列。
-     *
-     * [maxStreamingBitrateOverride] 非空时为移动网络播放：该码率上限会下发到服务端，
-     * 强制转码到该码率以下，避免直连原画质偷跑流量。
-     */
-    suspend fun startPlayback(request: PlaybackRequest, maxStreamingBitrateOverride: Int?) {
-        if (viewModel.playerOrNull == null) {
-            viewModel.setupPlayer()
-        }
-        val error = viewModel.queueManager.initializePlaybackQueue(
-            request.playOptions,
-            request.preferences,
-            maxStreamingBitrateOverride,
-        )
-        if (error != null) {
-            // 播放起不来：停在播放器里说明原因并给「重试 / 返回」两个出口。
-            // 直接 toast + closePlayer 会让用户在 2 秒后连错误都看不到，
-            // 也没有换内核/降清晰度的机会。
-            val messageRes = when (error) {
-                is PlayerException.InvalidPlayOptions -> R.string.player_error_invalid_play_options
-                is PlayerException.NetworkFailure -> R.string.player_error_network_failure
-                is PlayerException.UnsupportedContent -> R.string.player_error_unsupported_content
-                is PlayerException.PlayerNotAvailable -> R.string.player_error_unspecific_exception
-            }
-            playbackFailure = PlaybackFailure(messageRes, request, maxStreamingBitrateOverride)
-        } else {
-            playbackFailure = null
-        }
-    }
+    suspend fun startPlayback(request: PlaybackRequest, maxStreamingBitrateOverride: Int?) =
+        session.startPlayback(request, maxStreamingBitrateOverride)
 
     // Handle playback options and start playback (once per composition).
     // The ViewModel lives in the activity's store, so it outlives this screen; the player
-    // does not (see [closePlayer]). Every session therefore has to build its own player -
+    // does not (see closePlayer). Every session therefore has to build its own player -
     // the old per-fragment ViewModel did that from its lifecycle observer, and dropping it
     // is what left the second playback of a session without a player.
-    LaunchedEffect(Unit) {
-        val request = playbackLauncher.consume()
-        if (request == null) {
-            // No pending playback request (e.g. restored to the player route), close
-            closePlayer()
-            return@LaunchedEffect
-        }
-
-        // 移动网络（蜂窝）下的远程播放：开启提示时先等用户选择，否则直接按设定码率播放。
-        // 本地下载播放不经过网络，不受影响。
-        val mobileDataPlayback = request.playOptions.playFromDownloads != true && context.isOnCellularNetwork
-        if (mobileDataPlayback && appPreferences.mobileDataPlaybackPrompt) {
-            pendingMobileDataRequest = request
-        } else {
-            startPlayback(request, if (mobileDataPlayback) appPreferences.mobileDataMaxBitrate else null)
-        }
-    }
+    LaunchedEffect(Unit) { session.resolveInitialPlayback() }
 
     // Automatically close the screen when playback ended, unless we're in PiP mode.
-    // Only a player that actually appeared and then went away means "playback ended":
-    // at the start of a session the player is legitimately still null (it is created while
-    // the playback request is being resolved, which involves network round trips), and
-    // closing on that would dismiss the screen the user just opened.
-    LaunchedEffect(player) {
-        if (player != null) {
-            playbackStarted = true
-        } else if (playbackStarted && !pipMode && !closingSoon.value && !playbackEnded.value) {
-            // Playback ended on its own; the session is over, and PlayerViewModel has already
-            // released the player. Dismiss without running the close path again.
-            playbackEnded.value = true
-            onClose()
-        }
-    }
+    LaunchedEffect(player) { session.onPlayerChanged(player) }
 
     // 播放过程中的运行期错误（解码失败、断流等）：走全局 Snackbar，可回溯、可复制，
     // 也不再与播放器底栏抢位置。断流这类「链路好了就能继续看」的错误附带重试动作，
@@ -648,11 +554,7 @@ fun PlayerScreen(
     }
 
     // Remember brightness setting on player start
-    LaunchedEffect(Unit) {
-        if (appPreferences.exoPlayerRememberBrightness) {
-            window.brightness = appPreferences.exoPlayerBrightness
-        }
-    }
+    LaunchedEffect(Unit) { session.rememberBrightness() }
 
     // 播放态事件驱动：官方 ProgressState 只含进度三要素，不含 isPlaying。
     // 原先它由 200ms 位置轮询顺带读取（暂停也空转），改为 Player.Listener 回调，
@@ -660,47 +562,29 @@ fun PlayerScreen(
     DisposableEffect(player) {
         val currentPlayer = player
         if (currentPlayer == null) {
-            isPlaying = false
+            session.onIsPlayingChanged(false)
             onDispose { }
         } else {
-            isPlaying = currentPlayer.isPlaying
+            session.onIsPlayingChanged(currentPlayer.isPlaying)
             val listener = object : Player.Listener {
                 override fun onIsPlayingChanged(playing: Boolean) {
-                    isPlaying = playing
+                    session.onIsPlayingChanged(playing)
                 }
             }
             currentPlayer.addListener(listener)
             onDispose { currentPlayer.removeListener(listener) }
         }
     }
-    LaunchedEffect(isPlaying) {
-        window.keepScreenOn = isPlaying
-    }
+    LaunchedEffect(isPlaying) { session.applyKeepScreenOn() }
 
     // Queue item changes: update fullscreen state, trickplay, menus and subtitle state
-    LaunchedEffect(mediaSource) {
-        val source = mediaSource
-        if (source != null) {
-            if (source.selectedVideoStream?.isLandscape == false) {
-                // For portrait videos, immediately enable fullscreen
-                playerFullscreenHelper.enableFullscreen()
-            } else if (appPreferences.exoPlayerStartLandscapeVideoInLandscape) {
-                // Auto-switch to landscape for landscape videos if enabled
-                activity.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            }
-            subtitlesEnabled = source.selectedSubtitleStream != null
-            trickplayHelper.onMediaSourceChanged(source)
-            viewModel.refreshPlayerMenuState()
-        }
-    }
+    LaunchedEffect(mediaSource) { session.onMediaSourceChanged(mediaSource) }
 
     // Keep the fullscreen state in sync with the window insets (also covers transient
     // system-bar reveals), mirroring the old OnApplyWindowInsetsListener on the fragment root
     DisposableEffect(playerFullscreenHelper) {
         val listener = androidx.core.view.OnApplyWindowInsetsListener { _, insets ->
-            playerFullscreenHelper.onWindowInsetsChanged(insets)
-            isFullscreen = playerFullscreenHelper.isFullscreen
-            insets
+            session.onWindowInsetsChanged(insets)
         }
         ViewCompat.setOnApplyWindowInsetsListener(window.decorView, listener)
         onDispose { ViewCompat.setOnApplyWindowInsetsListener(window.decorView, null) }
@@ -708,23 +592,7 @@ fun PlayerScreen(
 
     // Orientation / lifecycle: orientation listener, fullscreen on resume, close when stopped
     DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_START -> orientationListener.enable()
-                Lifecycle.Event.ON_STOP -> orientationListener.disable()
-                Lifecycle.Event.ON_RESUME -> {
-                    // When returning from another app, fullscreen mode for landscape orientation has to be set again
-                    if (isLandscapeOrientation()) {
-                        playerFullscreenHelper.enableFullscreen()
-                    }
-                    // If playback ended during picture in picture we'll return to the main app when PiP is closed
-                    if (viewModel.playerOrNull == null && playbackStarted) {
-                        closePlayer()
-                    }
-                }
-                else -> Unit
-            }
-        }
+        val observer = LifecycleEventObserver { _, event -> session.onLifecycleEvent(event) }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
@@ -735,7 +603,7 @@ fun PlayerScreen(
     // Picture-in-Picture mode changes
     DisposableEffect(Unit) {
         val listener = androidx.core.util.Consumer<androidx.core.app.PictureInPictureModeChangedInfo> { info ->
-            pipMode = info.isInPictureInPictureMode
+            session.onPictureInPictureModeChanged(info.isInPictureInPictureMode)
             if (info.isInPictureInPictureMode) {
                 controlsVisibility.setVisible(false)
                 panels.closeAll()
@@ -748,7 +616,7 @@ fun PlayerScreen(
 
     // Bridge onUserLeaveHint (Home/Recents) into PiP
     DisposableEffect(playbackController) {
-        playbackController.onUserLeaveHint = { enterPictureInPicture() }
+        playbackController.onUserLeaveHint = { session.enterPictureInPicture() }
         onDispose { playbackController.onUserLeaveHint = null }
     }
 
@@ -758,22 +626,7 @@ fun PlayerScreen(
     // The player itself is torn down here too: a player that outlives its session would be
     // reused by the next one, still bound to the media source it was left with.
     DisposableEffect(Unit) {
-        onDispose {
-            if (!playbackEnded.value) {
-                playbackEnded.value = true
-                viewModel.endPlayback()
-            }
-            activity.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-            playerFullscreenHelper.disableFullscreen()
-            window.brightness = BRIGHTNESS_OVERRIDE_NONE
-            // 窗口常亮标志必须显式清除，否则播放中退出后 FLAG_KEEP_SCREEN_ON 会残留，
-            // 导致主界面等非播放场景屏幕也不熄屏
-            window.keepScreenOn = false
-            // 网页端的全屏加载圈不归原生层管：jellyfin-web 的 playbackManager.play() 在
-            // 取条目/PlaybackInfo 请求失败时不会隐藏它，用户退出播放器后转圈会继续挂在
-            // 网页正中。这里兜底关一次，覆盖「网络问题导致播放没起来」的那条路径。
-            webappFunctionChannel.hideWebLoading()
-        }
+        onDispose { session.onSessionDispose() }
     }
 
     // Controls auto-hide
@@ -1104,7 +957,7 @@ fun PlayerScreen(
 
     // Configuration changes (orientation): fullscreen state + zoom mode
     LaunchedEffect(configuration.orientation) {
-        updateFullscreenState(configuration)
+        session.updateFullscreenState(configuration)
         gestureHandler.handleConfiguration()
     }
 
@@ -1322,7 +1175,7 @@ fun PlayerScreen(
                     onMenuExpand = { menu ->
                         val wasExpanded = panels.expandMenu(menu)
                         if (wasExpanded && menu == null && !AndroidVersion.isAtLeastR) {
-                            updateFullscreenState(activity.resources.configuration)
+                            session.updateFullscreenState(activity.resources.configuration)
                         }
                     },
                     onScrubStart = {
