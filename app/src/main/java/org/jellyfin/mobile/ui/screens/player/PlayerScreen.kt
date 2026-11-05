@@ -273,7 +273,8 @@ fun PlayerScreen(
     )
 
     // UI state
-    var controlsVisible by remember { mutableStateOf(true) }
+    val controlsVisibleState = remember { mutableStateOf(true) }
+    val controlsVisible by controlsVisibleState
     /**
      * 交互信号：控件层上每发生一次触摸就自增。
      *
@@ -283,7 +284,8 @@ fun PlayerScreen(
      */
     val interactionTick = remember { mutableIntStateOf(0) }
     // 手指是否还按在控件层上：按住期间不隐藏，抬手后重新计时。
-    var touchActive by remember { mutableStateOf(false) }
+    val touchActiveState = remember { mutableStateOf(false) }
+    val touchActive by touchActiveState
     // 自动隐藏时长由用户决定（3s / 5s / 10s / 永不），不再写死。
     val controlsTimeoutMs by appPreferences.controlsTimeoutFlow
         .collectAsState(initial = appPreferences.controlsTimeoutMs)
@@ -294,14 +296,28 @@ fun PlayerScreen(
      */
     var playbackFailure by remember { mutableStateOf<PlaybackFailure?>(null) }
     var unlockButtonVisible by remember { mutableStateOf(false) }
-    var expandedMenu by remember { mutableStateOf<PlayerMenuType?>(null) }
-    var infoPanelVisible by remember { mutableStateOf(false) }
+    // 面板状态留在屏幕（remember + MutableState），抽出去的只是互斥与返回仲裁规则。
+    // 用 `val x by xState` 保留原变量名，读取点无需改动；写入统一走 panels。
+    val expandedMenuState = remember { mutableStateOf<PlayerMenuType?>(null) }
+    val expandedMenu by expandedMenuState
+    val infoPanelVisibleState = remember { mutableStateOf(false) }
+    val infoPanelVisible by infoPanelVisibleState
     // mpv configuration comparison panel; only reachable while the mpv engine is playing and the
     // user keeps the entry enabled.
-    var compareVisible by remember { mutableStateOf(false) }
+    val compareVisibleState = remember { mutableStateOf(false) }
+    val compareVisible by compareVisibleState
     val mpvCompareEntryEnabled by appPreferences.mpvShowCompareEntryFlow
         .collectAsState(initial = appPreferences.mpvShowCompareEntry)
-    var episodePickerVisible by remember { mutableStateOf(false) }
+    val episodePickerVisibleState = remember { mutableStateOf(false) }
+    val episodePickerVisible by episodePickerVisibleState
+    val panels = remember {
+        PlayerPanelArbitration(
+            infoVisible = infoPanelVisibleState,
+            episodeVisible = episodePickerVisibleState,
+            compareVisible = compareVisibleState,
+            menu = expandedMenuState,
+        )
+    }
     var isFullscreen by remember { mutableStateOf(false) }
     var gestureSurfaceSize by remember { mutableStateOf(IntSize.Zero) }
     var isPlaying by remember { mutableStateOf(false) }
@@ -327,52 +343,22 @@ fun PlayerScreen(
 
     // region helpers
 
-    /**
-     * 「单击呼出控件」的待生效任务（见 [toggleControls]）。
-     *
-     * 控件隐藏时，双击的第一击走的也是单击分支：若这一击立刻把控件亮出来，第二击随即把它
-     * 收起，用户看到的就是双击「闪一下控件」。所以显示要等过双击窗口，收起仍然即时。
-     */
-    var pendingControlsShowJob by remember { mutableStateOf<Job?>(null) }
-
-    fun cancelPendingControlsShow() {
-        pendingControlsShowJob?.cancel()
-        pendingControlsShowJob = null
+    // 控件显隐状态机（show / hide / toggle、单击去抖、延过一个双击窗口再显示、
+    // 交互信号与按压状态）已搬到 PlayerControlsVisibility；这里只留薄封装，调用点不变。
+    val controlsVisibility = remember {
+        PlayerControlsVisibility(
+            visible = controlsVisibleState,
+            interactionTick = interactionTick,
+            touchActive = touchActiveState,
+            scope = scope,
+            doubleTapTimeoutMs = Constants.PLAYER_DOUBLE_TAP_TIMEOUT_MS,
+            toggleDebounceMs = Constants.CONTROLS_TOGGLE_DEBOUNCE_MS,
+        )
     }
 
-    fun showControls() {
-        cancelPendingControlsShow()
-        controlsVisible = true
-        interactionTick.intValue++
-    }
-
-    /*
-     * 单击 = 显示/收起控件。
-     *
-     * 控件隐藏时由手势层收到点击，控件可见时手势层被控件层挡住、由控件层的空白处点击收到
-     * —— 两个入口都调到这里。极少数情况下同一次抬手会同时命中两层（重叠命中），因此加一个
-     * 很短的窗口去抖，避免「收起又立刻弹出」。
-     *
-     * 显示延后一个双击窗口：双击（暂停 / 快进快退）由同一次轻点起手，第一击若立刻亮出
-     * 控件，双击就变成了「先把控件叫出来、再把它收起」。延后只作用于「显示」，收起仍然
-     * 即时，所以高频的「点一下收控件」没有可感知的延迟。
-     */
-    var lastControlsToggleUptime by remember { mutableStateOf(0L) }
-    fun toggleControls() {
-        val now = android.os.SystemClock.uptimeMillis()
-        if (now - lastControlsToggleUptime < Constants.CONTROLS_TOGGLE_DEBOUNCE_MS) return
-        lastControlsToggleUptime = now
-        if (controlsVisible) {
-            controlsVisible = false
-        } else {
-            pendingControlsShowJob = scope.launch {
-                delay(Constants.PLAYER_DOUBLE_TAP_TIMEOUT_MS)
-                // 先清引用再显示：showControls() 自己会取消待生效任务，不能把当前协程取消掉。
-                pendingControlsShowJob = null
-                showControls()
-            }
-        }
-    }
+    fun cancelPendingControlsShow() = controlsVisibility.cancelPendingShow()
+    fun showControls() = controlsVisibility.show()
+    fun toggleControls() = controlsVisibility.toggle()
 
     // 读屏/开关控制开启时，控件栏与解锁入口都不自动收起：这类用户需要沿着可聚焦节点
     // 逐项浏览，几秒后把目标从手指底下抽走等于让他们重新摸索一遍。
@@ -492,7 +478,7 @@ fun PlayerScreen(
 
     fun lockScreen() {
         locked = true
-        controlsVisible = false
+        controlsVisibility.setVisible(false)
         orientationListener.disable()
         activity.lockOrientation()
         peekUnlockButton()
@@ -751,11 +737,8 @@ fun PlayerScreen(
         val listener = androidx.core.util.Consumer<androidx.core.app.PictureInPictureModeChangedInfo> { info ->
             pipMode = info.isInPictureInPictureMode
             if (info.isInPictureInPictureMode) {
-                controlsVisible = false
-                expandedMenu = null
-                infoPanelVisible = false
-                episodePickerVisible = false
-                compareVisible = false
+                controlsVisibility.setVisible(false)
+                panels.closeAll()
                 hideUnlockButton()
             }
         }
@@ -806,8 +789,7 @@ fun PlayerScreen(
     // 这些抑制条件与「最近一次交互」全部由 snapshotFlow 在协程里观察，组合期一个都不读：
     // 否则按下/抬起手指、每拖一下进度条、开关一次菜单，都会让整个播放器界面（含视频
     // AndroidView 与两侧控件栏）重组一遍——而它们的作用只是「重置一个倒计时」。
-    fun isControlsSuppressed(): Boolean = expandedMenu != null || infoPanelVisible ||
-        episodePickerVisible || compareVisible || isScrubbing || touchActive
+    fun isControlsSuppressed(): Boolean = panels.hasOpenPanel || isScrubbing || touchActive
 
     LaunchedEffect(controlsTimeoutMs) {
         val timeout = controlsTimeoutMs
@@ -821,7 +803,7 @@ fun PlayerScreen(
         }.collectLatest { signal ->
             if (!signal.eligible) return@collectLatest
             delay(timeout.toLong())
-            controlsVisible = false
+            controlsVisibility.setVisible(false)
         }
     }
 
@@ -841,7 +823,7 @@ fun PlayerScreen(
         initialLoadFinished = true
         val timeout = controlsTimeoutMs
         if (controlsVisible && !isControlsSuppressed() && timeout > 0 && !isScreenReaderActive()) {
-            controlsVisible = false
+            controlsVisibility.setVisible(false)
         }
     }
 
@@ -1102,12 +1084,9 @@ fun PlayerScreen(
         // 需要三下才生效。双击时顺手收起控件（画面让位给反馈图标），语义才对。
         // 控件隐藏时，第一击刚挂起的「稍后显示控件」也必须一并取消，否则它会在双击结束后
         // 约一个双击窗口自己弹出来——那正是「双击会呼出控件」的来源。
-        onHideControls = {
-            cancelPendingControlsShow()
-            if (controlsVisible) controlsVisible = false
-        },
+        onHideControls = { controlsVisibility.hide() },
         // 双击的第二击按下时，第一击挂起的「稍后显示控件」立刻作废（见 toggleControls）。
-        onSecondTapStarted = { cancelPendingControlsShow() },
+        onSecondTapStarted = { controlsVisibility.cancelPendingShow() },
         // 双击跳转量与快进/快退按钮共用服务端下发的步长，文案必须反映真实值，
         // 否则用户会以为自己跳的是固定 10 秒。
         seekStepLabel = { forward ->
@@ -1136,17 +1115,12 @@ fun PlayerScreen(
     // 「按一次收控件、再按一次退出」和顶栏箭头「按一次退出」变成两套答案，
     // 用户无法预测同一个返回动作为什么结果不同。
     fun handlePlayerBack() {
-        when {
-            infoPanelVisible || episodePickerVisible || expandedMenu != null || compareVisible -> {
-                expandedMenu = null
-                infoPanelVisible = false
-                episodePickerVisible = false
-                compareVisible = false
-            }
-            // 锁屏时解锁按钮会随超时消失；返回键什么都不做会被当成按键失灵。
-            locked -> peekUnlockButton()
-            else -> closePlayer()
-        }
+        // 分支顺序与互斥规则搬进 PlayerPanelArbitration；本屏只提供锁屏与退出的具体动作。
+        panels.handleBack(
+            locked = locked,
+            onPeekUnlock = ::peekUnlockButton,
+            onClose = ::closePlayer,
+        )
     }
 
     // 返回键交给宿主（唯一的仲裁点）派发，本屏只声明"按下返回时怎么处理"。
@@ -1316,29 +1290,16 @@ fun PlayerScreen(
                         scope.launch { viewModel.changeBitrate(bitrate) }
                     },
                     onDecoderSelected = { type -> viewModel.updateDecoderType(type) },
-                    onShowInfo = {
-                        if (episodePickerVisible) episodePickerVisible = false
-                        compareVisible = false
-                        infoPanelVisible = !infoPanelVisible
-                    },
-                    onShowCompare = {
-                        // The comparison panel and the info panel share the area above the video.
-                        infoPanelVisible = false
-                        episodePickerVisible = false
-                        compareVisible = !compareVisible
-                    },
+                    onShowInfo = { panels.toggleInfo() },
+                    onShowCompare = { panels.toggleCompare() },
                     onShowEpisodes = {
-                        if (infoPanelVisible) infoPanelVisible = false
-                        if (episodePickerVisible) {
-                            episodePickerVisible = false
-                        } else {
+                        panels.toggleEpisodes {
                             if (!episodeItemsLoaded) {
                                 episodeItemsLoaded = true
                                 scope.launch {
                                     episodeItemMap = viewModel.queueManager.getQueueItemMap()
                                 }
                             }
-                            episodePickerVisible = true
                         }
                     },
                     onToggleFullscreen = {
@@ -1359,8 +1320,7 @@ fun PlayerScreen(
                         }
                     },
                     onMenuExpand = { menu ->
-                        val wasExpanded = expandedMenu != null
-                        expandedMenu = menu
+                        val wasExpanded = panels.expandMenu(menu)
                         if (wasExpanded && menu == null && !AndroidVersion.isAtLeastR) {
                             updateFullscreenState(activity.resources.configuration)
                         }
@@ -1387,8 +1347,8 @@ fun PlayerScreen(
                     },
                     // 只重置自动隐藏计时，不改变可见性：能走到这里说明控件本来就是可见的，
                     // 而空白处单击要能把它收起——旧的 showControls() 会在收起后立刻又弹回来。
-                    onUserInteraction = { interactionTick.intValue++ },
-                    onTouchActiveChanged = { active -> touchActive = active },
+                    onUserInteraction = { controlsVisibility.onUserInteraction() },
+                    onTouchActiveChanged = { active -> controlsVisibility.setTouchActive(active) },
                 )
             }
             PlayerControls(
@@ -1609,7 +1569,7 @@ fun PlayerScreen(
         if (infoPanelVisible) {
             PlaybackInfoPanel(
                 model = infoModel,
-                onDismiss = { infoPanelVisible = false },
+                onDismiss = { panels.dismissInfo() },
                 onCopy = {
                     val title = context.getString(R.string.playback_info_title)
                     val text = infoModel.toPlainText(title)
@@ -1635,7 +1595,7 @@ fun PlayerScreen(
                         IntSize(surfaceView.width, surfaceView.height)
                     }
                 },
-                onDismiss = { compareVisible = false },
+                onDismiss = { panels.dismissCompare() },
             )
         }
 
@@ -1645,7 +1605,7 @@ fun PlayerScreen(
                 queueSize = queueSize,
                 items = episodeItems,
                 onSelect = { position -> viewModel.selectQueueItem(position) },
-                onDismiss = { episodePickerVisible = false },
+                onDismiss = { panels.dismissEpisodes() },
                 controlsBounds = controlsPadding,
             )
         }
