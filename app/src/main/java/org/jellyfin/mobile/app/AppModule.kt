@@ -43,6 +43,7 @@ import org.jellyfin.mobile.player.deviceprofile.DeviceProfileBuilder
 import org.jellyfin.mobile.player.interaction.PlaybackController
 import org.jellyfin.mobile.player.interaction.PlaybackLauncher
 import org.jellyfin.mobile.player.interaction.PlayerEvent
+import org.jellyfin.mobile.player.interaction.RemotePlaybackState
 import org.jellyfin.mobile.player.mediasegments.MediaSegmentRepository
 import org.jellyfin.mobile.player.mpv.bench.MpvSceneRenderer
 import org.jellyfin.mobile.player.mpv.bench.MpvSceneRendererImpl
@@ -96,6 +97,7 @@ val applicationModule = module {
     // Event handlers and channels
     single { PlaybackLauncher() }
     single { PlaybackController() }
+    single { RemotePlaybackState() }
     single { ActivityEventHandler(get(), get()) }
     single { WebappFunctionChannel() }
 

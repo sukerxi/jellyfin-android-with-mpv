@@ -29,6 +29,7 @@ import org.jellyfin.mobile.events.ActivityEventHandler
 import org.jellyfin.mobile.player.cast.Chromecast
 import org.jellyfin.mobile.player.cast.IChromecast
 import org.jellyfin.mobile.player.interaction.PlaybackController
+import org.jellyfin.mobile.player.interaction.RemotePlaybackState
 import org.jellyfin.mobile.ui.components.AppDialogHost
 import org.jellyfin.mobile.ui.navigation.JellyfinNavHost
 import org.jellyfin.mobile.ui.theme.JellyfinTheme
@@ -59,6 +60,7 @@ class MainActivity : ComponentActivity() {
     private val updateChecker: UpdateChecker by inject()
     private val updateDialogState: UpdateDialogStateHolder by inject()
     private val playbackController: PlaybackController by inject()
+    private val remotePlaybackState: RemotePlaybackState by inject()
 
     /**
      * 当前设备不支持 WebView 时置位，由根 Compose 宿主渲染不可取消的提示框。
@@ -69,11 +71,14 @@ class MainActivity : ComponentActivity() {
         private set
     private val serviceConnection: ServiceConnection = object : ServiceConnection {
         override fun onServiceConnected(componentName: ComponentName, binder: IBinder) {
-            serviceBinder = binder as? RemotePlayerService.ServiceBinder
+            val boundBinder = binder as? RemotePlayerService.ServiceBinder
+            serviceBinder = boundBinder
+            remotePlaybackState.isPlaying = { boundBinder?.isPlaying == true }
         }
 
         override fun onServiceDisconnected(componentName: ComponentName) {
             serviceBinder = null
+            remotePlaybackState.isPlaying = { false }
         }
     }
 
@@ -192,6 +197,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         unbindService(serviceConnection)
+        remotePlaybackState.isPlaying = { false }
         chromecast.destroy()
         // WebView 的生命周期跟随常驻宿主（ui/screens/web/WebViewHost），
         // 在宿主组合销毁时由 AndroidView.onRelease 释放，这里不再单独销毁。

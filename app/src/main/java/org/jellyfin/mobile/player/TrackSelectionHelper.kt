@@ -6,7 +6,6 @@ import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.player.mpv.MpvPlayer
 import org.jellyfin.mobile.player.source.ExternalSubtitleStream
 import org.jellyfin.mobile.player.source.JellyfinMediaSource
-import org.jellyfin.mobile.settings.VideoPlayerType
 import org.jellyfin.mobile.player.source.LocalJellyfinMediaSource
 import org.jellyfin.mobile.utils.clearSelectionAndDisableRendererByType
 import org.jellyfin.mobile.utils.selectTrackByTypeAndGroup
@@ -79,11 +78,11 @@ class TrackSelectionHelper(
 
         val player = viewModel.playerOrNull ?: return false
 
-        if (appPreferences.videoPlayerType == VideoPlayerType.MPV_PLAYER) {
-            player as MpvPlayer
+        val mpv = player as? MpvPlayer
+        if (mpv != null) {
             // Match by the ordinal within the embedded audio tracks. Jellyfin's MediaStream.index
             // is shifted when external subtitle streams are present and cannot be used directly.
-            player.setAudioTrack(mediaSource.getEmbeddedStreamIndexByType(audioStream))
+            mpv.setAudioTrack(mediaSource.getEmbeddedStreamIndexByType(audioStream))
             return true
         }
 
@@ -144,25 +143,25 @@ class TrackSelectionHelper(
         }
         val player = viewModel.playerOrNull ?: return false
 
-        if (appPreferences.videoPlayerType == VideoPlayerType.MPV_PLAYER) {
-            player as MpvPlayer
-            if (subtitleStream==null){
-                player.disableSubTrack()
+        val mpv = player as? MpvPlayer
+        if (mpv != null) {
+            if (subtitleStream == null) {
+                mpv.disableSubTrack()
                 return true
             }
             when (subtitleStream.deliveryMethod) {
                 SubtitleDeliveryMethod.ENCODE -> {
-                    player.setSubtitleEncodeTrack()
+                    mpv.setSubtitleEncodeTrack()
                     return true
                 }
                 SubtitleDeliveryMethod.EMBED -> {
                     // Match by the ordinal within the embedded subtitle tracks. Jellyfin's
                     // MediaStream.index is shifted when external subtitle streams are present.
-                    player.setSubtitleEmbedTrack(mediaSource.getEmbeddedStreamIndexByType(subtitleStream))
+                    mpv.setSubtitleEmbedTrack(mediaSource.getEmbeddedStreamIndexByType(subtitleStream))
                     return true
                 }
                 SubtitleDeliveryMethod.EXTERNAL -> {
-                    player.setSubtitleExternalTrack(subtitleStream.deliveryUrl)
+                    mpv.setSubtitleExternalTrack(subtitleStream.deliveryUrl)
                     return true
                 }
                 else -> return false

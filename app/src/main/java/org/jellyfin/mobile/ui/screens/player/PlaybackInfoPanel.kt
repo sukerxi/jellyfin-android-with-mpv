@@ -49,7 +49,6 @@ import org.jellyfin.mobile.player.source.JellyfinMediaSource
 import org.jellyfin.mobile.player.source.RemoteJellyfinMediaSource
 import org.jellyfin.mobile.player.source.TranscodeReasonFormatter
 import org.jellyfin.mobile.player.ui.DecoderType
-import org.jellyfin.mobile.settings.VideoPlayerType
 import org.jellyfin.sdk.model.api.PlayMethod
 import org.jellyfin.sdk.model.api.TranscodeReason
 import org.jellyfin.sdk.model.api.VideoRange
@@ -355,12 +354,7 @@ private fun buildEngineInfo(
     val engine = when (player) {
         is MpvPlayer -> "mpv"
         is ExoPlayer -> "ExoPlayer"
-        else -> when (appPreferences.videoPlayerType) {
-            VideoPlayerType.MPV_PLAYER -> "mpv"
-            VideoPlayerType.EXO_PLAYER -> "ExoPlayer"
-            VideoPlayerType.EXTERNAL_PLAYER -> labels.externalPlayer
-            else -> appPreferences.videoPlayerType
-        }
+        else -> null
     }
     val decoder = decoderType?.let { type ->
         when (type) {
@@ -372,8 +366,7 @@ private fun buildEngineInfo(
     // (or be about to change) without the running player being recreated.
     // SSA/ASS is only rendered locally while the video is sent verbatim: a transcoded stream
     // already carries the burned-in subtitles, so the renderer is not involved at all.
-    val isExoPlayer = player is ExoPlayer ||
-        player == null && appPreferences.videoPlayerType == VideoPlayerType.EXO_PLAYER
+    val isExoPlayer = player is ExoPlayer
     val rendersAssNatively = isExoPlayer && appPreferences.resolveExoPlayerDirectPlayAss(
         isVideoTranscoding = mediaSource.playMethod == PlayMethod.TRANSCODE,
     )

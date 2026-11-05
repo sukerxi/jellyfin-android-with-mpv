@@ -44,7 +44,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jellyfin.mobile.BuildConfig
-import org.jellyfin.mobile.MainActivity
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.app.APP_SCOPE
 import org.jellyfin.mobile.app.AppPreferences
@@ -53,6 +52,7 @@ import org.jellyfin.mobile.player.interaction.PlayerEvent
 import org.jellyfin.mobile.player.interaction.PlayerLifecycleObserver
 import org.jellyfin.mobile.player.interaction.PlayerMediaSessionCallback
 import org.jellyfin.mobile.player.interaction.PlayerNotificationHelper
+import org.jellyfin.mobile.player.interaction.RemotePlaybackState
 import org.jellyfin.mobile.player.mediasegments.MediaSegmentAction
 import org.jellyfin.mobile.player.mediasegments.MediaSegmentRepository
 import org.jellyfin.mobile.player.mpv.MpvPlayer
@@ -120,6 +120,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     private val userApi: UserApi = apiClient.userApi
 
     private val appPreferences: AppPreferences by inject()
+    private val remotePlaybackState: RemotePlaybackState by inject()
     private val appScope: CoroutineScope by inject(named(APP_SCOPE))
     private val lifecycleObserver = PlayerLifecycleObserver(this)
     private val audioManager: AudioManager by lazy { getApplication<Application>().getSystemService()!! }
@@ -243,7 +244,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
      * player being closed.
      */
     private val remotePlaybackActive: Boolean
-        get() = (getApplication<Application>() as? MainActivity)?.serviceBinder?.isPlaying == true
+        get() = remotePlaybackState.isPlaying()
 
     /**
      * Whether playback should be allowed to run while the app is in the background:

@@ -24,10 +24,9 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import org.jellyfin.mobile.MainViewModel
 import org.jellyfin.mobile.ServerState
-import org.jellyfin.mobile.app.AppPreferences
+import org.jellyfin.mobile.bridge.NativePlayer
 import org.jellyfin.mobile.events.ActivityEventHandler
 import org.jellyfin.mobile.events.NavigationEvent
-import org.jellyfin.mobile.settings.VideoPlayerType
 import org.jellyfin.mobile.ui.components.AppSnackbarHost
 import org.jellyfin.mobile.ui.screens.connect.ConnectScreen
 import org.jellyfin.mobile.ui.screens.downloads.DownloadsScreen
@@ -64,10 +63,10 @@ fun JellyfinNavHost(
     mainViewModel: MainViewModel,
     activityEventHandler: ActivityEventHandler = koinInject(),
     webappFunctionChannel: WebappFunctionChannel = koinInject(),
+    nativePlayer: NativePlayer = koinInject(),
 ) {
     val navController = rememberNavController()
     val serverState by mainViewModel.serverState.collectAsStateWithLifecycle()
-    val appPreferences: AppPreferences = koinInject()
 
     // WebView 连接失败时，回到选服页并展示外部连接错误；"use different server" 不展示。
     var connectExternalError by rememberSaveable { mutableStateOf(false) }
@@ -123,8 +122,7 @@ fun JellyfinNavHost(
                     // 防御：仅 ExoPlayer/mpv 两种内核会进入原生播放器
                     // （PlayerViewModel.setupPlayer() 对其他类型会抛 IllegalArgumentException；
                     // 外置播放器不经此事件，下载页直发 LaunchNativePlayer 时按偏好过滤）。
-                    playerVisible = appPreferences.videoPlayerType == VideoPlayerType.EXO_PLAYER ||
-                        appPreferences.videoPlayerType == VideoPlayerType.MPV_PLAYER
+                    playerVisible = nativePlayer.isEnabled()
                 }
             }
         }
