@@ -56,7 +56,6 @@ class QueueManager(
     private val mediaSourceResolver: MediaSourceResolver by inject()
     private val deviceProfileBuilder: DeviceProfileBuilder by inject()
     private val downloadDao: DownloadDao by inject()
-    private val deviceProfile = deviceProfileBuilder.getDeviceProfile()
 
     private var currentQueue: List<UUID> = emptyList()
     private var currentQueueIndex: Int = 0
@@ -188,7 +187,11 @@ class QueueManager(
         mediaSourceResolver.resolveMediaSource(
             itemId = itemId,
             mediaSourceId = mediaSourceId,
-            deviceProfile = deviceProfile,
+            // This ViewModel is Activity-scoped and the player is a full-screen overlay, so
+            // it survives trips to the settings screen. Ask the builder on every POST: it
+            // serves a cached profile and only rebuilds when a profile-relevant preference
+            // (player engine / SSA-ASS direct play) actually changed.
+            deviceProfile = deviceProfileBuilder.getDeviceProfile(),
             maxStreamingBitrate = maxStreamingBitrate,
             startTime = startTime,
             audioStreamIndex = audioStreamIndex,

@@ -34,6 +34,25 @@ class DeviceProfileBuilder(
 
     private val transcodingProfiles: List<TranscodingProfile>
 
+    /**
+     * The only preferences that influence the playback device profile. Captured as one
+     * value so a cached profile can never disagree with the settings that produced it.
+     */
+    private data class ProfileSettings(
+        val videoPlayerType: String,
+        val directPlayAss: Boolean,
+    )
+
+    private data class CachedProfile(
+        val settings: ProfileSettings,
+        val profile: DeviceProfile,
+    )
+
+    private val profileCacheLock = Any()
+
+    @Volatile
+    private var cachedProfile: CachedProfile? = null
+
     init {
         require(
             SUPPORTED_CONTAINER_FORMATS.size == AVAILABLE_VIDEO_CODECS.size && SUPPORTED_CONTAINER_FORMATS.size == AVAILABLE_AUDIO_CODECS.size,
@@ -119,7 +138,31 @@ class DeviceProfileBuilder(
         )
     }
 
+    /**
+     * Returns the profile matching the preferences *at call time*.
+     *
+     * Callers must ask on every playback-info POST: the player is an Activity-scoped
+     * overlay, so its ViewModel (and any profile cached there) outlives a settings change.
+     * The expensive part (codec tables, profile assembly) is cached here, in the class
+     * that owns those inputs, and only rebuilt when a preference that changes the profile
+     * actually changed - so per-playback polling costs two in-memory preference reads.
+     */
     fun getDeviceProfile(): DeviceProfile {
+        val settings = ProfileSettings(
+            videoPlayerType = appPreferences.videoPlayerType,
+            // The profile describes a direct-play request; the play method is not known
+            // yet when it is built, so transcoding must not disable the ASS claim here.
+            directPlayAss = appPreferences.resolveExoPlayerDirectPlayAss(isVideoTranscoding = false),
+        )
+        cachedProfile?.takeIf { it.settings == settings }?.let { return it.profile }
+
+        return synchronized(profileCacheLock) {
+            cachedProfile?.takeIf { it.settings == settings }?.let { return@synchronized it.profile }
+            buildDeviceProfile(settings).also { cachedProfile = CachedProfile(settings, it) }
+        }
+    }
+
+    private fun buildDeviceProfile(settings: ProfileSettings): DeviceProfile {
         val containerProfiles = ArrayList<ContainerProfile>()
         val directPlayProfiles = ArrayList<DirectPlayProfile>()
         val codecProfiles = ArrayList<CodecProfile>()
@@ -140,7 +183,7 @@ class DeviceProfileBuilder(
                 )
                 // MPV decodes on its own and is not limited by the device MediaCodec profiles,
                 // so skip codec profile restrictions to keep direct play working (upstream e421a0b regression)
-                if (appPreferences.videoPlayerType != VideoPlayerType.MPV_PLAYER) {
+                if (settings.videoPlayerType != VideoPlayerType.MPV_PLAYER) {
                     for (videoCodec in supportedVideoCodecs[i]) {
                         generateCodecProfile(container, videoCodec)?.let(codecProfiles::add)
                     }
@@ -161,10 +204,10 @@ class DeviceProfileBuilder(
         }
 
         val subtitleProfiles = when {
-            appPreferences.videoPlayerType== VideoPlayerType.MPV_PLAYER->{
+            settings.videoPlayerType == VideoPlayerType.MPV_PLAYER -> {
                 getSubtitleProfiles(MPV_EMBEDDED_SUBTITLES, MPV_EXTERNAL_SUBTITLES)
             }
-            appPreferences.resolveExoPlayerDirectPlayAss(isVideoTranscoding = false) -> {
+            settings.directPlayAss -> {
                 getSubtitleProfiles(EXO_EMBEDDED_SUBTITLES + SUBTITLES_SSA, EXO_EXTERNAL_SUBTITLES + SUBTITLES_SSA)
             }
             else -> getSubtitleProfiles(EXO_EMBEDDED_SUBTITLES, EXO_EXTERNAL_SUBTITLES)
