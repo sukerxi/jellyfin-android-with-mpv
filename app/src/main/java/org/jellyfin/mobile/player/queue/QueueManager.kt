@@ -10,6 +10,10 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import org.jellyfin.mobile.data.dao.DownloadDao
 import org.jellyfin.mobile.downloads.DownloadFileType
@@ -46,6 +50,19 @@ import timber.log.Timber
 import java.util.UUID
 import kotlin.time.Duration
 
+/**
+ * 播放队列的可观察快照。Compose 只消费它，不再读取 [QueueManager] 的普通可变字段。
+ *
+ * size 由 ids 派生，index 与 ids 在同一次赋值里写入，避免出现「队列已展开成整季、
+ * index 却还指向旧列表」的中间态。
+ */
+data class QueueSnapshot(
+    val ids: List<UUID> = emptyList(),
+    val index: Int = 0,
+) {
+    val size: Int get() = ids.size
+}
+
 class QueueManager(
     private val viewModel: PlayerViewModel,
 ) : KoinComponent {
@@ -57,8 +74,23 @@ class QueueManager(
     private val deviceProfileBuilder: DeviceProfileBuilder by inject()
     private val downloadDao: DownloadDao by inject()
 
-    private var currentQueue: List<UUID> = emptyList()
-    private var currentQueueIndex: Int = 0
+    private val _queueState = MutableStateFlow(QueueSnapshot())
+    val queueState: StateFlow<QueueSnapshot> = _queueState.asStateFlow()
+
+    // 内部逻辑继续用这两个只读视图，避免把 ~20 处读取逐改成 StateFlow 取值；
+    // 写入只能走 publishQueue/publishIndex，编译期就杜绝「改了字段却忘了通知 UI」。
+    private val currentQueue: List<UUID>
+        get() = _queueState.value.ids
+    private val currentQueueIndex: Int
+        get() = _queueState.value.index
+
+    private fun publishQueue(ids: List<UUID>, index: Int) {
+        _queueState.value = QueueSnapshot(ids = ids, index = index)
+    }
+
+    private fun publishIndex(index: Int) {
+        _queueState.update { it.copy(index = index) }
+    }
 
     private var playbackRetries = 0
     private var lastPlaybackError = 0L
@@ -83,8 +115,7 @@ class QueueManager(
         preferences: PlayerWebPreferences? = null,
         maxStreamingBitrateOverride: Int? = null,
     ): PlayerException? {
-        currentQueue = playOptions.ids
-        currentQueueIndex = playOptions.startIndex
+        publishQueue(playOptions.ids, playOptions.startIndex)
         resetPlaybackFallback()
 
         val itemId = when {
@@ -361,8 +392,7 @@ class QueueManager(
         }
         if (itemId !in seasonIds) return
 
-        currentQueue = seasonIds
-        currentQueueIndex = seasonIds.indexOf(itemId)
+        publishQueue(seasonIds, seasonIds.indexOf(itemId))
 
         Timber.d(
             "Expanded playback queue to season %s of %s: %d items, starting at %d",
@@ -417,7 +447,7 @@ class QueueManager(
 
         resetPlaybackFallback()
 
-        currentQueueIndex = index
+        publishIndex(index)
         return when (currentMediaSource) {
             is LocalJellyfinMediaSource -> startDownloadPlayback(
                 itemId = currentQueue[index],
@@ -438,17 +468,20 @@ class QueueManager(
 
         resetPlaybackFallback()
 
-        when (val currentMediaSource = getCurrentMediaSourceOrNull()) {
+        val currentMediaSource = getCurrentMediaSourceOrNull() ?: return false
+        val nextIndex = currentQueueIndex + 1
+        publishIndex(nextIndex)
+        val itemId = currentQueue[nextIndex]
+        when (currentMediaSource) {
             is LocalJellyfinMediaSource -> startDownloadPlayback(
-                itemId = currentQueue[++currentQueueIndex],
+                itemId = itemId,
                 playWhenReady = true,
             )
             is RemoteJellyfinMediaSource -> startRemotePlayback(
-                itemId = currentQueue[++currentQueueIndex],
+                itemId = itemId,
                 mediaSourceId = null,
                 maxStreamingBitrate = currentMediaSource.maxStreamingBitrate,
             )
-            null -> return false
         }
         return true
     }

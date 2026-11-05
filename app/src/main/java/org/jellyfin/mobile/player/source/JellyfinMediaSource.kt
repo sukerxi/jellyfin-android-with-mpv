@@ -14,6 +14,20 @@ import org.jellyfin.sdk.model.api.SubtitleDeliveryMethod
 import org.jellyfin.sdk.model.extensions.ticks
 import java.util.UUID
 import kotlin.time.Duration
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+
+/**
+ * 选中轨的可观察快照。切轨后由 [JellyfinMediaSource] 统一发布，Compose 直接订阅，
+ * 不再需要「把当前选中轨塞进 remember 的 key」这种靠注释维持的补丁写法。
+ */
+data class TrackSelectionSnapshot(
+    val videoStream: MediaStream? = null,
+    val audioStream: MediaStream? = null,
+    val subtitleStream: MediaStream? = null,
+)
 
 sealed class JellyfinMediaSource(
     val itemId: UUID,
@@ -34,12 +48,15 @@ sealed class JellyfinMediaSource(
     val subtitleStreams: List<MediaStream>
     val externalSubtitleStreams: List<ExternalSubtitleStream>
 
-    var selectedVideoStream: MediaStream? = null
-        private set
-    var selectedAudioStream: MediaStream? = null
-        private set
-    var selectedSubtitleStream: MediaStream? = null
-        private set
+    private val _trackSelection = MutableStateFlow(TrackSelectionSnapshot())
+    val trackSelection: StateFlow<TrackSelectionSnapshot> = _trackSelection.asStateFlow()
+
+    val selectedVideoStream: MediaStream?
+        get() = _trackSelection.value.videoStream
+    val selectedAudioStream: MediaStream?
+        get() = _trackSelection.value.audioStream
+    val selectedSubtitleStream: MediaStream?
+        get() = _trackSelection.value.subtitleStream
 
     val selectedAudioStreamIndex: Int?
         get() = selectedAudioStream?.index
@@ -53,24 +70,27 @@ sealed class JellyfinMediaSource(
         val audio = ArrayList<MediaStream>()
         val subtitles = ArrayList<MediaStream>()
         val externalSubtitles = ArrayList<ExternalSubtitleStream>()
+        var initialVideoStream: MediaStream? = null
+        var initialAudioStream: MediaStream? = null
+        var initialSubtitleStream: MediaStream? = null
         for (mediaStream in mediaStreams) {
             when (mediaStream.type) {
                 MediaStreamType.VIDEO -> {
                     // Always select the first available video stream
-                    if (selectedVideoStream == null) {
-                        selectedVideoStream = mediaStream
+                    if (initialVideoStream == null) {
+                        initialVideoStream = mediaStream
                     }
                 }
                 MediaStreamType.AUDIO -> {
                     audio += mediaStream
                     if (mediaStream.index == (playbackDetails?.audioStreamIndex ?: sourceInfo.defaultAudioStreamIndex)) {
-                        selectedAudioStream = mediaStream
+                        initialAudioStream = mediaStream
                     }
                 }
                 MediaStreamType.SUBTITLE -> {
                     subtitles += mediaStream
                     if (mediaStream.index == (playbackDetails?.subtitleStreamIndex ?: sourceInfo.defaultSubtitleStreamIndex)) {
-                        selectedSubtitleStream = mediaStream
+                        initialSubtitleStream = mediaStream
                     }
 
                     // External subtitles as specified by the deliveryMethod.
@@ -100,6 +120,11 @@ sealed class JellyfinMediaSource(
         audioStreams = audio
         subtitleStreams = subtitles
         externalSubtitleStreams = externalSubtitles
+        _trackSelection.value = TrackSelectionSnapshot(
+            videoStream = initialVideoStream,
+            audioStream = initialAudioStream,
+            subtitleStream = initialSubtitleStream,
+        )
     }
 
     /**
@@ -114,7 +139,7 @@ sealed class JellyfinMediaSource(
             return false
         }
 
-        selectedAudioStream = stream
+        _trackSelection.update { it.copy(audioStream = stream) }
         return true
     }
 
@@ -126,7 +151,7 @@ sealed class JellyfinMediaSource(
      */
     fun selectSubtitleStream(stream: MediaStream?): Boolean {
         if (stream == null) {
-            selectedSubtitleStream = null
+            _trackSelection.update { it.copy(subtitleStream = null) }
             return true
         }
 
@@ -135,7 +160,7 @@ sealed class JellyfinMediaSource(
             return false
         }
 
-        selectedSubtitleStream = stream
+        _trackSelection.update { it.copy(subtitleStream = stream) }
         return true
     }
 

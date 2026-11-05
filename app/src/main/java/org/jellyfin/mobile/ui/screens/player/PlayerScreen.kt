@@ -56,6 +56,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -105,6 +106,7 @@ import kotlin.math.max
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -120,7 +122,9 @@ import org.jellyfin.mobile.player.interaction.PlaybackRequest
 import org.jellyfin.mobile.player.mpv.MpvPlayer
 import org.jellyfin.mobile.player.mpv.bench.FrameCompareViewModel
 import org.jellyfin.mobile.player.qualityoptions.QualityOptionsProvider
+import org.jellyfin.mobile.player.source.JellyfinMediaSource
 import org.jellyfin.mobile.player.source.RemoteJellyfinMediaSource
+import org.jellyfin.mobile.player.source.TrackSelectionSnapshot
 import org.jellyfin.mobile.player.ui.ChapterMarkingState
 import org.jellyfin.mobile.player.ui.DecoderType
 import org.jellyfin.mobile.player.ui.PlayerFullscreenHelper
@@ -869,8 +873,11 @@ fun PlayerScreen(
     val title = remember(mediaSource) { mediaSource?.getName(context).orEmpty() }
     val chapters = mediaSource?.item?.chapters
     val hasChapters = !chapters.isNullOrEmpty()
-    val queueSize = viewModel.queueManager.queueSize
-    val currentQueueIndex = viewModel.queueManager.currentIndex
+    // 队列改为订阅快照：切集 / 展开整季都会推新快照，UI 自动重组，
+    // 不再依赖「普通 var + 把它们塞进 remember key」的补丁写法。
+    val queueSnapshot by viewModel.queueManager.queueState.collectAsStateWithLifecycle()
+    val queueSize = queueSnapshot.size
+    val currentQueueIndex = queueSnapshot.index
     val videoStream = mediaSource?.selectedVideoStream
     val subtitleStreams = mediaSource?.subtitleStreams.orEmpty()
     val maxStreamingBitrate = (mediaSource as? RemoteJellyfinMediaSource)?.maxStreamingBitrate
@@ -899,47 +906,40 @@ fun PlayerScreen(
     val hardwareLabel = stringResource(R.string.menu_item_hardware_decoding)
     val softwareLabel = stringResource(R.string.menu_item_software_decoding)
 
-    // selectedAudioStream/selectedSubtitleStream 是 JellyfinMediaSource 上的普通 var（非快照状态），
-    // 切换轨后 mediaSource 引用不变，必须把当前选中轨作为 remember 的 key，才能在下次重组时
-    // 重建列表、刷新 RadioButton 的选中态（切换时 subtitlesEnabled 等状态变化会触发重组）。
-    val audioTracks = remember(mediaSource, mediaSource?.selectedAudioStream) {
-        mediaSource?.let { source ->
-            val selected = source.selectedAudioStream ?: source.audioStreams.firstOrNull()
-            source.audioStreams.map { stream ->
-                AudioTrackItem(
-                    index = stream.index,
-                    title = formatStreamTitle(stream.displayTitle, stream.language, stream.codec),
-                    selected = stream === selected,
-                )
-            }
-        }.orEmpty()
-    }
+    // 选中轨由 TrackSelectionSnapshot 发布；读取快照即建立订阅，切轨后菜单选中态
+    // 立刻刷新，不再需要把当前选中轨塞进 remember 的 key。列表很短，按快照直接算。
+    val trackSelection = rememberTrackSelection(mediaSource)
+    val audioTracks = mediaSource?.let { source ->
+        val selected = trackSelection?.audioStream ?: source.audioStreams.firstOrNull()
+        source.audioStreams.map { stream ->
+            AudioTrackItem(
+                index = stream.index,
+                title = formatStreamTitle(stream.displayTitle, stream.language, stream.codec),
+                selected = stream === selected,
+            )
+        }
+    }.orEmpty()
 
-    val subtitleTracks = remember(mediaSource, noneLabel, mediaSource?.selectedSubtitleStream) {
-        val source = mediaSource
-        if (source == null) {
-            emptyList()
-        } else {
-            buildList {
+    val subtitleTracks = mediaSource?.let { source ->
+        buildList {
+            add(
+                SubtitleTrackItem(
+                    index = -1,
+                    title = noneLabel,
+                    selected = trackSelection?.subtitleStream == null,
+                ),
+            )
+            source.subtitleStreams.forEach { stream ->
                 add(
                     SubtitleTrackItem(
-                        index = -1,
-                        title = noneLabel,
-                        selected = source.selectedSubtitleStream == null,
+                        index = stream.index,
+                        title = formatStreamTitle(stream.displayTitle, stream.language, stream.codec),
+                        selected = stream === trackSelection?.subtitleStream,
                     ),
                 )
-                source.subtitleStreams.forEach { stream ->
-                    add(
-                        SubtitleTrackItem(
-                            index = stream.index,
-                            title = formatStreamTitle(stream.displayTitle, stream.language, stream.codec),
-                            selected = stream === source.selectedSubtitleStream,
-                        ),
-                    )
-                }
             }
         }
-    }
+    }.orEmpty()
 
     val currentSpeed = player?.playbackParameters?.speed ?: 1f
     val speeds = remember(currentSpeed) {
@@ -982,10 +982,12 @@ fun PlayerScreen(
         }
     }
 
-    val episodeItems = remember(episodeItemMap, currentQueueIndex) {
+    // ids 进 key：expandQueueToSeason 整体替换队列时 index 可能不变，只靠 index
+    // 会让选集列表停留在旧队列；队列 id 也从同一个快照取，保证与 index 同源。
+    val episodeItems = remember(episodeItemMap, currentQueueIndex, queueSnapshot.ids) {
         episodeItemMap?.let { map ->
             buildEpisodePickerItems(
-                queueIds = viewModel.queueManager.queueIds,
+                queueIds = queueSnapshot.ids,
                 items = map,
                 selectedPosition = currentQueueIndex,
             )
@@ -1900,6 +1902,18 @@ private fun forceWindowRedraw(window: Window) {
 
 /** [forceWindowRedraw] 的二次兜底延迟。 */
 private const val WINDOW_REDRAW_RETRY_MS = 80L
+
+/**
+ * 订阅当前媒体源的选中轨快照。媒体源为空或尚未加载时返回 null；换集会重新订阅，
+ * 首帧直接取 StateFlow 当前值，避免菜单先显示一帧旧选中态。
+ */
+@Composable
+private fun rememberTrackSelection(mediaSource: JellyfinMediaSource?): TrackSelectionSnapshot? {
+    val flow = mediaSource?.trackSelection
+    return produceState(initialValue = flow?.value, key1 = flow) {
+        flow?.collect { value = it }
+    }.value
+}
 
 /**
  * LiveData → Compose State。
