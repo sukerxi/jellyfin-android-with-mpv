@@ -1256,8 +1256,8 @@ fun PlayerScreen(
                     )
                 },
                 gestureHandler = gestureHandler,
-                // 刘海/系统栏只作用于按钮内容，遮罩与点击区域仍铺满（见 PlayerControls 的
-                // contentPadding 说明）。
+                // 刘海/系统栏只作用于顶栏与底栏，遮罩、点击区域和中央控件排仍铺满整屏
+                // （见 PlayerControls 的 contentPadding 说明）。
                 contentPadding = controlsPadding,
                 modifier = Modifier.fillMaxSize(),
             )
@@ -1304,11 +1304,12 @@ fun PlayerScreen(
         //
         // 画在控件层之上：超时后的「重试 / 退出」必须始终可点 —— 控件可见时，控件层的
         // 空白点击层会覆盖整屏，这一块若在下面就点不到，画面也会被底部按钮压住。
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .padding(systemBarsPadding),
-        ) {
+        //
+        // 刻意不加任何 inset padding：转圈、视频画面、中央播放键三者共用整屏几何中心。
+        // 旧版这里用 systemBarsPadding —— 横屏系统栏隐藏是异步的（见上方 insets 注释），
+        // 头几帧侧边导航栏 insets 左右不对称会把转圈一起推偏；竖屏时 top/bottom 不对称
+        // 同样会让它与已改为整屏居中的播放键错开。文案与按钮都在屏幕中部，够不到系统栏。
+        Box(modifier = Modifier.matchParentSize()) {
             AnimatedVisibility(
                 visible = showLoadingIndicator,
                 enter = fadeIn(tween(LOADING_INDICATOR_FADE_IN_MS)),

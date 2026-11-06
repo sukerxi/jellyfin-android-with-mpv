@@ -229,8 +229,9 @@ fun PlayerControls(
      */
     gestureHandler: PlayerGestureHandler,
     /**
-     * 按钮内容的安全区（系统栏 / 刘海）。遮罩与空白点击层不使用它：
-     * 横屏时刘海只该把按钮推开，不该让压暗层跟着缩进一条。
+     * 边缘控件（顶栏 / 底栏）的安全区（系统栏 / 刘海）。遮罩、空白点击层与中央控件排
+     * 都不使用它：横屏时刘海只该把上下两条按钮栏推开，不该让压暗层跟着缩进一条，
+     * 更不该把屏幕正中的播放键推离画面中心。
      */
     contentPadding: PaddingValues = PaddingValues(0.dp),
     modifier: Modifier = Modifier,
@@ -277,70 +278,14 @@ fun PlayerControls(
                 .playerGestureInput(gestureHandler),
         )
 
-        // 安全区内的控件内容。外层（遮罩、按下观察者、空白点击层）始终铺满整屏，
-        // 所以横屏的刘海只会把按钮推开，压暗与可点区域都到边到角。
+        // 安全区内的边缘控件。外层（遮罩、按下观察者、空白点击层）始终铺满整屏，
+        // 所以横屏的刘海只会把顶栏/底栏推开，压暗与可点区域都到边到角。
         Box(
             modifier = Modifier
                 .matchParentSize()
                 .padding(contentPadding),
         ) {
             TopBar(state = state, menus = menus, actions = actions)
-
-            // Center controls: previous / previous chapter / play-pause / next chapter / next
-            // 加载等待期间整排隐藏：加载指示器就画在正中，叠在一起等于让蓝圈绕着播放键转。
-            // 用淡入淡出而不是 if：就绪那一帧整排按钮会凭空出现，与"起播不跳变"的观感相反。
-            // 退出比进入快，让按钮先让位、转圈后消失，两段动画在时间上有重叠而不是硬切。
-            AnimatedVisibility(
-                visible = !state.loading,
-                enter = fadeIn(tween(120)),
-                exit = fadeOut(tween(60)),
-                modifier = Modifier.align(Alignment.Center),
-            ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    PlayerIconButton(
-                        onClick = actions.onPrevious,
-                        iconRes = R.drawable.ic_skip_previous_black_32dp,
-                        contentDescription = stringResource(R.string.playback_previous),
-                        backdrop = true,
-                    )
-                    if (state.hasChapters) {
-                        PlayerIconButton(
-                            onClick = actions.onPreviousChapter,
-                            iconRes = R.drawable.ic_skip_previous_chapter_black_32dp,
-                            contentDescription = stringResource(R.string.playback_previous_chapter),
-                            backdrop = true,
-                        )
-                    }
-                    PlayerIconButton(
-                        onClick = actions.onTogglePlayPause,
-                        iconRes = if (state.isPlaying) R.drawable.ic_pause_black_42dp else R.drawable.ic_play_black_42dp,
-                        contentDescription = stringResource(
-                            if (state.isPlaying) R.string.playback_pause else R.string.playback_play,
-                        ),
-                        buttonSize = 66.dp,
-                        iconSize = 42.dp,
-                        backdrop = true,
-                    )
-                    if (state.hasChapters) {
-                        PlayerIconButton(
-                            onClick = actions.onNextChapter,
-                            iconRes = R.drawable.ic_skip_next_chapter_black_32dp,
-                            contentDescription = stringResource(R.string.playback_next_chapter),
-                            backdrop = true,
-                        )
-                    }
-                    PlayerIconButton(
-                        onClick = actions.onNext,
-                        iconRes = R.drawable.ic_skip_next_black_32dp,
-                        contentDescription = stringResource(R.string.playback_next),
-                        enabled = state.hasNext,
-                        backdrop = true,
-                    )
-                }
-            }
 
             // Bottom: progress row + button bar
             Column(
@@ -351,6 +296,69 @@ fun PlayerControls(
                 StatusSummary(menus = menus)
                 progress()
                 BottomBar(state = state, menus = menus, actions = actions)
+            }
+        }
+
+        // Center controls: previous / previous chapter / play-pause / next chapter / next
+        //
+        // 这一排挂在**没有 padding 的顶层 Box** 上，不能放进上面的安全区 Box：加载转圈
+        // 与视频画面都以整屏几何中心为基准，而横屏的 controlsPadding 只避单侧刘海、
+        // 左右不对称，Alignment.Center 命中的会是「扣掉刘海后的安全区中心」，播放/暂停
+        // 圆底因此相对转圈偏 (start - end) / 2，起播切换时看着像跳了一下。屏幕正中的按钮
+        // 物理上够不到边缘的刘海，本来就不需要避让。
+        //
+        // 加载等待期间整排隐藏：加载指示器就画在正中，叠在一起等于让蓝圈绕着播放键转。
+        // 用淡入淡出而不是 if：就绪那一帧整排按钮会凭空出现，与"起播不跳变"的观感相反。
+        // 退出比进入快，让按钮先让位、转圈后消失，两段动画在时间上有重叠而不是硬切。
+        AnimatedVisibility(
+            visible = !state.loading,
+            enter = fadeIn(tween(120)),
+            exit = fadeOut(tween(60)),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                PlayerIconButton(
+                    onClick = actions.onPrevious,
+                    iconRes = R.drawable.ic_skip_previous_black_32dp,
+                    contentDescription = stringResource(R.string.playback_previous),
+                    backdrop = true,
+                )
+                if (state.hasChapters) {
+                    PlayerIconButton(
+                        onClick = actions.onPreviousChapter,
+                        iconRes = R.drawable.ic_skip_previous_chapter_black_32dp,
+                        contentDescription = stringResource(R.string.playback_previous_chapter),
+                        backdrop = true,
+                    )
+                }
+                PlayerIconButton(
+                    onClick = actions.onTogglePlayPause,
+                    iconRes = if (state.isPlaying) R.drawable.ic_pause_black_42dp else R.drawable.ic_play_black_42dp,
+                    contentDescription = stringResource(
+                        if (state.isPlaying) R.string.playback_pause else R.string.playback_play,
+                    ),
+                    buttonSize = 66.dp,
+                    iconSize = 42.dp,
+                    backdrop = true,
+                )
+                if (state.hasChapters) {
+                    PlayerIconButton(
+                        onClick = actions.onNextChapter,
+                        iconRes = R.drawable.ic_skip_next_chapter_black_32dp,
+                        contentDescription = stringResource(R.string.playback_next_chapter),
+                        backdrop = true,
+                    )
+                }
+                PlayerIconButton(
+                    onClick = actions.onNext,
+                    iconRes = R.drawable.ic_skip_next_black_32dp,
+                    contentDescription = stringResource(R.string.playback_next),
+                    enabled = state.hasNext,
+                    backdrop = true,
+                )
             }
         }
     }
