@@ -12,3 +12,18 @@ branch:
         description: 立即执行一次 Release 清理，只保留最近 10 条 nightly Release（正式 v* 不受影响）
         event: web_trigger_prune
         groupName: 发布
+      - name: 触发 GitHub Release
+        description: 调用 GitHub API 触发 jellyfin-android release workflow，在 GitHub 侧构建并创建 Release（与 CNB Nightly 相互独立）
+        event: web_trigger_github_release
+        groupName: 发布
+        inputs:
+          GH_RELEASE_REF:
+            name: 发版分支 / Tag
+            description: 传给 GitHub workflow 的 ref 输入，决定 checkout 哪份代码；默认 main
+            type: input
+            required: true
+            default: "main"
+        permissions:
+          roles:
+            - owner
+            - master
