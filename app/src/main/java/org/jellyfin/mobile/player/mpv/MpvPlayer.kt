@@ -323,7 +323,35 @@ class MpvPlayer(
         // Report the size on (re)attach instead of trusting the last surfaceChanged: that callback
         // is only guaranteed for size *changes*, and a stale android-surface-size changes the
         // aspect of the picture (mpv scales into the size it was told), it does not just blur it.
+        // The output is being rebuilt from scratch here, so the size is not a change that could be
+        // coalesced with an earlier one - forget what mpv was told and hand it over right away.
+        reportedSurfaceWidth = -1
+        reportedSurfaceHeight = -1
         surfaceView?.let { updateSurfaceSize(it.width, it.height) }
+    }
+
+    /** Size last requested by the platform, in pixels; -1 until the first callback. */
+    private var requestedSurfaceWidth = -1
+    private var requestedSurfaceHeight = -1
+
+    /** Size last handed to mpv, in pixels; -1 until the first one is sent. */
+    private var reportedSurfaceWidth = -1
+    private var reportedSurfaceHeight = -1
+
+    /**
+     * Applies [requestedSurfaceWidth] x [requestedSurfaceHeight] to mpv, if it is still current.
+     *
+     * Runs only after the size has been quiet for [SURFACE_SIZE_SETTLE_MS] rather than on the
+     * change itself, so a burst of callbacks from one rotation is folded into a single write.
+     */
+    private val commitSurfaceSize = Runnable {
+        val width = requestedSurfaceWidth
+        val height = requestedSurfaceHeight
+        if (width <= 0 || height <= 0) return@Runnable
+        if (width == reportedSurfaceWidth && height == reportedSurfaceHeight) return@Runnable
+        reportedSurfaceWidth = width
+        reportedSurfaceHeight = height
+        MpvCore.setProperty("android-surface-size", "${width}x$height")
     }
 
     /**
@@ -331,10 +359,36 @@ class MpvPlayer(
      *
      * The value must be the surface size in pixels - never a layout size in dp: mpv renders into
      * the size it is told and the platform stretches that buffer onto the real surface.
+     *
+     * Neither the value nor the moment is taken literally. mpv reacts to a change of
+     * `android-surface-size` by tearing down its video output - the EGL window surface, the
+     * swapchain and, with hwdec, the interop - and it produces no frames until the new one is up.
+     * One rotation produces several `surfaceChanged` callbacks within a frame or two (window
+     * resize, then the system bars and insets settling, then a relayout of the container), and
+     * applying each of them made mpv rebuild its output once per callback - the stutter during
+     * rotation. Sizes are therefore held until they stop changing and applied once
+     * ([commitSurfaceSize]); a size mpv already has is dropped instead of re-applied.
      */
     private fun updateSurfaceSize(width: Int, height: Int) {
         if (width <= 0 || height <= 0) return
-        MpvCore.setProperty("android-surface-size", "${width}x${height}")
+        if (width == requestedSurfaceWidth && height == requestedSurfaceHeight) return
+        requestedSurfaceWidth = width
+        requestedSurfaceHeight = height
+        // Back at the size mpv is already rendering into (a rotation that was cancelled): the
+        // pending update is not a change any more.
+        if (width == reportedSurfaceWidth && height == reportedSurfaceHeight) {
+            mainHandler.removeCallbacks(commitSurfaceSize)
+            return
+        }
+        // First size after (re)attaching the surface: nothing to coalesce against, and delaying it
+        // would only let mpv configure its output with the wrong size once more.
+        if (reportedSurfaceWidth < 0) {
+            commitSurfaceSize.run()
+            return
+        }
+        // Restart the quiet window: only a size that survives it is worth a video output rebuild.
+        mainHandler.removeCallbacks(commitSurfaceSize)
+        mainHandler.postDelayed(commitSurfaceSize, SURFACE_SIZE_SETTLE_MS)
     }
 
     /** Takes the current surface away from mpv, if there is one. */
@@ -572,6 +626,8 @@ class MpvPlayer(
     override fun handleRelease(): ListenableFuture<*> {
         stopRequested = true
         cancelPendingDetach()
+        // A size that is still inside its settle window must not reach mpv after the stop below.
+        mainHandler.removeCallbacks(commitSurfaceSize)
         unregisterSurfaceHolder()
         detachSurface()
         MpvCore.unsubscribe(eventListener)
@@ -731,5 +787,15 @@ class MpvPlayer(
     private companion object {
         /** 距结尾小于该时长时视为正常播完，不当作断流。 */
         const val END_OF_FILE_TOLERANCE_MS = 5_000L
+
+        /**
+         * 尺寸变化后要静置多久才下发给 mpv（毫秒）。
+         *
+         * mpv 每收到一次新的 `android-surface-size` 都会重建视频输出，期间不出帧。一次旋转会
+         * 连着产生几次 `surfaceChanged`（窗口 resize、系统栏 inset 落定、容器重排），彼此可能
+         * 相隔一两帧；给一个约两帧的静置窗口，让这一串变化合并成一次重建。取值太小会漏合并，
+         * 太大则旋转后画面会多维持几帧旧尺寸（被合成器拉伸）。
+         */
+        const val SURFACE_SIZE_SETTLE_MS = 32L
     }
 }

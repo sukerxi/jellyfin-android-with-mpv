@@ -45,8 +45,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.getSystemService
@@ -168,6 +170,8 @@ private fun WebViewHostContent(
     val shownOnce = remember { booleanArrayOf(false) }
     // 浮层遮挡期间是否把 WebView 的 alpha 压到 0（见 update 中的说明）。
     val alphaHidden = remember { booleanArrayOf(false) }
+    // 遮挡开始那一刻的 WebView 尺寸（px），0 表示当前没有冻结（见 AndroidView 的 modifier）。
+    val frozenSizePx = remember { IntArray(2) }
 
     // External file chooser
     var fileChooserCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
@@ -363,7 +367,36 @@ private fun WebViewHostContent(
         AndroidView(
             modifier = Modifier
                 .fillMaxSize()
-                .systemBarsPadding(),
+                .systemBarsPadding()
+                // 播放器遮挡期间冻结 WebView 的测量尺寸，只冻结尺寸、不冻结可见性。
+                //
+                // 旋转会改变窗口大小，而网页仍按 fillMaxSize 参与布局：不冻结的话，
+                // 每次旋转都会让底下的 Jellyfin 网页按新视口整体重排一次（Chromium 的
+                // onSizeChanged → 重新布局 → 重出新帧，WebViewFunctor 的绘制回调也还会
+                // 被调度一次），而这几帧正是播放器浮层重组、视频输出重建最吃主线程和
+                // 渲染线程的时刻。网页这时被不透明白底完全盖住，重排没有任何人看得到。
+                //
+                // 冻结的是 AndroidView 收到的约束；节点本身仍上报真实尺寸，所以父容器的
+                // 布局不受影响。浮层关闭（obscured=false）后的第一次布局就用真实约束，
+                // 尺寸在同一帧内归位，用户看到的是已经排好的页面。
+                .layout { measurable, constraints ->
+                    val width: Int
+                    val height: Int
+                    if (obscured) {
+                        if (frozenSizePx[0] <= 0) {
+                            frozenSizePx[0] = constraints.maxWidth
+                            frozenSizePx[1] = constraints.maxHeight
+                        }
+                        width = frozenSizePx[0]
+                        height = frozenSizePx[1]
+                    } else {
+                        frozenSizePx[0] = 0
+                        width = constraints.maxWidth
+                        height = constraints.maxHeight
+                    }
+                    val placeable = measurable.measure(Constraints.fixed(width, height))
+                    layout(constraints.maxWidth, constraints.maxHeight) { placeable.place(0, 0) }
+                },
             factory = { ctx ->
                 WebView(ctx).apply {
                     layoutParams = ViewGroup.LayoutParams(

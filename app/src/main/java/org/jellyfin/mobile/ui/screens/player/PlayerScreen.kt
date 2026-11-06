@@ -890,8 +890,9 @@ fun PlayerScreen(
         }
         else -> systemBarsPadding
     }
-    // The video surface (and with it the gesture surface) is padded by the system bars
-    // unless we're in fullscreen, where it goes edge to edge.
+    // The gesture surface is padded by the system bars unless we're in fullscreen, where it goes
+    // edge to edge. The video surface deliberately does not follow this any more - see the
+    // AndroidView below.
     val playerViewPadding =
         if (isLandscapeConfiguration || isFullscreen) PaddingValues(0.dp) else systemBarsPadding
 
@@ -1033,9 +1034,16 @@ fun PlayerScreen(
                 // sitting underneath the hole.
                 forceWindowRedraw(window)
             },
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(playerViewPadding),
+            // The video surface always goes edge to edge, portrait included - playerViewPadding is
+            // deliberately not applied here. mpv letterboxes the picture itself (a 16:9 film is
+            // rendered as 1080x607 inside whatever surface it is given) and the window behind it
+            // is black, so the inset bought no visual difference - but it did cost a second video
+            // output rebuild per rotation: the system bars come back a few hundred milliseconds
+            // *after* the window has resized, so the inset changed - and resized the surface -
+            // again. Measured on the emulator, landscape -> portrait tore mpv's output down four
+            // times in two bursts, the second one 523ms late. Full bleed leaves the window resize
+            // as the only trigger, so a rotation is one size change.
+            modifier = Modifier.fillMaxSize(),
         )
 
         // Double tap seek ripple. Sits below the gesture layer and does not take part in
