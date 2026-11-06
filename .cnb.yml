@@ -59,11 +59,13 @@
 #   注意：同步内容包含 .github/workflows/，GitHub 侧 Actions 会被推送触发；
 #   如不希望 GitHub 跑 CI/发版，请在 GitHub 仓库 Settings → Actions 中关闭流水线。
 #   【触发 Release 的权限】「触发 GitHub Release」按钮调用的是 Actions 接口：
-#     - 经典 PAT：repo scope 即够。当前密钥仓库用的就是这种（scopes: gist/repo/workflow）
+#     - 经典 PAT（classic）：repo scope 即够
 #     - Fine-grained PAT：还需 Repository permissions → Actions: Read and write
-#   只有 Contents / Workflows 权限的 fine-grained PAT 会在该接口返回 403。
-#   2026-11-06 实测：GET workflow 200、POST dispatches 200，run #62 正常进入 in_progress，
-#   现有 token 无需补任何权限。
+#   仅配 Contents / Workflows 的 fine-grained PAT 会返回
+#   403 Resource not accessible by personal access token（同步代码仍能正常推送）。
+#   2026-11-06 实测：本机 git 凭证里的 classic PAT（gist/repo/workflow）可 200 触发，
+#   但密钥仓库 github.yml 里的 GH_TOKEN 点按钮报上述 403 —— 两者不是同一个 token，
+#   必须给密钥仓库那个 PAT 补 Actions 权限，或换成 classic PAT。
 
 # 关于并发与锁：流水线默认无锁、可并发；需要串行的用
 #   lock: { key: <名字>, wait: true, timeout: <秒> }
@@ -614,8 +616,10 @@
 #   - 本流水线：只调用 GitHub REST API 的 workflow_dispatch，触发 GitHub 侧
 #     .github/workflows/release.yml，由 GitHub Actions 构建、签名、创建 GitHub Release
 # 前置条件：
-#   1. 密钥仓库 sukerxi/secrets 的 github.yml 里有 GH_TOKEN：经典 PAT 带 repo scope 即够
-#      （2026-11-06 已实测触发成功）；若换成 fine-grained PAT 则还需 Actions: Read and write。
+#   1. 密钥仓库 sukerxi/secrets 的 github.yml 里的 GH_TOKEN 必须能调用 Actions 接口：
+#      classic PAT 需 repo scope；fine-grained PAT 需 Actions: Read and write。
+#      （2026-11-06 首次点击返回 403 Resource not accessible by personal access token，
+#       当前密钥仓库里的 token 权限不足，需补权限或换 token。）
 #   2. GitHub 镜像仓库默认分支为 main，且 main 上存在 release.yml（由 sync-github 同步）。
 #   3. GitHub 仓库已配置 release.yml 用到的 KEYSTORE 等 secrets，否则 Actions 里签名会失败。
 # 说明：
@@ -640,6 +644,12 @@
           echo "错误：未读取到 GH_TOKEN，请检查密钥仓库 sukerxi/secrets 的 github.yml 是否已授权" >&2
           exit 1
         fi
+        # 只打印 token 类型，绝不打印值；403 时据此判断该补哪种权限。
+        case "$GH_TOKEN" in
+          github_pat_*) echo "GH_TOKEN 类型: fine-grained PAT（需 Actions: Read and write）" ;;
+          ghp_*) echo "GH_TOKEN 类型: classic PAT（需 repo scope）" ;;
+          *) echo "GH_TOKEN 类型: 其他（常见于旧版 40 位 classic PAT，需 repo scope）" ;;
+        esac
 
         GH_REPO="${GH_RELEASE_REPO:-sukerxi/jellyfin-android-with-mpv}"
         WORKFLOW="release.yml"
@@ -667,7 +677,9 @@
             echo "GitHub API 返回 HTTP ${code}：" >&2
             sed -n '1,40p' "$BODY" >&2
             case "$code" in
-              401|403) echo "提示：GH_TOKEN 无效或缺少 Actions: write / repo 权限" >&2 ;;
+              401|403)
+                echo "提示：token 无效或权限不足。fine-grained PAT 需 Actions: Read and write，classic PAT 需 repo scope" >&2
+                echo "提示：403 Resource not accessible by personal access token 通常是密钥仓库 github.yml 里的 PAT 缺 Actions 权限" >&2 ;;
               404) echo "提示：token 无权限，或 GitHub main 上找不到 ${WORKFLOW}（检查 sync-github 是否已同步）" >&2 ;;
               422) echo "提示：参数无效，检查 ref 是否存在、workflow 是否支持 workflow_dispatch" >&2 ;;
             esac
