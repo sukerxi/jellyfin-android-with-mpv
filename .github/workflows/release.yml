@@ -39,7 +39,8 @@ jobs:
           java-version: 21
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        # v6 起改用 Node 24 运行时，避免 Node 20 弃用告警
+        uses: gradle/actions/setup-gradle@v6
 
       # 版本号 = 3.0.0 + Git Short Hash；Tag = 3.0.0 + Run Number（唯一，不会覆盖老 Release）
       - name: Set version variables
@@ -55,17 +56,39 @@ jobs:
       - name: Assemble release files
         run: ./gradlew assembleLibreRelease versionTxt --stacktrace
 
+
       - name: Sign libre APK
         id: libreSign
-        uses: r0adkll/sign-android-release@v1
         env:
-          BUILD_TOOLS_VERSION: "34.0.0"
-        with:
-          releaseDirectory: app/build/outputs/apk/libre/release
-          signingKeyBase64: ${{ secrets.KEYSTORE }}
-          keyStorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
-          alias: ${{ secrets.KEY_ALIAS }}
-          keyPassword: ${{ secrets.KEY_PASSWORD }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/libre/release -maxdepth 1 -name '*.apk' -print -quit)"
+          if [ -z "${APK}" ]; then
+            echo "未找到 libre release APK" >&2
+            exit 1
+          fi
+
+          KEYSTORE_FILE="${RUNNER_TEMP}/release.jks"
+          printf '%s' "${KEYSTORE_BASE64}" | base64 --decode > "${KEYSTORE_FILE}"
+
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}"
+          APKSIGNER="$(ls -1 "${SDK_ROOT}"/build-tools/*/apksigner | sort -V | tail -n 1)"
+
+          SIGNED_APK="${APK%.apk}-signed.apk"
+          "${APKSIGNER}" sign \
+            --ks "${KEYSTORE_FILE}" \
+            --ks-pass "pass:${KEYSTORE_PASSWORD}" \
+            --ks-key-alias "${KEY_ALIAS}" \
+            --key-pass "pass:${KEY_PASSWORD}" \
+            --out "${SIGNED_APK}" \
+            "${APK}"
+          "${APKSIGNER}" verify "${SIGNED_APK}"
+
+          echo "signedReleaseFile=${SIGNED_APK}" >> "$GITHUB_OUTPUT"
 
       - name: Prepare release archive
         run: |
@@ -76,19 +99,28 @@ jobs:
           cp app/build/version.txt build/jellyfin-publish/
           ls -lh build/jellyfin-publish/
 
-      # allowUpdates: false + 唯一 Tag，确保只新建、不覆盖任何历史 Release
+      # 用官方 gh CLI 创建 Release：
+      # --generate-notes 生成变更列表，--notes-start-tag 显式指定对比起点（上一个 Release 的 Tag），
+      # 避免 GitHub 自动推断上一 Tag 时选错范围。
+      # Tag 唯一（含 run number），tag 已存在时 gh 会直接失败，等价于只新建、不覆盖历史 Release
       - name: Create a release
-        uses: ncipollo/release-action@v1
-        with:
-          makeLatest: true
-          allowUpdates: false
-          tag: ${{ env.JELLYFIN_TAG }}
-          name: "${{ env.JELLYFIN_TAG }} (${{ env.JELLYFIN_VERSION }})"
-          body: |
-            ## Jellyfin Android (Libre)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PREV_TAG="$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // empty')"
 
-            - 版本号：`${{ env.JELLYFIN_VERSION }}`
-            - 构建编号：`${{ github.run_number }}`
-            - 提交：`${{ steps.version.outputs.git_hash }}`
-          generateReleaseNotes: true # 自动附加两个 Tag 之间的提交记录
-          artifacts: build/jellyfin-publish/*
+          ARGS=(
+            --target "$(git rev-parse HEAD)"
+            --title "${JELLYFIN_TAG} (${JELLYFIN_VERSION})"
+            --generate-notes
+            --latest
+          )
+          if [ -n "${PREV_TAG}" ]; then
+            echo "上一版本 Tag: ${PREV_TAG}"
+            ARGS+=(--notes-start-tag "${PREV_TAG}")
+          else
+            echo "未找到历史 Release，变更列表从仓库起点开始"
+          fi
+
+          gh release create "${JELLYFIN_TAG}" "${ARGS[@]}" build/jellyfin-publish/*
