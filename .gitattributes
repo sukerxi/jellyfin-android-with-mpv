@@ -2,3 +2,6 @@
 # 仓库默认 core.autocrlf=true，若不固定，Windows 检出会变成 CRLF，
 # 不同机器上编译产物可能不一致。
 app/src/main/baseline-prof.txt text eol=lf
+
+# 自建的 libmpv 产物是二进制 zip（AAR），禁止任何换行/文本处理
+libs/*.aar binary

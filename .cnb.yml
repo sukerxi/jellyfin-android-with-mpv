@@ -727,3 +727,252 @@ main:
 "v*":
   tag_push:
     - *publish-pipeline
+
+# ============================== libmpv 自建构建（mpv 0.42.0） ==============================
+# 背景：上游 libmpv-android 的 main 分支已把 mpv 升到 0.42.0，但直到 2026-11 仍未打 tag 发版，
+# Maven Central 上最新仍是 1.0.0（mpv 0.41.0）。本流水线自行编译 0.42.0 的 AAR。
+#
+# 触发：push 到 libmpv-build 分支（也可在该分支详情页手动触发）。
+# 产物：libs/libmpv-0.42.0-custom.aar，只含 arm64-v8a + x86_64，与 app 的 abiFilters 一致
+#       （release 只发 arm64-v8a，debug 另需 x86_64），同时生成同名 .info.txt 记录版本来源。
+# 回传：推送到 libmpv-artifact 分支，不污染 main，也不会触发 nightly 发版。
+#
+# 依赖源实测（2026-11-13，CNB 构建环境）：
+#   - gitlab.gnome.org 对匿名 git 返回 406，libxml2 改用 GitHub 官方镜像 GNOME/libxml2；
+#   - 其余源（github / gitlab.freedesktop.org / code.videolan.org / lua.org / curl.se）均可直连。
+#   - dl.google.com 正常，NDK 30 + cmake 4.1.2 由 download-sdk.sh 自行安装。
+.libmpv-pipeline: &libmpv-pipeline
+  name: build-libmpv
+  docker:
+    image: eclipse-temurin:21-jdk-noble
+    volumes:
+      # 复用 Gradle 缓存（wrapper 发行包 + AGP/依赖）
+      - /root/.gradle:copy-on-write
+      # Android SDK/NDK + 各依赖源码缓存：首次约 14 分钟，之后可跳过下载
+      - /opt/libmpv-cache:copy-on-write
+  stages:
+    - name: 安装构建工具并拉取源码
+      script: |
+        set -e
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -qq
+        # eclipse-temurin 镜像很精简：make/automake/bison/flex 都没有，
+        # 缺 make 时构建会在第一个依赖（mbedtls）就以 127 退出。
+        apt-get install -y --no-install-recommends \
+          build-essential automake bison flex \
+          autoconf pkg-config libtool ninja-build nasm gperf \
+          python3-pip python3-setuptools python3-jinja2 \
+          unzip wget git ca-certificates
+        python3 -m pip install --break-system-packages --quiet meson
+        echo "meson: $(meson --version)"
+        echo "make: $(make --version | head -1)"
+        echo "javac: $(javac -version 2>&1)"
+        echo "cores: $(nproc)"
+        df -h / | tail -1
+
+        git config --global --add safe.directory '*'
+
+        # 整个构建树放在持久卷上。不能用符号链接把 sdk/deps 指向卷：
+        # build.sh 会 pushd 进入 deps/<dep>，脚本里的相对路径 ../../scripts/xxx.sh
+        # 会按物理路径解析到卷根，导致 "No such file or directory"（已踩过一次）。
+        BUILD_DIR=/opt/libmpv-cache/libmpv-android
+        mkdir -p /opt/libmpv-cache
+
+        # 记下本仓库根目录供回传阶段使用：构建树本身也是 git 仓库，
+        # 在 buildscripts 里跑 git rev-parse --show-toplevel 会指向构建树而非本仓库。
+        git rev-parse --show-toplevel > /opt/libmpv-cache/repo-root.txt
+
+        if [ -d "$BUILD_DIR/.git" ]; then
+          echo "复用已有构建树，更新到上游最新"
+          cd "$BUILD_DIR"
+          git fetch --depth 1 origin main
+          git reset --hard FETCH_HEAD
+        else
+          git clone --depth 1 --branch main \
+            https://github.com/jarnedemeulemeester/libmpv-android.git "$BUILD_DIR"
+          cd "$BUILD_DIR"
+          # 迁移上一版扁平缓存，省掉一次 SDK(1.5GB) 与依赖源码的全量下载
+          if [ ! -e buildscripts/sdk ] && [ -d /opt/libmpv-cache/sdk ]; then
+            mv /opt/libmpv-cache/sdk buildscripts/sdk
+          fi
+          if [ ! -e buildscripts/deps ] && [ -d /opt/libmpv-cache/deps ]; then
+            mv /opt/libmpv-cache/deps buildscripts/deps
+          fi
+        fi
+
+        SRC_SHA=$(git rev-parse HEAD)
+        echo "$SRC_SHA" > /opt/libmpv-cache/src-sha.txt
+        echo "libmpv-android source: $SRC_SHA"
+        echo "SDK 缓存: $(du -sh buildscripts/sdk 2>/dev/null | cut -f1)  DEPS 缓存: $(du -sh buildscripts/deps 2>/dev/null | cut -f1)"
+        cd "$BUILD_DIR/buildscripts"
+
+        # 版本断言：上游若已改动，宁可失败也不要糊里糊涂编出别的版本
+        if ! grep -q '^v_mpv=0.42.0' include/depinfo.sh; then
+          echo "FATAL: depinfo.sh 中的 mpv 版本不是 0.42.0"
+          grep '^v_mpv=' include/depinfo.sh
+          exit 1
+        fi
+        echo "===== 依赖版本 ====="
+        grep -E '^v_(mpv|ffmpeg|libplacebo|libass|curl)=' include/depinfo.sh
+
+    - name: 下载 SDK 与依赖源码
+      timeout: 60m
+      script: |
+        set -e
+        cd /opt/libmpv-cache/libmpv-android/buildscripts
+        export IN_CI=1
+        mkdir -p deps
+
+        # ---- 以下两个源在原脚本里走 wget，在 CNB 环境会 SSL 握手失败，改用 curl 预置 ----
+        # download-deps.sh 见到目录已存在会跳过对应下载步骤。
+
+        # lua：https://www.lua.org/ftp/lua-5.2.4.tar.gz
+        #   Error: "wget: Unable to establish SSL connection."（curl 访问同一 URL 正常，已实测）
+        if [ ! -d deps/lua ]; then
+          echo "预置 lua 5.2.4（curl 下载）"
+          curl -fsSL --retry 3 --connect-timeout 30 --max-time 300 \
+            -o /tmp/lua-5.2.4.tar.gz https://www.lua.org/ftp/lua-5.2.4.tar.gz
+          mkdir -p deps/lua
+          tar -xzf /tmp/lua-5.2.4.tar.gz -C deps/lua --strip-components=1
+          rm -f /tmp/lua-5.2.4.tar.gz
+        fi
+        echo "lua: $([ -f deps/lua/Makefile ] && echo Makefile-OK || echo MISSING)"
+
+        # curl 源码：https://curl.se/download/curl-8.23.0.tar.gz，同样用 curl 预置
+        if [ ! -d deps/curl ]; then
+          echo "预置 curl 8.23.0（curl 下载）"
+          curl -fsSL --retry 3 --connect-timeout 30 --max-time 300 \
+            -o /tmp/curl-8.23.0.tar.gz https://curl.se/download/curl-8.23.0.tar.gz
+          mkdir -p deps/curl
+          tar -xzf /tmp/curl-8.23.0.tar.gz -C deps/curl --strip-components=1
+          rm -f /tmp/curl-8.23.0.tar.gz
+        fi
+        echo "curl: $([ -f deps/curl/configure ] && echo configure-OK || echo MISSING)"
+
+        # libxml2：gitlab.gnome.org 对匿名 git 返回 406，改用 GitHub 官方镜像
+        if [ ! -d deps/libxml2 ]; then
+          git clone --depth 1 --branch v2.15.4 \
+            https://github.com/GNOME/libxml2.git deps/libxml2
+        fi
+        echo "libxml2: $(git -C deps/libxml2 rev-parse --short HEAD)"
+
+        # SDK/NDK 已在持久卷里时跳过 sdkmanager 校验：它在每次构建会耗掉约 15 分钟
+        if [ -x sdk/android-sdk-linux/ndk/30.0.16248370/ndk-build ]; then
+          echo "SDK/NDK 已就绪，跳过 download-sdk.sh"
+        else
+          ./include/download-sdk.sh
+        fi
+        ./include/download-deps.sh
+
+        echo "===== 依赖清单 ====="
+        du -sh deps/*
+
+    - name: 应用补丁
+      script: |
+        set -e
+        cd /opt/libmpv-cache/libmpv-android/buildscripts
+        ls -la patches 2>/dev/null || echo "无 patches 目录（上游已无自定义补丁）"
+        ./patch.sh
+
+    - name: 编译 arm64-v8a
+      timeout: 90m
+      script: |
+        set -e
+        cd /opt/libmpv-cache/libmpv-android/buildscripts
+        ./build.sh --arch arm64 mpv
+        echo "===== arm64-v8a 产物 ====="
+        ls -lh /opt/libmpv-cache/libmpv-android/libmpv/src/main/jniLibs/arm64-v8a/
+
+    - name: 编译 x86_64
+      timeout: 90m
+      script: |
+        set -e
+        cd /opt/libmpv-cache/libmpv-android/buildscripts
+        ./build.sh --arch x86_64 mpv
+        echo "===== x86_64 产物 ====="
+        ls -lh /opt/libmpv-cache/libmpv-android/libmpv/src/main/jniLibs/x86_64/
+
+    - name: 打包 AAR 并回传产物分支
+      timeout: 30m
+      script: |
+        set -e
+        BUILD_ROOT=/opt/libmpv-cache/libmpv-android
+
+        # 上游 settings.gradle.kts / build.gradle.kts 只配了官方源，
+        # 在 CNB 上解析 AGP 9.5.1 会失败（Plugin [id: 'com.android.library', version: '9.5.1'] not found）。
+        # 注入阿里云镜像后再 assemble；这两个文件是 tracked，下次 reset 会自动还原，故每次重建。
+        cd "$BUILD_ROOT"
+        cat > settings.gradle.kts <<'GRADLE_SETTINGS_EOF'
+        include(":libmpv")
+
+        pluginManagement {
+            repositories {
+                maven("https://maven.aliyun.com/repository/google")
+                maven("https://maven.aliyun.com/repository/gradle-plugin")
+                maven("https://maven.aliyun.com/repository/public")
+                gradlePluginPortal()
+                mavenCentral()
+                google()
+            }
+        }
+        GRADLE_SETTINGS_EOF
+
+        cat > build.gradle.kts <<'GRADLE_ROOT_EOF'
+        plugins {
+            alias(libs.plugins.android.library) apply false
+            alias(libs.plugins.maven.publish) apply false
+        }
+
+        allprojects {
+            repositories {
+                maven("https://maven.aliyun.com/repository/google")
+                maven("https://maven.aliyun.com/repository/public")
+                mavenCentral()
+                google()
+            }
+        }
+        GRADLE_ROOT_EOF
+
+        # build.sh -n 会对 4 个 ABI 都跑 assemble，但我们只编了 2 个架构，
+        # armeabi-v7a / x86 缺少 libmpv.so 会让 CMake 链接 libplayer.so 时失败，
+        # 因此在模块里限定 ABI（该文件是 tracked，下次 reset 会还原）
+        sed -i 's/^        minSdk = 26/        minSdk = 26\n        ndk {\n            abiFilters += listOf("arm64-v8a", "x86_64")\n        }/' \
+          "$BUILD_ROOT/libmpv/build.gradle.kts"
+        grep -A4 'minSdk = 26' "$BUILD_ROOT/libmpv/build.gradle.kts"
+
+        cd "$BUILD_ROOT/buildscripts"
+        ./build.sh -n
+        AAR=/opt/libmpv-cache/libmpv-android/libmpv/build/outputs/aar/libmpv-release.aar
+        test -f "$AAR"
+        ls -lh "$AAR"
+
+        # 回到本仓库（构建树也是 git 仓库，不能用 --show-toplevel 现算）
+        cd "$(cat /opt/libmpv-cache/repo-root.txt)"
+        echo "回传目标仓库: $(pwd)"
+        mkdir -p libs
+        cp "$AAR" libs/libmpv-0.42.0-custom.aar
+
+        SRC_SHA=$(cat /opt/libmpv-cache/src-sha.txt)
+        FFMPEG_VER=$(grep '^v_ffmpeg=' /opt/libmpv-cache/libmpv-android/buildscripts/include/depinfo.sh | cut -d= -f2)
+        LIBPLACEBO_VER=$(grep '^v_libplacebo=' /opt/libmpv-cache/libmpv-android/buildscripts/include/depinfo.sh | cut -d= -f2)
+        LIBASS_VER=$(grep '^v_libass=' /opt/libmpv-cache/libmpv-android/buildscripts/include/depinfo.sh | cut -d= -f2)
+        printf 'mpv: 0.42.0\nffmpeg: %s\nlibplacebo: %s\nlibass: %s\nlibmpv-android-commit: %s\nabis: arm64-v8a, x86_64\nbuilt-by: CNB %s\nbuilt-at: %s\n' \
+          "$FFMPEG_VER" "$LIBPLACEBO_VER" "$LIBASS_VER" "$SRC_SHA" "$CNB_BUILD_ID" \
+          "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > libs/libmpv-0.42.0-custom.info.txt
+        cat libs/libmpv-0.42.0-custom.info.txt
+        ls -lh libs/
+
+        git config user.name "cnb-libmpv-bot"
+        git config user.email "cnb-libmpv-bot@cnb.cool"
+        git add libs/
+        git commit -m "build(libmpv): mpv 0.42.0 custom AAR (arm64-v8a, x86_64)" -m "src ${SRC_SHA}, build ${CNB_BUILD_ID}"
+        # remote 名在 CNB 环境里不一定是 origin，取第一个可用的
+        REMOTE=$(git remote | head -n 1)
+        echo "push to remote: $REMOTE"
+        git push -f "$REMOTE" HEAD:refs/heads/libmpv-artifact
+        echo "已推送 libmpv-artifact 分支"
+
+# 只在该分支 push 时构建，避免影响 main 的 nightly 发版链路
+"libmpv-build":
+  push:
+    - *libmpv-pipeline

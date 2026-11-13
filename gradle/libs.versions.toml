@@ -51,8 +51,9 @@ jellyfin-androidx-media = "1.9.0+1"
 playservices = "22.3.1"
 libass-media = "0.5.1"
 
-# libmpv-android
-libmpv-android = "1.0.0"
+# libmpv-android 不再走 Maven：上游 Maven 上最新仍是 1.0.0（mpv 0.41.0），
+# 自建的 mpv 0.42.0 AAR 放在 libs/ 下，由 app/build.gradle.kts 直接引用。
+# 产物由 .cnb.yml 的 build-libmpv 流水线生成（见 libs/libmpv-0.42.0-custom.info.txt）。
 
 # Room
 androidx-room = "2.8.5"
@@ -145,9 +146,6 @@ playservices-cast = { group = "com.google.android.gms", name = "play-services-ca
 playservices-castframework = { group = "com.google.android.gms", name = "play-services-cast-framework", version.ref = "playservices" }
 jellyfin-androidx-media3-ffmpeg-decoder = { module = "org.jellyfin.media3:media3-ffmpeg-decoder", version.ref = "jellyfin-androidx-media" }
 libass-media = { module = "io.github.peerless2012:ass-media", version.ref = "libass-media" }
-
-# libmpv-android
-libmpv-android = { group = "dev.jdtech.mpv", name = "libmpv", version.ref = "libmpv-android" }
 
 
 # Room

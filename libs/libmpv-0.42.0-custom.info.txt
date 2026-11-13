@@ -1,0 +1,8 @@
+mpv: 0.42.0
+ffmpeg: 9.0.2
+libplacebo: 7.387.0
+libass: 0.17.5
+libmpv-android-commit: d2275e4b7d7068139b41fab2f696475a00850414
+abis: arm64-v8a, x86_64
+built-by: CNB cnb-arr-1k7al05lm
+built-at: 2026-11-13T14:50:45Z
