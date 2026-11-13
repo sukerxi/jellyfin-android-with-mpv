@@ -169,6 +169,8 @@ dependencies {
     implementation(libs.bundles.koin)
     implementation(libs.androidx.core)
     implementation(libs.androidx.core.splashscreen)
+    // 基线配置文件在 API 26/27 上没有系统级安装通道，需要这个库在首次启动后自己装。
+    implementation(libs.androidx.profileinstaller)
     implementation(libs.androidx.activity)
     implementation(libs.androidx.documentfile)
     implementation(libs.androidx.work.runtime)

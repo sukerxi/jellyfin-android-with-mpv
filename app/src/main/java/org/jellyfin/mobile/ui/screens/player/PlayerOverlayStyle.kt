@@ -36,7 +36,14 @@ internal val PlayerTopBarClearance = 56.dp
 /** 底部进度条 + 功能按钮行的高度，用途同 [PlayerTopBarClearance]。 */
 internal val PlayerBottomBarClearance = 112.dp
 
-/** 玻璃卡片背景（不含内容与内边距）。 */
+/**
+ * 玻璃卡片背景（不含内容与内边距）。
+ *
+ * 只用于小面积浮层卡片。`Modifier.shadow` 会让这一层脱离直接绘制、每帧走一次
+ * RenderNode 阴影合成；套在面板这种小卡片上没有感知，但如果哪天被套到全屏容器上
+ * （例如整个控件层），每帧的阴影重绘会直接把 16ms 预算吃掉。要全屏模糊/阴影请另开
+ * 一个专门的修饰符，不要复用这个。
+ */
 internal fun Modifier.playerGlass(
     shape: Shape,
     shadowElevation: Dp = 8.dp,

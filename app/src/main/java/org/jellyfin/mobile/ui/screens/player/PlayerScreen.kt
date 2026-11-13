@@ -3,6 +3,7 @@ package org.jellyfin.mobile.ui.screens.player
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.res.Configuration
+import android.view.LayoutInflater
 import android.view.Window
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
@@ -988,15 +989,16 @@ fun PlayerScreen(
         // Video surface
         AndroidView(
             factory = { viewContext ->
-                PlayerView(viewContext).apply {
+                // 从 use_controller=false 的布局 inflate（见 view_player_surface.xml）：
+                // 控件层是 Compose 悬浮层，用 PlayerView(context) 构造再事后关掉控制器，
+                // 那套 exo_player_control_view 的 View 树早就建好了，白付一次初始化。
+                val playerView = LayoutInflater.from(viewContext)
+                    .inflate(R.layout.view_player_surface, null, false) as PlayerView
+                playerView.apply {
                     layoutParams = FrameLayout.LayoutParams(
                         FrameLayout.LayoutParams.MATCH_PARENT,
                         FrameLayout.LayoutParams.MATCH_PARENT,
                     )
-                    // The controls are Compose overlays; the built-in controller is unused
-                    useController = false
-                    setBackgroundColor(android.graphics.Color.BLACK)
-                    setShutterBackgroundColor(android.graphics.Color.BLACK)
                     // Mirror the renderer setup: the subtitle view is only needed when this
                     // playback session actually renders SSA/ASS locally, and the device profile
                     // guarantees the server does not burn them in when that is the case.

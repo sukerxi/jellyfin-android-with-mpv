@@ -31,7 +31,22 @@ class JellyfinApplication : Application(), KoinComponent {
 
     override fun onCreate() {
         super.onCreate()
-        val policy: StrictMode.ThreadPolicy = StrictMode.ThreadPolicy.Builder().permitAll().build()
+        // WebView 初始化会在主线程摸磁盘、读配置，生产环境不能因此出问题，所以 release
+        // 直接放行。但 debug 曾经也是 permitAll —— 等于把「主线程 I/O」这条最容易变成
+        // 掉帧的线索一起静音了：以后谁写了主线程读盘，只会表现为偶发卡顿，且查不出来。
+        // debug 改为「照常检测 + 只打日志」，不改变行为，但 Slog 里能看见。
+        val policy: StrictMode.ThreadPolicy = StrictMode.ThreadPolicy.Builder()
+            .apply {
+                if (BuildConfig.DEBUG) {
+                    detectDiskReads()
+                    detectDiskWrites()
+                    detectCustomSlowCalls()
+                    penaltyLog()
+                } else {
+                    permitAll()
+                }
+            }
+            .build()
         StrictMode.setThreadPolicy(policy)
 
         // Setup logging

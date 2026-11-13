@@ -163,6 +163,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     private val _chapterMarkings = MutableStateFlow<List<ChapterMarkingState>>(emptyList())
     private val _activeAskToSkipSegment = MutableStateFlow<MediaSegmentDto?>(null)
 
+    /** 上一次生成章节标记时的输入，见 [setWatchedChapterMarkings]。 */
+    private var lastChapterMarkingInputs: ChapterMarkingInputs? = null
+
     /** 章节标记（按 item.chapters 顺序）：bias 为在进度条上的相对位置，watched 为是否已播放过。 */
     val chapterMarkings: StateFlow<List<ChapterMarkingState>> = _chapterMarkings.asStateFlow()
 
@@ -782,15 +785,37 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         playerOrNull?.updateSkipMediaSegmentButton()
     }
 
+    /**
+     * 按播放位置刷新章节标记。
+     *
+     * 每秒被调一次，但**位置在章内推进不会改变任何标记**：整份列表（N 个
+     * [ChapterMarkingState] + N 次 `toFloat()` 除法）没必要每秒重建一次。这里先算出
+     * 「看到第几章」这个真正的变化量，输入没变就直接返回；[androidx.compose.runtime.StateFlow]
+     * 的去重只能省掉发射，省不掉这轮分配。
+     */
     private fun Player.setWatchedChapterMarkings() {
         val playbackPosition = currentPosition.milliseconds
-        val chapters = mediaSourceOrNull?.item?.chapters
-        if (chapters.isNullOrEmpty()) {
-            _chapterMarkings.value = emptyList()
+        val mediaSource = mediaSourceOrNull
+        val chapters = mediaSource?.item?.chapters
+        if (mediaSource == null || chapters.isNullOrEmpty()) {
+            if (_chapterMarkings.value.isNotEmpty()) _chapterMarkings.value = emptyList()
+            lastChapterMarkingInputs = null
             return
         }
-        val startPositions = chapters.map { c -> c.startPositionTicks.ticks }
-        val runTimeTicks = mediaSourceOrNull?.item?.runTimeTicks
+        val item = mediaSource.item
+
+        // 章节按起始位置升序排列：最后一个「已经播到」的章节就是当前章节
+        val watchedIndex = chapters.indexOfLast { it.startPositionTicks.ticks <= playbackPosition }
+        val inputs = ChapterMarkingInputs(
+            itemId = mediaSource.itemId,
+            chapterCount = chapters.size,
+            watchedIndex = watchedIndex,
+            runTimeTicks = item.runTimeTicks,
+        )
+        if (inputs == lastChapterMarkingInputs) return
+        lastChapterMarkingInputs = inputs
+
+        val runTimeTicks = item.runTimeTicks
         _chapterMarkings.value = chapters.mapIndexed { index, chapter ->
             ChapterMarkingState(
                 bias = if (runTimeTicks != null && runTimeTicks > 0) {
@@ -798,10 +823,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
                 } else {
                     0f
                 },
-                watched = playbackPosition >= startPositions[index],
+                watched = index <= watchedIndex,
             )
         }
     }
+
+    /** 章节标记的输入：全部变化才会重新生成列表。 */
+    private data class ChapterMarkingInputs(
+        val itemId: java.util.UUID,
+        val chapterCount: Int,
+        val watchedIndex: Int,
+        val runTimeTicks: Long?,
+    )
 
     /**
      * Auto-skips intro/outro segments for players without ExoPlayer's scheduled-message

@@ -61,7 +61,7 @@ fun DownloadsList(
     contentPadding: PaddingValues = PaddingValues.Zero,
     selection: Set<Long> = emptySet(),
     onToggleSelection: (DownloadEntity) -> Unit = {},
-    progress: Map<Long, Float> = emptyMap(),
+    progress: DownloadProgressLookup = DownloadProgressLookup.Empty,
     onCancel: (DownloadEntity) -> Unit = {},
     /** 由宿主维护：进入选择态不必先选中任何条目，因此不能从 [selection] 反推。 */
     selectionMode: Boolean = selection.isNotEmpty(),
@@ -82,7 +82,7 @@ fun DownloadsList(
                 onCancel = { onCancel(downloadFiles.download) },
                 isSelected = selection.contains(downloadFiles.download.id),
                 selectionMode = selectionMode,
-                progress = progress[downloadFiles.download.id],
+                progressLookup = progress,
             )
         }
     }
@@ -97,8 +97,11 @@ fun DownloadItem(
     modifier: Modifier = Modifier,
     isSelected: Boolean = false,
     selectionMode: Boolean = false,
-    /** 0f..1f；null 表示还没拿到进度。 */
-    progress: Float? = null,
+    /**
+     * 只读的进度视图，**不在这里取值**：取值放到 [ListItem] 的 `supportingContent` 里，
+     * 进度变化时只有那一小块重组，整行（标题、海报、选择框）不受影响。
+     */
+    progressLookup: DownloadProgressLookup = DownloadProgressLookup.Empty,
     onCancel: () -> Unit = {},
 ) {
     val (download, files) = downloadFiles
@@ -192,6 +195,9 @@ fun DownloadItem(
         supportingContent = {
             val inProgress = download.status == DownloadStatus.DOWNLOADING || download.status == DownloadStatus.QUEUED
             if (inProgress) {
+                // 进度在这里读取（而不是当作参数从列表入口传进来）：发布方更新时，失效范围
+                // 只有这个 lambda，列表本身、行标题、海报与选择框都不会跟着重组。
+                val progress = progressLookup[download.id]
                 Column(modifier = Modifier.fillMaxWidth()) {
                     if (progress != null) {
                         // 有百分比时用确定进度条并写出来：只有一条来回滚动的 indeterminate

@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.text.format.DateUtils
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -64,9 +65,14 @@ class TrickplayHelper(
     private var chapters: List<ChapterInfo>? = null
     private var currentRequest: Disposable? = null
 
-    /** Compose 渲染用的 trickplay 状态。 */
-    var state: TrickplayState by mutableStateOf(TrickplayState())
-        private set
+    /**
+     * Compose 渲染用的 trickplay 状态。
+     *
+     * 是一个**长期存活**的对象，字段各自是独立的快照状态：拖动时只有读取 `fraction` /
+     * `timeText` 的预览层会失效。之前这里持有 `mutableStateOf(TrickplayState())`，每次
+     * `copy()` 都会换掉整个对象，所有读过 `state` 的组合作用域（包括整条进度行）都得重组。
+     */
+    val state = TrickplayState()
 
     fun onMediaSourceChanged(source: JellyfinMediaSource?) {
         trickPlayInfo = null
@@ -80,7 +86,7 @@ class TrickplayHelper(
         chapters = null
         currentRequest?.dispose()
         currentRequest = null
-        state = TrickplayState()
+        state.reset()
 
         val item = source?.item
         val resolvedSourceId = source?.id
@@ -94,7 +100,7 @@ class TrickplayHelper(
         durationMs = source.runTime.inWholeMilliseconds
         chapters = item.chapters
         val width = (thumbnailDisplayHeight * resolvedTrickPlayInfo.width.toFloat() / resolvedTrickPlayInfo.height).roundToInt()
-        state = state.copy(thumbnailWidthPx = width)
+        state.thumbnailWidthPx = width
     }
 
     /**
@@ -120,14 +126,14 @@ class TrickplayHelper(
         // Fraction of the media duration; the Compose layer maps it to the seek bar geometry
         val fraction = (position.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
 
-        // Update chapter name and timestamp on every move
+        // Update chapter name and timestamp on every move.
         val chapterName = chapters?.lastOrNull { it.startPositionTicks <= position * Constants.TICKS_PER_MILLISECOND }?.name
-        state = state.copy(
-            visible = true,
-            fraction = fraction,
-            chapterName = chapterName,
-            timeText = formatPositionAsElapsedTime(position),
-        )
+        // 逐字段写：每个字段是独立的快照状态，值没变就不会触发失效，读它的那一层才知道
+        // 要重组（例如缩略图位置只在布局阶段读 fraction，不会重建预览的内容）。
+        state.visible = true
+        state.fraction = fraction
+        state.chapterName = chapterName
+        state.timeText = formatPositionAsElapsedTime(position)
 
         // Same tile already pending or already displayed - position updated above, nothing else to do
         if (currentTile == pendingTile || currentTile == lastDispatchedTile) return
@@ -217,7 +223,7 @@ class TrickplayHelper(
                 .target(
                     onSuccess = { image ->
                         if (isScrubbing) {
-                            state = state.copy(thumbnail = image.toBitmap().asImageBitmap())
+                            state.thumbnail = image.toBitmap().asImageBitmap()
                         }
                     },
                 )
@@ -234,7 +240,8 @@ class TrickplayHelper(
         nextDispatchAt = 0L
         currentRequest?.dispose()
         currentRequest = null
-        state = TrickplayState(thumbnailWidthPx = state.thumbnailWidthPx)
+        // 只清「本次拖动」的内容；thumbnailWidthPx 是按媒体源算出来的，下一次拖动还要用。
+        state.reset()
     }
 
     private fun formatPositionAsElapsedTime(positionMs: Long): String {
@@ -247,18 +254,45 @@ class TrickplayHelper(
 /**
  * trickplay 预览状态（由 Compose 层渲染）。
  *
- * @param visible 是否展示（scrubbing 中）
- * @param fraction 当前 scrub 位置占媒体时长的比例（0f..1f）
- * @param thumbnailWidthPx 缩略图显示宽度（按显示高度与瓦片宽高比推算）
- * @param thumbnail 已加载的缩略图；null 表示尚未取到（取图逻辑见 [TrickplayHelper]）
- * @param chapterName 当前章节名（可为空）
- * @param timeText 位置时间文本
+ * 与常见写法（一个 data class + `copy()`）的区别：**每个字段各自是一个快照状态**。
+ * 拖动时 `fraction` / `timeText` 每次触摸事件都在变，如果它们共同构成一个不可变对象，
+ * 任何一次变化都会让所有读过该对象的组合作用域失效——包括整条进度行。拆成独立字段之后，
+ * 只有真正读这些字段的那一小块（缩略图预览）会重组；`copy()` 带来的每帧对象分配也没了。
+ *
+ * 字段由 [TrickplayHelper] 写入（`internal set`），外部只读。
  */
-data class TrickplayState(
-    val visible: Boolean = false,
-    val fraction: Float = 0f,
-    val thumbnailWidthPx: Int = 0,
-    val thumbnail: ImageBitmap? = null,
-    val chapterName: String? = null,
-    val timeText: String = "",
-)
+@Stable
+class TrickplayState {
+    /** 是否展示（scrubbing 中）。 */
+    var visible: Boolean by mutableStateOf(false)
+        internal set
+
+    /** 当前 scrub 位置占媒体时长的比例（0f..1f）。只在布局阶段被读取，不触发重组。 */
+    var fraction: Float by mutableStateOf(0f)
+        internal set
+
+    /** 缩略图显示宽度（按显示高度与瓦片宽高比推算）。随媒体源变化，不是每帧都变。 */
+    var thumbnailWidthPx: Int by mutableStateOf(0)
+        internal set
+
+    /** 已加载的缩略图；null 表示尚未取到（取图逻辑见 [TrickplayHelper]）。 */
+    var thumbnail: ImageBitmap? by mutableStateOf(null)
+        internal set
+
+    /** 当前章节名（可为空）。 */
+    var chapterName: String? by mutableStateOf(null)
+        internal set
+
+    /** 位置时间文本。 */
+    var timeText: String by mutableStateOf("")
+        internal set
+
+    /** 清掉一次拖动留下的内容；[thumbnailWidthPx] 属于媒体源，不在此列。 */
+    internal fun reset() {
+        visible = false
+        fraction = 0f
+        thumbnail = null
+        chapterName = null
+        timeText = ""
+    }
+}

@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.downloads.DownloadsViewModel
+import org.jellyfin.mobile.ui.screens.downloads.rememberDownloadProgressLookup
 import org.jellyfin.mobile.ui.navigation.BackNavigationDispatcher
 import org.jellyfin.mobile.ui.navigation.RegisterBackHandler
 
@@ -67,7 +68,9 @@ fun DownloadsScreen(
     backDispatcher: BackNavigationDispatcher,
 ) {
     val downloads by viewModel.downloads.collectAsState()
-    val downloadProgress by viewModel.downloadProgress.collectAsState()
+    // 不用 `by` 解包：解包会在本页的作用域里读 .value，等于把每一次进度发布都变成一次
+    // 整页重组。这里只持有 State 引用，真正的读取下沉到列表行的进度区。
+    val downloadProgress = rememberDownloadProgressLookup(viewModel.downloadProgress.collectAsState())
     val storageLocation by viewModel.storageLocation.collectAsState()
     val storageLocationAccessible by viewModel.storageLocationAccessible.collectAsState()
     val selection = remember { mutableStateSetOf<Long>() }

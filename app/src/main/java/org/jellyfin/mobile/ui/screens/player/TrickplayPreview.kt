@@ -90,9 +90,11 @@ fun TrickplayPreview(
                         .fillMaxWidth()
                         .padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 8.dp),
                 ) {
-                    if (!state.chapterName.isNullOrEmpty()) {
+                    // 读到局部变量再判空：state 的字段是委托属性，无法智能转换
+                    val chapterName = state.chapterName
+                    if (!chapterName.isNullOrEmpty()) {
                         Text(
-                            text = state.chapterName,
+                            text = chapterName,
                             color = Color.White.copy(alpha = 0.9f),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,

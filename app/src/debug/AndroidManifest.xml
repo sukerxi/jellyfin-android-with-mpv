@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      调试构建专用的性能验证入口（见 org.jellyfin.mobile.perf.PerfHarnessActivity）。
+      只存在于 debug 源码集，release 变体既不会编译也不会声明。
+    -->
+    <application>
+        <activity
+            android:name="org.jellyfin.mobile.perf.PerfHarnessActivity"
+            android:exported="true"
+            android:label="PerfHarness"
+            android:theme="@style/AppTheme" />
+
+        <activity
+            android:name="org.jellyfin.mobile.perf.SettingsHarnessActivity"
+            android:exported="true"
+            android:label="SettingsHarness"
+            android:theme="@style/AppTheme" />
+    </application>
+
+</manifest>

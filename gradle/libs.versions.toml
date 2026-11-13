@@ -19,6 +19,7 @@ serialization-json = "1.11.0"
 koin = "4.2.2"
 androidx-core = "1.19.1"
 androidx-core-splashscreen = "1.2.0"
+androidx-profileinstaller = "1.4.1"
 androidx-activity = "1.13.0"
 androidx-documentfile = "1.1.0"
 androidx-work = "2.11.2"
@@ -89,6 +90,7 @@ koin = { group = "io.insert-koin", name = "koin-android", version.ref = "koin" }
 android-gradle = { module = "com.android.tools.build:gradle", version.ref = "android-plugin" }
 androidx-core = { group = "androidx.core", name = "core", version.ref = "androidx-core" }
 androidx-core-splashscreen = { group = "androidx.core", name = "core-splashscreen", version.ref = "androidx-core-splashscreen" }
+androidx-profileinstaller = { group = "androidx.profileinstaller", name = "profileinstaller", version.ref = "androidx-profileinstaller" }
 androidx-activity = { group = "androidx.activity", name = "activity", version.ref = "androidx-activity" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "androidx-activity" }
 androidx-documentfile = { module = "androidx.documentfile:documentfile", version.ref = "androidx-documentfile" }

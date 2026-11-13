@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  播放器的视频表面。
+
+  单独放在布局里的唯一原因是 use_controller：PlayerView 的控制器在**构造期**就被
+  inflate 并塞进自己里面（exo_player_control_view，几十个 View）。播放器的控件层是
+  Compose 的悬浮层，这个控制器从来不用，用 `PlayerView(context)` 构造再事后
+  `useController = false` 只是把它藏起来，初始化成本照付。
+
+  从带 use_controller=false 的布局 inflate，构造期就不会加载控制器。
+-->
+<androidx.media3.ui.PlayerView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black"
+    app:shutter_background_color="@android:color/black"
+    app:use_controller="false" />

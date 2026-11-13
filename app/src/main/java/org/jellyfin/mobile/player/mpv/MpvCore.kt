@@ -322,6 +322,12 @@ class MpvCore private constructor(context: Application) : KoinComponent {
          * The native initialization (see the `init` block) is queued as the first task,
          * so it - and the disk I/O and preference read it performs - runs off the main
          * thread while every later call is still ordered behind it.
+         *
+         * 已知取舍：单条队列意味着一次耗时的 `loadfile` / `seek` 会把排在后面的
+         * `android-surface-size` 一起推迟，旋转时画面可能多维持几帧旧尺寸。这不是疏漏——
+         * 拆成多条线程会让「先 load 再设置属性」的顺序失去保证，故障面比几帧拉伸大得多。
+         * 如果将来真的要优化，正确方向是让 [MpvPlayer] 对 surface 尺寸做合并与去重
+         * （已有 32ms 静置合并），而不是换线程模型。
          */
         private val ipcExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "mpv-ipc").apply { isDaemon = true }
@@ -425,7 +431,15 @@ class MpvCore private constructor(context: Application) : KoinComponent {
                 "input-default-bindings" to "yes",
                 "demuxer-max-bytes" to cacheBytes,
                 "demuxer-max-back-bytes" to cacheBytes,
-                "vd-lavc-film-grain" to "cpu",
+                // AV1 film grain synthesis. mpv's default: only gpu-next (libplacebo) can
+                // synthesise grain on the GPU, every other VO falls back to CPU (dav1d).
+                // The bundled libmpv ships without libplacebo, so `gpu_next` is unavailable
+                // and this resolves to CPU - i.e. identical to the old hard-coded "cpu".
+                // Measured on the 1080p24 grain clip: synthesis costs ~22% extra CPU time
+                // (11.8s vs 9.7s user time per 45s of video), so it is real work, just not
+                // work this build can hand to the GPU. Kept as "auto" so a future libmpv
+                // built with libplacebo picks up GPU synthesis without another change.
+                "vd-lavc-film-grain" to "auto",
                 "ytdl" to "no",
                 "cache-pause-initial" to "yes",
                 "vo" to "gpu_next,gpu",

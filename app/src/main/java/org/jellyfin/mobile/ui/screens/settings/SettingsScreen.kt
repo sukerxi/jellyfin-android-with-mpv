@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
@@ -193,370 +194,408 @@ fun SettingsScreen(
             )
         },
     ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .padding(innerPadding)
-                .verticalScroll(rememberScrollState()),
+        // LazyColumn 而不是 Column + verticalScroll：设置项有 30 多行，一次性组合并
+        // 测量全部条目，意味着进入这一页的首帧要排完 800dp 以上的内容。改成懒加载后
+        // 只处理可见的那几屏，逐块拆成 item 不改变任何行为（条目之间没有滚动联动）。
+        // `isIntegratedPlayer` 被多个 item 使用，只能提到外面：item 之间不共享局部变量。
+        val isIntegratedPlayer =
+            playerType == VideoPlayerType.EXO_PLAYER || playerType == VideoPlayerType.MPV_PLAYER
+
+        LazyColumn(
+            modifier = Modifier.padding(innerPadding),
         ) {
-            // Music player
-            SettingsCategoryHeader(title = stringResource(R.string.pref_category_music_player))
-            SwitchPreferenceRow(
-                title = stringResource(R.string.pref_music_notification_always_dismissible_title),
-                summary = stringResource(
-                    if (musicNotificationAlwaysDismissible) {
-                        R.string.pref_music_notification_always_dismissible_summary_on
-                    } else {
-                        R.string.pref_music_notification_always_dismissible_summary_off
-                    },
-                ),
-                checked = musicNotificationAlwaysDismissible,
-                onCheckedChange = { appPreferences.musicNotificationAlwaysDismissible = it },
-            )
+            item {
+                Column {
+                    // Music player
+                    SettingsCategoryHeader(title = stringResource(R.string.pref_category_music_player))
+                    SwitchPreferenceRow(
+                        title = stringResource(R.string.pref_music_notification_always_dismissible_title),
+                        summary = stringResource(
+                            if (musicNotificationAlwaysDismissible) {
+                                R.string.pref_music_notification_always_dismissible_summary_on
+                            } else {
+                                R.string.pref_music_notification_always_dismissible_summary_off
+                            },
+                        ),
+                        checked = musicNotificationAlwaysDismissible,
+                        onCheckedChange = { appPreferences.musicNotificationAlwaysDismissible = it },
+                    )
+                }
+            }
 
-            // Video player
-            SettingsCategoryHeader(title = stringResource(R.string.pref_category_video_player))
+            item {
+                Column {
+                    // Video player
+                    SettingsCategoryHeader(title = stringResource(R.string.pref_category_video_player))
 
-            val videoPlayerOptions = listOf(
-                ChoiceItem(VideoPlayerType.WEB_PLAYER, R.string.video_player_web, R.string.video_player_web_description),
-                ChoiceItem(VideoPlayerType.MPV_PLAYER, R.string.video_player_mpv, R.string.video_player_mpv_description),
-                ChoiceItem(VideoPlayerType.EXO_PLAYER, R.string.video_player_integrated, R.string.video_player_native_description),
-                ChoiceItem(
-                    VideoPlayerType.EXTERNAL_PLAYER,
-                    R.string.video_player_external,
-                    R.string.video_player_external_description,
-                ),
-            )
-            SingleSelectPreferenceRow(
-                title = stringResource(R.string.pref_video_player_type_title),
-                items = videoPlayerOptions,
-                selectedKey = playerType,
-                onClick = {
-                    choiceDialog = ChoiceDialogState(
-                        title = context.getString(R.string.pref_video_player_type_title),
+                    val videoPlayerOptions = listOf(
+                        ChoiceItem(VideoPlayerType.WEB_PLAYER, R.string.video_player_web, R.string.video_player_web_description),
+                        ChoiceItem(VideoPlayerType.MPV_PLAYER, R.string.video_player_mpv, R.string.video_player_mpv_description),
+                        ChoiceItem(VideoPlayerType.EXO_PLAYER, R.string.video_player_integrated, R.string.video_player_native_description),
+                        ChoiceItem(
+                            VideoPlayerType.EXTERNAL_PLAYER,
+                            R.string.video_player_external,
+                            R.string.video_player_external_description,
+                        ),
+                    )
+                    SingleSelectPreferenceRow(
+                        title = stringResource(R.string.pref_video_player_type_title),
                         items = videoPlayerOptions,
                         selectedKey = playerType,
-                        onSelect = { appPreferences.videoPlayerType = it as String },
-                    )
-                },
-            )
-
-            val isIntegratedPlayer =
-                playerType == VideoPlayerType.EXO_PLAYER || playerType == VideoPlayerType.MPV_PLAYER
-
-            if (isIntegratedPlayer) {
-                SwitchPreferenceRow(
-                    title = stringResource(R.string.pref_exoplayer_start_landscape_video_in_landscape),
-                    checked = startLandscapeVideoInLandscape,
-                    onCheckedChange = { appPreferences.exoPlayerStartLandscapeVideoInLandscape = it },
-                )
-                SwitchPreferenceRow(
-                    title = stringResource(R.string.pref_exoplayer_allow_brightness_volume_gesture),
-                    checked = allowSwipeGestures,
-                    onCheckedChange = { appPreferences.exoPlayerAllowSwipeGestures = it },
-                )
-                SwitchPreferenceRow(
-                    title = stringResource(R.string.pref_exoplayer_remember_brightness),
-                    checked = rememberBrightness,
-                    enabled = allowSwipeGestures,
-                    onCheckedChange = { checked ->
-                        appPreferences.exoPlayerRememberBrightness = checked
-                        if (!checked) {
-                            appPreferences.exoPlayerBrightness = BRIGHTNESS_OVERRIDE_NONE
-                        }
-                    },
-                )
-                SwitchPreferenceRow(
-                    title = stringResource(R.string.pref_exoplayer_allow_press_speed_up),
-                    summary = stringResource(R.string.pref_exoplayer_allow_press_speed_up_summary),
-                    checked = allowPressSpeedUp,
-                    onCheckedChange = { appPreferences.exoPlayerAllowPressSpeedUp = it },
-                )
-                SwitchPreferenceRow(
-                    title = stringResource(R.string.pref_exoplayer_allow_background_audio),
-                    summary = stringResource(R.string.pref_exoplayer_allow_background_audio_summary),
-                    checked = allowBackgroundAudio,
-                    onCheckedChange = { appPreferences.exoPlayerAllowBackgroundAudio = it },
-                )
-                SwitchPreferenceRow(
-                    title = stringResource(R.string.pref_exoplayer_allow_horizontal_gesture),
-                    summary = stringResource(R.string.pref_exoplayer_allow_horizontal_gesture_summary),
-                    checked = allowHorizontalGesture,
-                    onCheckedChange = { appPreferences.exoPlayerAllowHorizontalGesture = it },
-                )
-                SwitchPreferenceRow(
-                    title = stringResource(R.string.pref_exoplayer_double_tap_pause),
-                    summary = stringResource(R.string.pref_exoplayer_double_tap_pause_summary),
-                    checked = doubleTapPause,
-                    onCheckedChange = { appPreferences.exoPlayerDoubleTapPause = it },
-                )
-                // 「控件多久后自动隐藏」：之前固定 4 秒且不可改，读标题/看音轨常被打断。
-                // 暂停时与手指按住时同样不隐藏（见 PlayerScreen 的 controlsSuppressed）。
-                SingleSelectPreferenceRow(
-                    title = stringResource(R.string.pref_controls_timeout),
-                    summary = listOfNotNull(
-                        controlsTimeoutOptions.find { it.key == controlsTimeout }?.let { stringResource(it.titleRes) },
-                        stringResource(R.string.pref_controls_timeout_summary),
-                    ).joinToString(" · "),
-                    items = controlsTimeoutOptions,
-                    selectedKey = controlsTimeout,
-                    onClick = {
-                        choiceDialog = ChoiceDialogState(
-                            title = context.getString(R.string.pref_controls_timeout),
-                            items = controlsTimeoutOptions,
-                            selectedKey = controlsTimeout,
-                            onSelect = { appPreferences.controlsTimeoutMs = it as Int },
-                        )
-                    },
-                )
-                // 「播放缓冲区大小」：ExoPlayer 用它设置缓冲时长，mpv 用它设置 demuxer 预读
-                // 时长与缓存上限；蜂窝网络下两个引擎都会自动收紧一档。
-                val networkBufferOptions = listOf(
-                    ChoiceItem(
-                        Constants.NETWORK_BUFFER_AUTO,
-                        R.string.network_buffer_auto,
-                        R.string.network_buffer_auto_description,
-                    ),
-                    ChoiceItem(
-                        Constants.NETWORK_BUFFER_LARGE,
-                        R.string.network_buffer_large,
-                        R.string.network_buffer_large_description,
-                    ),
-                    ChoiceItem(
-                        Constants.NETWORK_BUFFER_EXTRA_LARGE,
-                        R.string.network_buffer_extra_large,
-                        R.string.network_buffer_extra_large_description,
-                    ),
-                )
-                val networkBufferSummary = listOfNotNull(
-                    networkBufferOptions.find { it.key == networkBuffer }?.let { stringResource(it.titleRes) },
-                    stringResource(R.string.pref_playback_buffer_mobile_note),
-                ).joinToString(" · ")
-                SingleSelectPreferenceRow(
-                    title = stringResource(R.string.pref_exoplayer_network_buffer),
-                    summary = networkBufferSummary,
-                    items = networkBufferOptions,
-                    selectedKey = networkBuffer,
-                    onClick = {
-                        choiceDialog = ChoiceDialogState(
-                            title = context.getString(R.string.pref_exoplayer_network_buffer),
-                            items = networkBufferOptions,
-                            selectedKey = networkBuffer,
-                            onSelect = { appPreferences.exoPlayerNetworkBuffer = it as String },
-                        )
-                    },
-                )
-            }
-
-            when (playerType) {
-                VideoPlayerType.EXO_PLAYER -> {
-                    // The preference is only ever changed from the settings screen - never
-                    // while a video is playing - so there is nothing to gate here: a session
-                    // that ends up transcoding simply does not use the renderer
-                    // (see AppPreferences.resolveExoPlayerDirectPlayAss).
-                    SwitchPreferenceRow(
-                        title = stringResource(R.string.pref_exoplayer_direct_play_ass),
-                        summary = stringResource(R.string.pref_exoplayer_direct_play_ass_description),
-                        checked = directPlayAss,
-                        onCheckedChange = { appPreferences.exoPlayerDirectPlayAss = it },
-                    )
-                }
-                VideoPlayerType.MPV_PLAYER -> {
-                    val optionCount = MpvConfigManager.countOptions(mpvCustomConfig)
-                    val mpvSummary = if (optionCount == 0) {
-                        stringResource(R.string.pref_mpv_custom_config_summary_empty)
-                    } else {
-                        stringResource(R.string.pref_mpv_custom_config_summary_count, optionCount)
-                    }
-                    ClickPreferenceRow(
-                        title = stringResource(R.string.pref_mpv_custom_config),
-                        summary = mpvSummary,
-                        onClick = onOpenMpvConfigEditor,
-                    )
-                    SwitchPreferenceRow(
-                        title = stringResource(R.string.pref_mpv_compare_entry),
-                        summary = stringResource(R.string.pref_mpv_compare_entry_summary),
-                        checked = mpvShowCompareEntry,
-                        onCheckedChange = { appPreferences.mpvShowCompareEntry = it },
-                    )
-                }
-                else -> Unit
-            }
-
-            // 移动网络（蜂窝）播放：是否先弹窗确认，以及确认降码率时使用的档位。
-            if (isIntegratedPlayer) {
-                SwitchPreferenceRow(
-                    title = stringResource(R.string.pref_mobile_data_prompt_title),
-                    summary = stringResource(R.string.pref_mobile_data_prompt_summary),
-                    checked = mobileDataPlaybackPrompt,
-                    onCheckedChange = { appPreferences.mobileDataPlaybackPrompt = it },
-                )
-                val mobileDataBitrateOptions = listOf(
-                    ChoiceItem(Constants.MOBILE_DATA_BITRATE_480P, R.string.mobile_data_bitrate_480p),
-                    ChoiceItem(Constants.MOBILE_DATA_BITRATE_720P, R.string.mobile_data_bitrate_720p),
-                    ChoiceItem(Constants.MOBILE_DATA_BITRATE_1080P, R.string.mobile_data_bitrate_1080p),
-                )
-                SingleSelectPreferenceRow(
-                    title = stringResource(R.string.pref_mobile_data_bitrate_title),
-                    items = mobileDataBitrateOptions,
-                    selectedKey = mobileDataMaxBitrate,
-                    onClick = {
-                        choiceDialog = ChoiceDialogState(
-                            title = context.getString(R.string.pref_mobile_data_bitrate_title),
-                            items = mobileDataBitrateOptions,
-                            selectedKey = mobileDataMaxBitrate,
-                            onSelect = { key -> (key as? Int)?.let { appPreferences.mobileDataMaxBitrate = it } },
-                        )
-                    },
-                )
-            }
-
-            if (playerType == VideoPlayerType.EXTERNAL_PLAYER) {
-                val externalPlayerOptions = listOf(
-                    ChoiceItem(
-                        ExternalPlayerPackage.SYSTEM_DEFAULT,
-                        R.string.external_player_system_default,
-                        R.string.external_player_system_default_description,
-                    ),
-                    ChoiceItem(
-                        ExternalPlayerPackage.MPV_PLAYER,
-                        R.string.external_player_mpv,
-                        R.string.external_player_mpv_description,
-                    ),
-                    ChoiceItem(
-                        ExternalPlayerPackage.MX_PLAYER_FREE,
-                        R.string.external_player_mx_player_free,
-                        R.string.external_player_mx_player_free_description,
-                    ),
-                    ChoiceItem(
-                        ExternalPlayerPackage.MX_PLAYER_PRO,
-                        R.string.external_player_mx_player_pro,
-                        R.string.external_player_mx_player_pro_description,
-                    ),
-                    ChoiceItem(
-                        ExternalPlayerPackage.VLC_PLAYER,
-                        R.string.external_player_vlc_player,
-                        R.string.external_player_vlc_player_description,
-                    ),
-                    ChoiceItem(
-                        ExternalPlayerPackage.MPVKT_PLAYER,
-                        R.string.external_player_mpvkt,
-                        R.string.external_player_mpvkt_description,
-                    ),
-                ).filter { item ->
-                    item.key == ExternalPlayerPackage.SYSTEM_DEFAULT ||
-                        context.packageManager.isPackageInstalled(item.key)
-                }
-                SingleSelectPreferenceRow(
-                    title = stringResource(R.string.external_player_app),
-                    items = externalPlayerOptions,
-                    selectedKey = externalPlayerApp,
-                    onClick = {
-                        choiceDialog = ChoiceDialogState(
-                            title = context.getString(R.string.external_player_app),
-                            items = externalPlayerOptions,
-                            selectedKey = externalPlayerApp,
-                            onSelect = { appPreferences.externalPlayerApp = it as String },
-                        )
-                    },
-                )
-            }
-
-            val subtitleSettingsIntent = remember { Intent(Settings.ACTION_CAPTIONING_SETTINGS) }
-            if (subtitleSettingsIntent.resolveActivity(context.packageManager) != null) {
-                ClickPreferenceRow(
-                    title = stringResource(R.string.pref_subtitle_style),
-                    summary = stringResource(R.string.pref_subtitle_style_summary),
-                    onClick = { context.startActivity(subtitleSettingsIntent) },
-                )
-            }
-
-            // Downloads
-            SettingsCategoryHeader(title = stringResource(R.string.pref_category_downloads))
-
-            val downloadMethodOptions = listOf(
-                ChoiceItem(
-                    DownloadMethod.WIFI_ONLY.intValue,
-                    R.string.wifi_only,
-                    R.string.wifi_only_summary,
-                ),
-                ChoiceItem(
-                    DownloadMethod.MOBILE_DATA.intValue,
-                    R.string.mobile_data,
-                    R.string.mobile_data_summary,
-                ),
-                ChoiceItem(
-                    DownloadMethod.MOBILE_AND_ROAMING.intValue,
-                    R.string.mobile_data_and_roaming,
-                    R.string.mobile_data_and_roaming_summary,
-                ),
-            )
-            SingleSelectPreferenceRow(
-                title = stringResource(R.string.network_title),
-                items = downloadMethodOptions,
-                selectedKey = downloadMethod.intValue,
-                onClick = {
-                    choiceDialog = ChoiceDialogState(
-                        title = context.getString(R.string.network_title),
-                        items = downloadMethodOptions,
-                        selectedKey = downloadMethod.intValue,
-                        onSelect = { key ->
-                            DownloadMethod.fromInt(key as Int)?.let { appPreferences.downloadMethod = it }
+                        onClick = {
+                            choiceDialog = ChoiceDialogState(
+                                title = context.getString(R.string.pref_video_player_type_title),
+                                items = videoPlayerOptions,
+                                selectedKey = playerType,
+                                onSelect = { appPreferences.videoPlayerType = it as String },
+                            )
                         },
                     )
-                },
-            )
-
-            val storageLocationName = remember(storageLocation) {
-                storageLocation?.toUri()?.let { DocumentFile.fromTreeUri(context, it)?.name }
-            }
-            val currentStorageLocation = storageManager.getStorageLocation()
-            ClickPreferenceRow(
-                title = stringResource(R.string.pref_download_location),
-                summary = storageLocationName ?: stringResource(R.string.menu_item_none),
-                onClick = {
-                    storageLocationPicker.launch(currentStorageLocation?.uri ?: storageManager.defaultStorageLocation)
-                },
-            )
-
-            // Updates（debug 包无法被 release APK 覆盖安装，不展示更新设置）
-            if (updateChecker.isSupported) {
-                SettingsCategoryHeader(title = stringResource(R.string.pref_category_update))
-
-                val channelName = if (updateChecker.currentChannel == UpdateChannel.GITHUB) {
-                    stringResource(R.string.update_channel_github)
-                } else {
-                    stringResource(R.string.update_channel_cnb)
                 }
-                // 渠道由安装包决定，不是可选项：用只读信息行呈现，避免「灰掉但不知道为什么」。
-                PreferenceRow(
-                    title = stringResource(R.string.pref_update_channel),
-                    summary = stringResource(R.string.pref_update_channel_summary, channelName),
-                    enabled = true,
-                    onClick = null,
-                    trailing = null,
-                )
-                SwitchPreferenceRow(
-                    title = stringResource(R.string.pref_auto_check_updates),
-                    summary = stringResource(R.string.pref_auto_check_updates_summary),
-                    checked = autoCheckUpdates,
-                    onCheckedChange = { appPreferences.autoCheckUpdates = it },
-                )
-                SwitchPreferenceRow(
-                    title = stringResource(R.string.pref_silent_download),
-                    summary = stringResource(R.string.pref_silent_download_summary),
-                    checked = silentUpdateDownload,
-                    onCheckedChange = { appPreferences.silentUpdateDownload = it },
-                )
-                ClickPreferenceRow(
-                    title = stringResource(R.string.pref_check_update),
-                    summary = if (updateCheckRunning) {
-                        stringResource(R.string.update_checking)
-                    } else {
-                        stringResource(R.string.pref_check_update_summary)
-                    },
-                    showProgress = updateCheckRunning,
-                    onClick = { checkForUpdates() },
-                )
+            }
+
+            item {
+                Column {
+                    if (isIntegratedPlayer) {
+                        SwitchPreferenceRow(
+                            title = stringResource(R.string.pref_exoplayer_start_landscape_video_in_landscape),
+                            checked = startLandscapeVideoInLandscape,
+                            onCheckedChange = { appPreferences.exoPlayerStartLandscapeVideoInLandscape = it },
+                        )
+                        SwitchPreferenceRow(
+                            title = stringResource(R.string.pref_exoplayer_allow_brightness_volume_gesture),
+                            checked = allowSwipeGestures,
+                            onCheckedChange = { appPreferences.exoPlayerAllowSwipeGestures = it },
+                        )
+                        SwitchPreferenceRow(
+                            title = stringResource(R.string.pref_exoplayer_remember_brightness),
+                            checked = rememberBrightness,
+                            enabled = allowSwipeGestures,
+                            onCheckedChange = { checked ->
+                                appPreferences.exoPlayerRememberBrightness = checked
+                                if (!checked) {
+                                    appPreferences.exoPlayerBrightness = BRIGHTNESS_OVERRIDE_NONE
+                                }
+                            },
+                        )
+                        SwitchPreferenceRow(
+                            title = stringResource(R.string.pref_exoplayer_allow_press_speed_up),
+                            summary = stringResource(R.string.pref_exoplayer_allow_press_speed_up_summary),
+                            checked = allowPressSpeedUp,
+                            onCheckedChange = { appPreferences.exoPlayerAllowPressSpeedUp = it },
+                        )
+                        SwitchPreferenceRow(
+                            title = stringResource(R.string.pref_exoplayer_allow_background_audio),
+                            summary = stringResource(R.string.pref_exoplayer_allow_background_audio_summary),
+                            checked = allowBackgroundAudio,
+                            onCheckedChange = { appPreferences.exoPlayerAllowBackgroundAudio = it },
+                        )
+                        SwitchPreferenceRow(
+                            title = stringResource(R.string.pref_exoplayer_allow_horizontal_gesture),
+                            summary = stringResource(R.string.pref_exoplayer_allow_horizontal_gesture_summary),
+                            checked = allowHorizontalGesture,
+                            onCheckedChange = { appPreferences.exoPlayerAllowHorizontalGesture = it },
+                        )
+                        SwitchPreferenceRow(
+                            title = stringResource(R.string.pref_exoplayer_double_tap_pause),
+                            summary = stringResource(R.string.pref_exoplayer_double_tap_pause_summary),
+                            checked = doubleTapPause,
+                            onCheckedChange = { appPreferences.exoPlayerDoubleTapPause = it },
+                        )
+                        // 「控件多久后自动隐藏」：之前固定 4 秒且不可改，读标题/看音轨常被打断。
+                        // 暂停时与手指按住时同样不隐藏（见 PlayerScreen 的 controlsSuppressed）。
+                        SingleSelectPreferenceRow(
+                            title = stringResource(R.string.pref_controls_timeout),
+                            summary = listOfNotNull(
+                                controlsTimeoutOptions.find { it.key == controlsTimeout }?.let { stringResource(it.titleRes) },
+                                stringResource(R.string.pref_controls_timeout_summary),
+                            ).joinToString(" · "),
+                            items = controlsTimeoutOptions,
+                            selectedKey = controlsTimeout,
+                            onClick = {
+                                choiceDialog = ChoiceDialogState(
+                                    title = context.getString(R.string.pref_controls_timeout),
+                                    items = controlsTimeoutOptions,
+                                    selectedKey = controlsTimeout,
+                                    onSelect = { appPreferences.controlsTimeoutMs = it as Int },
+                                )
+                            },
+                        )
+                        // 「播放缓冲区大小」：ExoPlayer 用它设置缓冲时长，mpv 用它设置 demuxer 预读
+                        // 时长与缓存上限；蜂窝网络下两个引擎都会自动收紧一档。
+                        val networkBufferOptions = listOf(
+                            ChoiceItem(
+                                Constants.NETWORK_BUFFER_AUTO,
+                                R.string.network_buffer_auto,
+                                R.string.network_buffer_auto_description,
+                            ),
+                            ChoiceItem(
+                                Constants.NETWORK_BUFFER_LARGE,
+                                R.string.network_buffer_large,
+                                R.string.network_buffer_large_description,
+                            ),
+                            ChoiceItem(
+                                Constants.NETWORK_BUFFER_EXTRA_LARGE,
+                                R.string.network_buffer_extra_large,
+                                R.string.network_buffer_extra_large_description,
+                            ),
+                        )
+                        val networkBufferSummary = listOfNotNull(
+                            networkBufferOptions.find { it.key == networkBuffer }?.let { stringResource(it.titleRes) },
+                            stringResource(R.string.pref_playback_buffer_mobile_note),
+                        ).joinToString(" · ")
+                        SingleSelectPreferenceRow(
+                            title = stringResource(R.string.pref_exoplayer_network_buffer),
+                            summary = networkBufferSummary,
+                            items = networkBufferOptions,
+                            selectedKey = networkBuffer,
+                            onClick = {
+                                choiceDialog = ChoiceDialogState(
+                                    title = context.getString(R.string.pref_exoplayer_network_buffer),
+                                    items = networkBufferOptions,
+                                    selectedKey = networkBuffer,
+                                    onSelect = { appPreferences.exoPlayerNetworkBuffer = it as String },
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+
+            item {
+                Column {
+                    when (playerType) {
+                        VideoPlayerType.EXO_PLAYER -> {
+                            // The preference is only ever changed from the settings screen - never
+                            // while a video is playing - so there is nothing to gate here: a session
+                            // that ends up transcoding simply does not use the renderer
+                            // (see AppPreferences.resolveExoPlayerDirectPlayAss).
+                            SwitchPreferenceRow(
+                                title = stringResource(R.string.pref_exoplayer_direct_play_ass),
+                                summary = stringResource(R.string.pref_exoplayer_direct_play_ass_description),
+                                checked = directPlayAss,
+                                onCheckedChange = { appPreferences.exoPlayerDirectPlayAss = it },
+                            )
+                        }
+                        VideoPlayerType.MPV_PLAYER -> {
+                            val optionCount = MpvConfigManager.countOptions(mpvCustomConfig)
+                            val mpvSummary = if (optionCount == 0) {
+                                stringResource(R.string.pref_mpv_custom_config_summary_empty)
+                            } else {
+                                stringResource(R.string.pref_mpv_custom_config_summary_count, optionCount)
+                            }
+                            ClickPreferenceRow(
+                                title = stringResource(R.string.pref_mpv_custom_config),
+                                summary = mpvSummary,
+                                onClick = onOpenMpvConfigEditor,
+                            )
+                            SwitchPreferenceRow(
+                                title = stringResource(R.string.pref_mpv_compare_entry),
+                                summary = stringResource(R.string.pref_mpv_compare_entry_summary),
+                                checked = mpvShowCompareEntry,
+                                onCheckedChange = { appPreferences.mpvShowCompareEntry = it },
+                            )
+                        }
+                        else -> Unit
+                    }
+                }
+            }
+
+            item {
+                Column {
+                    // 移动网络（蜂窝）播放：是否先弹窗确认，以及确认降码率时使用的档位。
+                    if (isIntegratedPlayer) {
+                        SwitchPreferenceRow(
+                            title = stringResource(R.string.pref_mobile_data_prompt_title),
+                            summary = stringResource(R.string.pref_mobile_data_prompt_summary),
+                            checked = mobileDataPlaybackPrompt,
+                            onCheckedChange = { appPreferences.mobileDataPlaybackPrompt = it },
+                        )
+                        val mobileDataBitrateOptions = listOf(
+                            ChoiceItem(Constants.MOBILE_DATA_BITRATE_480P, R.string.mobile_data_bitrate_480p),
+                            ChoiceItem(Constants.MOBILE_DATA_BITRATE_720P, R.string.mobile_data_bitrate_720p),
+                            ChoiceItem(Constants.MOBILE_DATA_BITRATE_1080P, R.string.mobile_data_bitrate_1080p),
+                        )
+                        SingleSelectPreferenceRow(
+                            title = stringResource(R.string.pref_mobile_data_bitrate_title),
+                            items = mobileDataBitrateOptions,
+                            selectedKey = mobileDataMaxBitrate,
+                            onClick = {
+                                choiceDialog = ChoiceDialogState(
+                                    title = context.getString(R.string.pref_mobile_data_bitrate_title),
+                                    items = mobileDataBitrateOptions,
+                                    selectedKey = mobileDataMaxBitrate,
+                                    onSelect = { key -> (key as? Int)?.let { appPreferences.mobileDataMaxBitrate = it } },
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+
+            item {
+                Column {
+                    if (playerType == VideoPlayerType.EXTERNAL_PLAYER) {
+                        val externalPlayerOptions = listOf(
+                            ChoiceItem(
+                                ExternalPlayerPackage.SYSTEM_DEFAULT,
+                                R.string.external_player_system_default,
+                                R.string.external_player_system_default_description,
+                            ),
+                            ChoiceItem(
+                                ExternalPlayerPackage.MPV_PLAYER,
+                                R.string.external_player_mpv,
+                                R.string.external_player_mpv_description,
+                            ),
+                            ChoiceItem(
+                                ExternalPlayerPackage.MX_PLAYER_FREE,
+                                R.string.external_player_mx_player_free,
+                                R.string.external_player_mx_player_free_description,
+                            ),
+                            ChoiceItem(
+                                ExternalPlayerPackage.MX_PLAYER_PRO,
+                                R.string.external_player_mx_player_pro,
+                                R.string.external_player_mx_player_pro_description,
+                            ),
+                            ChoiceItem(
+                                ExternalPlayerPackage.VLC_PLAYER,
+                                R.string.external_player_vlc_player,
+                                R.string.external_player_vlc_player_description,
+                            ),
+                            ChoiceItem(
+                                ExternalPlayerPackage.MPVKT_PLAYER,
+                                R.string.external_player_mpvkt,
+                                R.string.external_player_mpvkt_description,
+                            ),
+                        ).filter { item ->
+                            item.key == ExternalPlayerPackage.SYSTEM_DEFAULT ||
+                                context.packageManager.isPackageInstalled(item.key)
+                        }
+                        SingleSelectPreferenceRow(
+                            title = stringResource(R.string.external_player_app),
+                            items = externalPlayerOptions,
+                            selectedKey = externalPlayerApp,
+                            onClick = {
+                                choiceDialog = ChoiceDialogState(
+                                    title = context.getString(R.string.external_player_app),
+                                    items = externalPlayerOptions,
+                                    selectedKey = externalPlayerApp,
+                                    onSelect = { appPreferences.externalPlayerApp = it as String },
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+
+            item {
+                Column {
+                    val subtitleSettingsIntent = remember { Intent(Settings.ACTION_CAPTIONING_SETTINGS) }
+                    if (subtitleSettingsIntent.resolveActivity(context.packageManager) != null) {
+                        ClickPreferenceRow(
+                            title = stringResource(R.string.pref_subtitle_style),
+                            summary = stringResource(R.string.pref_subtitle_style_summary),
+                            onClick = { context.startActivity(subtitleSettingsIntent) },
+                        )
+                    }
+                }
+            }
+
+            item {
+                Column {
+                    // Downloads
+                    SettingsCategoryHeader(title = stringResource(R.string.pref_category_downloads))
+
+                    val downloadMethodOptions = listOf(
+                        ChoiceItem(
+                            DownloadMethod.WIFI_ONLY.intValue,
+                            R.string.wifi_only,
+                            R.string.wifi_only_summary,
+                        ),
+                        ChoiceItem(
+                            DownloadMethod.MOBILE_DATA.intValue,
+                            R.string.mobile_data,
+                            R.string.mobile_data_summary,
+                        ),
+                        ChoiceItem(
+                            DownloadMethod.MOBILE_AND_ROAMING.intValue,
+                            R.string.mobile_data_and_roaming,
+                            R.string.mobile_data_and_roaming_summary,
+                        ),
+                    )
+                    SingleSelectPreferenceRow(
+                        title = stringResource(R.string.network_title),
+                        items = downloadMethodOptions,
+                        selectedKey = downloadMethod.intValue,
+                        onClick = {
+                            choiceDialog = ChoiceDialogState(
+                                title = context.getString(R.string.network_title),
+                                items = downloadMethodOptions,
+                                selectedKey = downloadMethod.intValue,
+                                onSelect = { key ->
+                                    DownloadMethod.fromInt(key as Int)?.let { appPreferences.downloadMethod = it }
+                                },
+                            )
+                        },
+                    )
+
+                    val storageLocationName = remember(storageLocation) {
+                        storageLocation?.toUri()?.let { DocumentFile.fromTreeUri(context, it)?.name }
+                    }
+                    val currentStorageLocation = storageManager.getStorageLocation()
+                    ClickPreferenceRow(
+                        title = stringResource(R.string.pref_download_location),
+                        summary = storageLocationName ?: stringResource(R.string.menu_item_none),
+                        onClick = {
+                            storageLocationPicker.launch(currentStorageLocation?.uri ?: storageManager.defaultStorageLocation)
+                        },
+                    )
+                }
+            }
+
+            item {
+                Column {
+                    // Updates（debug 包无法被 release APK 覆盖安装，不展示更新设置）
+                    if (updateChecker.isSupported) {
+                        SettingsCategoryHeader(title = stringResource(R.string.pref_category_update))
+
+                        val channelName = if (updateChecker.currentChannel == UpdateChannel.GITHUB) {
+                            stringResource(R.string.update_channel_github)
+                        } else {
+                            stringResource(R.string.update_channel_cnb)
+                        }
+                        // 渠道由安装包决定，不是可选项：用只读信息行呈现，避免「灰掉但不知道为什么」。
+                        PreferenceRow(
+                            title = stringResource(R.string.pref_update_channel),
+                            summary = stringResource(R.string.pref_update_channel_summary, channelName),
+                            enabled = true,
+                            onClick = null,
+                            trailing = null,
+                        )
+                        SwitchPreferenceRow(
+                            title = stringResource(R.string.pref_auto_check_updates),
+                            summary = stringResource(R.string.pref_auto_check_updates_summary),
+                            checked = autoCheckUpdates,
+                            onCheckedChange = { appPreferences.autoCheckUpdates = it },
+                        )
+                        SwitchPreferenceRow(
+                            title = stringResource(R.string.pref_silent_download),
+                            summary = stringResource(R.string.pref_silent_download_summary),
+                            checked = silentUpdateDownload,
+                            onCheckedChange = { appPreferences.silentUpdateDownload = it },
+                        )
+                        ClickPreferenceRow(
+                            title = stringResource(R.string.pref_check_update),
+                            summary = if (updateCheckRunning) {
+                                stringResource(R.string.update_checking)
+                            } else {
+                                stringResource(R.string.pref_check_update_summary)
+                            },
+                            showProgress = updateCheckRunning,
+                            onClick = { checkForUpdates() },
+                        )
+                    }
+                }
             }
         }
     }

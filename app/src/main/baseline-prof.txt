@@ -1,0 +1,51 @@
+# 基线配置文件（Baseline Profile）
+#
+# 作用：告诉 ART 在安装时就把这些类/方法 AOT 编译掉，冷启动与首次进入页面不必再走 JIT。
+# 对 Compose 应用尤其重要——组合器、快照系统、布局节点全都在 APK 里，没有预热的话
+# 前几帧完全靠解释执行。
+#
+# 说明：这份清单是**手写的启动路径**（应用自身入口 + 启动期真正跑到的 Compose 运行时
+# 热点），不是 macrobenchmark 生成的全量profile。生成式的覆盖更准，但需要 arm64 的
+# release 变体 + 真机/arm 模拟器（本仓库 release 只打 arm64-v8a，而开发用的模拟器是
+# x86_64，跑不起来）。等有 arm 设备时按下面的方式替换成本文件即可：
+#
+#   ./gradlew :app:generateProprietaryReleaseBaselineProfile
+#
+# 规则语法：`L<class>;` 表示编译整类；`HSPL<class>;-><method>` 表示编译具体方法。
+
+# 应用入口与启动期直接跑到的类
+Lorg/jellyfin/mobile/JellyfinApplication;
+Lorg/jellyfin/mobile/MainActivity;
+Lorg/jellyfin/mobile/app/AppModuleKt;
+Lorg/jellyfin/mobile/ui/navigation/JellyfinNavHostKt;
+Lorg/jellyfin/mobile/ui/screens/web/WebViewHostKt;
+
+# Koin（Application.onCreate 里整个依赖图的构建）
+Lorg/koin/core/Koin;
+Lorg/koin/core/registry/ScopeRegistry;
+Lorg/koin/core/scope/Scope;
+Lorg/koin/android/ext/android/AndroidKoinScopeExtKt;
+
+# Compose 运行时：重组、快照、槽表
+Landroidx/compose/runtime/Recomposer;
+Landroidx/compose/runtime/SlotTable;
+Landroidx/compose/runtime/SnapshotStateKt;
+Landroidx/compose/runtime/ComposerImpl;
+Landroidx/compose/runtime/changelist/Operations;
+Landroidx/compose/runtime/SnapshotMutableStateImpl;
+
+# Compose UI：首帧的测量/放置与文本排版
+Landroidx/compose/ui/platform/AndroidComposeView;
+Landroidx/compose/ui/node/LayoutNode;
+Landroidx/compose/ui/node/NodeCoordinator;
+Landroidx/compose/ui/layout/MeasurePolicy;
+Landroidx/compose/ui/text/android/StaticLayoutFactory;
+
+# Navigation（启动后立刻构建导航图）
+Landroidx/navigation/NavController;
+Landroidx/navigation/NavHostController;
+Landroidx/navigation/compose/NavHostKt;
+
+# Coil（WebView 与列表里的图片加载）
+Lcoil3/ImageLoader;
+Lcoil3/request/ImageRequest;

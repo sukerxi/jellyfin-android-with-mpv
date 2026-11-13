@@ -1,0 +1,4 @@
+# Baseline profile 是 ART 逐行解析的文本格式：换行符必须保持 LF。
+# 仓库默认 core.autocrlf=true，若不固定，Windows 检出会变成 CRLF，
+# 不同机器上编译产物可能不一致。
+app/src/main/baseline-prof.txt text eol=lf
