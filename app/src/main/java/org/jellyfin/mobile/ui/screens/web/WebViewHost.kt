@@ -199,13 +199,35 @@ private fun WebViewHostContent(
     // 渲染后的失败属于 webapp 自己的运行时问题，不再整页替换。
     val webappRendered = remember { AtomicBoolean(false) }
 
+    // 第几次主文档加载。失败回调与「清空页面」之间隔了一次 post，用它判断期间有没有
+    // 发起新的加载（用户点了重试），避免把新加载的页面又清成空白。
+    val loadGeneration = remember { intArrayOf(0) }
+
+    /**
+     * 把 WebView 里已经渲染出来的内容丢弃掉。
+     *
+     * 只在主文档本身被判定加载失败时调用（见 [WebLoadFailure.discardsDocument]：连不上、
+     * 4xx/5xx、证书错误）。这时 WebView 里留着的是 Chromium 自己的错误页 —— 灰底、
+     * Android 机器人图标、满屏 "Webpage not available / net::ERR_xxx"。它和我们自己的
+     * 提示页只隔着一个 [WebViewHostState.connected] 标志：只要有一次晚到的"看起来成功"
+     * 的信号（bundle 被拦截、渲染探测把错误页正文当成网页内容），标志翻回 true，
+     * 用户看到的就是这张浏览器错误页。换成空白页，从根上让它不可能露面；
+     * 用户能看到的错误提示只由 [WebViewLoadErrorOverlay] 提供。
+     */
+    fun discardLoadedDocument(webView: WebView) {
+        webappRendered.set(false)
+        webView.loadUrl(BLANK_PAGE)
+    }
+
     val timeoutRunnable = remember {
         Runnable {
             state.connected = false
             // 超时后必须同时收掉加载圈。否则错误页与半透明加载态叠在屏幕正中：
             // 正文被按钮压住，还会看到两个「换服务器」按钮（各来自一层）。
             showLoading = false
-            // 超时不再直接清服务器会话：先让用户就地重试
+            // 超时不再直接清服务器会话：先让用户就地重试。
+            // 也不丢页面：超时只说明"还没回来"，慢服务器晚几秒仍可能把 bundle 送到，
+            // 那时照常自愈（见 onConnectedToWebapp）。
             loadFailure = WebLoadFailure(WebLoadFailure.Kind.TIMEOUT)
         }
     }
@@ -218,6 +240,9 @@ private fun WebViewHostContent(
      * React 也才刚开始挂载。加载圈必须留到真正画出内容为止，否则中间那段就是黑屏。
      */
     fun markWebappRendered(webView: WebView) {
+        // 页面已经被丢弃时，渲染信号只可能来自上一条已经作废的文档（JS 桥的排队回调）。
+        // 认了它就会把空白页点亮、错误提示收掉，用户对着白屏不知道该干什么。
+        if (loadFailure?.discardsDocument == true) return
         webappRendered.set(true)
         webView.post {
             webView.removeCallbacks(showLoadingRunnable)
@@ -235,12 +260,18 @@ private fun WebViewHostContent(
             onSelectServer(failure.retryable)
             return
         }
+        val generation = loadGeneration[0]
         webView.post {
             webView.removeCallbacks(timeoutRunnable)
             webView.removeCallbacks(showLoadingRunnable)
             state.connected = false
             showLoading = false
             loadFailure = failure
+            // 只处理"文档没起来"这一类；WEBAPP（脚本失败但文档还在）和 TIMEOUT（还在等
+            // 响应，页面并未报废）都不能清，页面还有救。
+            if (failure.discardsDocument && generation == loadGeneration[0]) {
+                discardLoadedDocument(webView)
+            }
         }
     }
 
@@ -263,6 +294,7 @@ private fun WebViewHostContent(
 
     fun reloadWebapp() {
         val webView = webViewHolder[0] ?: return
+        loadGeneration[0]++
         loadFailure = null
         showLoading = false
         webappRendered.set(false)
@@ -279,6 +311,15 @@ private fun WebViewHostContent(
     val webappLoadListener = object : NativeInterface.WebappLoadListener {
         override fun onMainBundleLoaded() {
             Timber.i("webapp main bundle loaded")
+            // 下载几乎用光了 [Constants.WEBAPP_RENDER_TIMEOUT] 时，渲染检测会在 bundle
+            // 刚下载完就判超时、闪一下错误页。下载完成意味着接下来只剩挂载，
+            // 从这里重新计时，判据才落在"React 有没有挂出来"上。
+            val webView = webViewHolder[0] ?: return
+            webView.post {
+                if (loadFailure != null || webappRendered.get()) return@post
+                webView.removeCallbacks(renderCheckRunnable)
+                webView.postDelayed(renderCheckRunnable, Constants.WEBAPP_RENDER_GRACE)
+            }
         }
 
         override fun onMainBundleFailed(url: String?) {
@@ -304,6 +345,13 @@ private fun WebViewHostContent(
                 // so all WebView/View calls and Compose state writes must be
                 // dispatched to the main thread
                 webView.post {
+                    // 页面内容已经被丢弃时（连不上、4xx/5xx、证书），再来的 bundle 请求
+                    // 一定属于上一条已死的文档、或者 service worker 的重新预取；
+                    // 点亮只会把 Chromium 留下的错误页显示给用户。
+                    // 恢复只认渲染信号（markWebappRendered）或用户点重试。
+                    // TIMEOUT / WEBAPP 相反：文档还在（或还在路上），晚到的 bundle
+                    // 就是它终于通了，照常放行。
+                    if (loadFailure?.discardsDocument == true) return@post
                     webView.removeCallbacks(timeoutRunnable)
                     state.connected = true
                     loadFailure = null
@@ -358,6 +406,7 @@ private fun WebViewHostContent(
             return
         }
         setupClients()
+        loadGeneration[0]++
         loadUrl("${server.hostname.trimEnd('/')}/")
         postDelayed(timeoutRunnable, Constants.INITIAL_CONNECTION_TIMEOUT)
         postDelayed(showLoadingRunnable, Constants.SHOW_PROGRESS_BAR_DELAY)
@@ -630,13 +679,30 @@ private fun WebViewLoadErrorOverlay(
 }
 
 /**
+ * 主文档加载失败后用来替换页面的空白页。
+ *
+ * 目的是把 Chromium 自己的错误页从视图里彻底换掉（见 handleLoadFailed），
+ * 用户能看到的错误提示只由 [WebViewLoadErrorOverlay] 提供。
+ */
+private const val BLANK_PAGE = "about:blank"
+
+/**
  * 首屏渲染探测（与注入脚本里的探测同一判据）。
  *
  * index.html 的 #reactRoot 里只有一个静态 splashLogo；登录页/首页由 React 挂载后
  * 才会出现可见文字、输入框或按钮。没有 #reactRoot 的旧版 webapp 走 body 文本兜底。
+ *
+ * 必须先排除 Chromium 自己的错误页：它正文写着 "Webpage not available" 和
+ * "net::ERR_xxx"，body 文本非空，会被后面的兜底判据当成"已渲染"，于是这张错误页
+ * 就被当作正常页面亮出来了。
  */
 private const val WEBAPP_READY_PROBE_JS =
-    """(function(){var b=document.body;""" +
+    """(function(){""" +
+        """var d=document.documentElement;""" +
+        """if(d&&d.id==='main-frame-error')return false;""" +
+        """if(document.querySelector('.error-code,#main-message'))return false;""" +
+        """var b=document.body;""" +
+        """if(b&&b.classList&&b.classList.contains('neterror'))return false;""" +
         """if(b&&(b.innerText||'').trim().length>0)return true;""" +
         """if(document.querySelector('input,button'))return true;""" +
         """var r=document.getElementById('reactRoot');""" +

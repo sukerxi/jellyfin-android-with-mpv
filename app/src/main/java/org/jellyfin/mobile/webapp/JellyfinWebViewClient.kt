@@ -71,6 +71,18 @@ data class WebLoadFailure(
             Kind.HTTP -> httpStatus == null || httpStatus in 500..599
             Kind.SSL -> false
         }
+
+    /**
+     * 这条失败是否已经把页面判死（WebView 里不再有可看的内容）。
+     *
+     * 连不上 / 4xx、5xx / 证书错误都意味着主文档本身没拿到，Chromium 会用它自己的
+     * 错误页占住视图；宿主据此丢弃页面内容，并且不再接受任何"看起来成功"的晚到信号。
+     *
+     * TIMEOUT 不算：它只说明响应还没回来，慢服务器随后把 bundle 送到时页面照常可用。
+     * WEBAPP 也不算：文档在，只是脚本没加载完，重试脚本即可恢复。
+     */
+    val discardsDocument: Boolean
+        get() = kind == Kind.NETWORK || kind == Kind.HTTP || kind == Kind.SSL
 }
 
 abstract class JellyfinWebViewClient(

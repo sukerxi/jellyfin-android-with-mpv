@@ -24,6 +24,15 @@ object Constants {
      * 避免网络不稳时停在永久黑屏上。
      */
     const val WEBAPP_RENDER_TIMEOUT = 20000L
+
+    /**
+     * 主 bundle 下载完之后，留给 React 挂载的时间。
+     *
+     * [WEBAPP_RENDER_TIMEOUT] 是从「bundle 开始下载」算起的，慢设备上光下载就能吃掉
+     * 整个预算，于是刚下载完就被判成渲染超时，先闪一下错误页再被渲染信号收掉。
+     * bundle 下载完成时重新计这一段，只考核挂载。
+     */
+    const val WEBAPP_RENDER_GRACE = 10000L
     val MAIN_BUNDLE_PATH_REGEX = Regex(""".*/main\.[^/\s]+\.bundle\.js""")
     const val CAST_SDK_PATH = "cast_sender.js"
     const val SESSION_CAPABILITIES_PATH = "sessions/capabilities/full"
