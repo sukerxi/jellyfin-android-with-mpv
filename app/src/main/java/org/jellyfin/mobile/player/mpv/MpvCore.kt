@@ -40,6 +40,11 @@ sealed interface MpvEvent {
      * @param reason why mpv ended the file, see [EndFileReason]
      * @param error the `MPV_ERROR_*` code mpv failed with; only meaningful for
      * [EndFileReason.ERROR] and 0 otherwise
+     *
+     * 注意 `keep-open=yes`（见 baseOptions）会改变这条事件的分布：正常播完时 mpv 停在最后一帧、
+     * 不卸载文件，所以**不会**有 END_FILE，结束由 `eof-reached` 属性通知；END_FILE 真正出现的
+     * 场合是「文件打不开」（设备实测：404 → `reason=ERROR error=-13 fileLoaded=false`）以及
+     * stop/quit 收尾。两路都要处理，缺一个就会出现「一直转圈」或「静默退回详情页」。
      */
     data class EndFile(val reason: EndFileReason, val error: Int) : MpvEvent
 
@@ -486,11 +491,11 @@ class MpvCore private constructor(context: Application) : KoinComponent {
                 "demuxer-max-back-bytes" to cacheBytes,
                 // AV1 film grain synthesis. mpv's default: only gpu-next (libplacebo) can
                 // synthesise grain on the GPU, every other VO falls back to CPU (dav1d).
-                // libmpv-android 的包（1.0.0 与 1.1.0）都静态链接了 libplacebo，所以上面的
-                // `vo=gpu_next,gpu` 有可能真的选中 gpu_next：那种情况下这段走 GPU，否则 mpv
-                // 回落到 gpu，退化成 CPU 合成（与旧版硬编码 "cpu" 等效）。两条路都是 mpv 的
-                // 默认行为，保持 "auto" 即可。实测 CPU 合成在 1080p24 颗粒片源上多花约 22%
-                // CPU 时间（45s 视频 11.8s vs 9.7s）。
+                // 官方 AAR（1.0.0 与 1.1.0）虽然静态链接了 libplacebo，却没有把 gpu_next 这个
+                // VO 编进去：设备日志里是 `[vo:error] Video output gpu_next not found!`，随后
+                // 回落到 `VO: [gpu]`。也就是说这里实际总是走 CPU 合成，与旧版硬编码 "cpu" 等效。
+                // 保留 "auto"（mpv 默认）以便上游某天真的编进 gpu_next 时自动走 GPU。
+                // 实测 CPU 合成在 1080p24 颗粒片源上多花约 22% CPU 时间（45s 视频 11.8s vs 9.7s）。
                 "vd-lavc-film-grain" to "auto",
                 "ytdl" to "no",
                 "cache-pause-initial" to "yes",
