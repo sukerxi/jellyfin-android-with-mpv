@@ -119,6 +119,28 @@ class MpvPlayer(
     private var decoderProvider: () -> DecoderType = { DecoderType.HARDWARE }
     private var decoderListener: (DecoderType) -> Unit = {}
 
+    private val mainHandler = Handler(looper)
+
+    /**
+     * 播放停滞看门狗：播放中位置连续几秒不往前走，就当成连接已死。
+     *
+     * 判据不是「有没有在缓冲」—— 实测断流时 mpv 并不把 `paused-for-cache` 置真，画面冻住、
+     * 音频 underrun，位置却仍以每秒几毫秒的速度爬（详见 [PlaybackStallWatchdog]）。这里只
+     * 提供位置与倍速，报不报、怎么报由 [reportPlaybackStall] 决定。
+     */
+    private val playbackStallWatchdog = PlaybackStallWatchdog(
+        scheduler = HandlerScheduler(mainHandler),
+        checkIntervalMs = PLAYBACK_STALL_CHECK_INTERVAL_MS,
+        maxStalledChecks = PLAYBACK_STALL_MAX_CHECKS,
+        warmupChecks = PLAYBACK_STALL_WARMUP_CHECKS,
+        positionMs = ::currentPositionMs,
+        speed = { MpvCore.speed },
+        onStall = ::reportPlaybackStall,
+    )
+
+    /** 上一次喂给看门狗的判定结果，只用于把重复的日志压掉。 */
+    private var stallWatchdogActive = false
+
     private val eventListener: (MpvEvent) -> Unit = { event ->
         when (event) {
             MpvEvent.StartFile -> {
@@ -210,6 +232,8 @@ class MpvPlayer(
             // in MpvCore's cache, so only the state refresh below is needed.
             MpvEvent.HotPropertyChanged -> Unit
         }
+        // 几乎所有事件都可能改变 playbackState（缓冲 / 就绪 / 结束），看门狗的计时跟着走。
+        updatePlaybackStallWatchdog()
         invalidateState()
     }
 
@@ -238,8 +262,6 @@ class MpvPlayer(
 
     /** Pending teardown posted by [handleClearVideoOutput], cancelled by a matching set. */
     private var pendingDetach: Runnable? = null
-
-    private val mainHandler = Handler(looper)
 
     /**
      * mpv 卸载了当前文件：决定这次结束对 media3 状态意味着什么。
@@ -318,6 +340,78 @@ class MpvPlayer(
         if (durationMs <= 0) return true
         // 用缓存里的 time-pos：END_FILE 之后 mpv 可能已经把它清零，而缓存保留着最后观测到的位置。
         return currentPositionMs() >= durationMs - END_OF_FILE_TOLERANCE_MS
+    }
+
+    /**
+     * 把「此刻是否本该在播放」喂给看门狗。
+     *
+     * 几个条件缺一不可，都是为了不误杀本来正常的播放：
+     * - [fileLoadedForCurrentItem]：文件还没打开（loadfile 进行中）时位置随时会被清零，不参与判断。
+     * - [firstFrameRendered]：第一帧出来之前位置本来就不动（`cache-pause-initial` 要先把缓存
+     *   填满，实测这一停可以超过 15 秒，期间 mpv 在正常下载分片）。这段时间由播放页的
+     *   加载提示负责（ACTIVE → SLOW → STUCK 九秒后给出重试），不归看门狗管 —— 少了这条，
+     *   一次冷启动填充就会被判成断流。
+     * - READY / BUFFERING：IDLE（还没起播或已停止）与 ENDED 下位置本来就不该动。
+     * - 未暂停：用户主动按了暂停，位置不动是预期行为，恢复播放时重新计时。
+     * - 未到片尾：keep-open 让 mpv 停在最后一帧，位置同样不动，但那是正常播完。
+     * - 没有待上报的错误：已经判过一次就不再重复上报。
+     *
+     * 起播之后的一段（转码数据一阵一阵地来）不在这里排除 —— 那由看门狗自己处理：它要先
+     * 攒够若干个健康周期，才开始把「位置不走」当回事（见 [PlaybackStallWatchdog]）。
+     */
+    private fun updatePlaybackStallWatchdog() {
+        val active = playbackState == STATE_READY || playbackState == STATE_BUFFERING
+        val watching = fileLoadedForCurrentItem &&
+            firstFrameRendered &&
+            active &&
+            !MpvCore.pause &&
+            !MpvCore.eofReached &&
+            pendingError == null
+        // 只在切换时打一行：排查「为什么断流了没报」时，这一行能直接指出是哪个条件不满足。
+        if (watching != stallWatchdogActive) {
+            stallWatchdogActive = watching
+            Timber.d(
+                "stall watchdog gate: watching=%b (state=%d loaded=%b frame=%b pause=%b eof=%b error=%b)",
+                watching,
+                playbackState,
+                fileLoadedForCurrentItem,
+                firstFrameRendered,
+                MpvCore.pause,
+                MpvCore.eofReached,
+                pendingError != null,
+            )
+        }
+        playbackStallWatchdog.update(watching)
+    }
+
+    /**
+     * 播放停滞：把这次卡顿当成一次普通的 IO 失败交给上层。
+     *
+     * 不能就这么让它冻着 —— mpv 会一直重试那个拉不下来的分片，永远不会自己报错。这里复用
+     * 现成的错误通路（[getState] 的 playerError → PlayerViewModel 的回退链）：先提示用户连接
+     * 有问题，再按现有策略降档 / 转码从当前进度续播。
+     *
+     * 上报前必须把 mpv 的文件卸载掉，否则回退重新起播的同时，旧文件还在后台按固定间隔重试。
+     */
+    private fun reportPlaybackStall() {
+        // 期间可能已经因为别的路径结束（stop / end-file / eof），那就什么都不用做。
+        if (pendingError != null || playbackState == STATE_IDLE || playbackState == STATE_ENDED) return
+        Timber.w(
+            "mpv playback stalled: position barely advanced for %d checks of %d ms",
+            PLAYBACK_STALL_MAX_CHECKS,
+            PLAYBACK_STALL_CHECK_INTERVAL_MS,
+        )
+        pendingError = PlaybackException(
+            "mpv playback stalled (position did not advance for about " +
+                "${PLAYBACK_STALL_MAX_CHECKS * PLAYBACK_STALL_CHECK_INTERVAL_MS} ms)",
+            null,
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+        )
+        // 主动停止 → END_FILE 走 stopRequested 分支，只把状态收回到 IDLE，不会覆盖上面的错误。
+        stopRequested = true
+        playbackState = STATE_IDLE
+        MpvCore.command(arrayOf("stop"))
+        invalidateState()
     }
 
     private val surfaceHolderCallback = object : SurfaceHolder.Callback {
@@ -542,6 +636,8 @@ class MpvPlayer(
 
     override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
         MpvCore.setProperty("pause", !playWhenReady)
+        // 暂停时撤掉断流计时（用户自己停的），恢复播放时重新开始计时。
+        updatePlaybackStallWatchdog()
         return Futures.immediateFuture(null)
     }
 
@@ -566,6 +662,9 @@ class MpvPlayer(
         // so callers reading currentPosition right after seekTo() (e.g. a quick second
         // press of "previous") don't observe the stale pre-seek position.
         pendingSeekTargetMs = targetMs
+        // seek 期间位置本来就不动（网络源可能要好几秒），停滞计时从新位置重新开始，
+        // 否则一次慢 seek 会被当成断流。
+        playbackStallWatchdog.restart()
 
         val seconds = "%.3f".format(Locale.ROOT, targetMs / 1000.0)
         MpvCore.command(arrayOf("seek", seconds, "absolute+exact"))
@@ -587,6 +686,9 @@ class MpvPlayer(
 
     override fun handleStop(): ListenableFuture<*> {
         stopRequested = true
+        // 主动停止不是断流。END_FILE 要绕一圈才回来，若让计时继续跑，它可能在用户已经离开
+        // 播放页之后抢先报错，把上层又拖进一次回退重播。
+        playbackStallWatchdog.update(false)
         MpvCore.command(arrayOf("stop"))
         return Futures.immediateFuture(null)
     }
@@ -617,6 +719,9 @@ class MpvPlayer(
         durationMs = 0
         firstFrameRendered = false
         pendingFirstFrame = false
+        // 换片：上一个文件「已起播」的结论、以及它未走完的计时都不能顺延过来。
+        playbackStallWatchdog.reset()
+        stallWatchdogActive = false
 
         // hwdec is a global runtime option, not a per-file loadfile option.
         MpvCore.setProperty(
@@ -652,6 +757,7 @@ class MpvPlayer(
 
     override fun handleRelease(): ListenableFuture<*> {
         stopRequested = true
+        playbackStallWatchdog.update(false)
         cancelPendingDetach()
         // A size that is still inside its settle window must not reach mpv after the stop below.
         mainHandler.removeCallbacks(commitSurfaceSize)
@@ -814,6 +920,33 @@ class MpvPlayer(
     private companion object {
         /** 距结尾小于该时长时视为正常播完，不当作断流。 */
         const val END_OF_FILE_TOLERANCE_MS = 5_000L
+
+        /**
+         * 播放停滞的检查周期（毫秒）。
+         *
+         * 每 3 秒做一次位置比较 —— 播放期间这点开销可以忽略，比逐帧判断省得多，也比拿
+         * mpv 的 `paused-for-cache` 可靠（断流时它并不置真，见 [PlaybackStallWatchdog]）。
+         */
+        const val PLAYBACK_STALL_CHECK_INTERVAL_MS = 3_000L
+
+        /**
+         * 连续多少个检查周期都没走够进度就判死（3s × 5 ≈ 15 秒）。
+         *
+         * 取 15 秒：Jellyfin 的 HLS 分片是 3 秒一个，健康连接上位置几乎严格跟着墙上时钟走；
+         * 整整 15 秒只爬了不到一半，链路实际上已经不可用了。mpv 自己按 30 秒的节奏重试分片，
+         * 等它报错意味着用户先盯着冻结的画面半分钟以上；这里提前判死交给上层回退（通常降档
+         * 转码），恢复得更快。
+         */
+        const val PLAYBACK_STALL_MAX_CHECKS = 5
+
+        /**
+         * 连续多少个周期都走满进度，才算「播放稳定了」（3s × 5 = 15 秒）。
+         *
+         * 在此之前（起播、转码冷启动、断流后重试）数据是一阵一阵来的：位置可能先走一两秒，
+         * 再停十几秒等转码追上来。把这些等待算成停滞，会把一次正常的慢启动误判成断流 ——
+         * 实测就是这么误报的，所以宁可晚 15 秒开始判断。
+         */
+        const val PLAYBACK_STALL_WARMUP_CHECKS = 5
 
         /**
          * 尺寸变化后要静置多久才下发给 mpv（毫秒）。
