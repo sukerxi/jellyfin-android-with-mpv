@@ -21,6 +21,7 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import org.jellyfin.mobile.player.ui.DecoderType
 import org.jellyfin.mobile.utils.Constants
+import timber.log.Timber
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.abs
@@ -150,48 +151,7 @@ class MpvPlayer(
                 // well, hence the pause check.
                 if (MpvCore.pause) playbackState = STATE_READY
             }
-            MpvEvent.EndFile -> {
-                if (!loadingNewFile) {
-                    // Distinguish natural end of file from manual stop / load errors.
-                    // With keep-open=yes natural EOF usually arrives via MpvEvent.EofReached
-                    // instead, but keep this as a fallback for stop-less EOF reporting.
-                    // eof-reached comes from the observer cache (never a synchronous read on
-                    // this main-thread handler - see readDurationMs).
-                    val eofReached = MpvCore.eofReached
-                    when {
-                        stopRequested -> playbackState = STATE_IDLE
-                        !fileLoadedForCurrentItem -> {
-                            // mpv never reached FILE_LOADED for the current item and playback ended
-                            // without an explicit stop: the stream could not be opened/decoded
-                            // (e.g. a direct-play source allowed by the relaxed codec profiles that
-                            // mpv itself cannot handle). Report an error so PlayerViewModel falls back
-                            // to direct stream / transcoding instead of hanging in STATE_IDLE.
-                            pendingError = PlaybackException(
-                                "mpv failed to open the media stream",
-                                null,
-                                PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
-                            )
-                            playbackState = STATE_IDLE
-                        }
-                        // 文件已经播放过：判断"正常播完"还是"中途断流"。
-                        //
-                        // 不能只看 eof-reached：流被截断时 mpv 同样会把 eof-reached 置真
-                        // （日志为 `http: Stream ends prematurely` → `end-file`），于是旧逻辑
-                        // 走 STATE_ENDED，播放页当成"播完了"直接关闭，用户只看到退回详情页，
-                        // 完全不知道是断网。播放位置才是可靠的判据 —— 距结尾还差一大截就结束，
-                        // 一定是被打断的。
-                        isEndOfFileNearEnd() -> playbackState = if (eofReached) STATE_ENDED else STATE_IDLE
-                        else -> {
-                            pendingError = PlaybackException(
-                                "mpv playback ended before the end of the file (stream interrupted)",
-                                null,
-                                PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
-                            )
-                            playbackState = STATE_IDLE
-                        }
-                    }
-                }
-            }
+            is MpvEvent.EndFile -> if (!loadingNewFile) handleEndFile(event)
             MpvEvent.PlaybackRestart -> {
                 playbackState = STATE_READY
                 // Note: the pending seek target is intentionally NOT cleared here. mpv emits
@@ -280,6 +240,73 @@ class MpvPlayer(
     private var pendingDetach: Runnable? = null
 
     private val mainHandler = Handler(looper)
+
+    /**
+     * mpv 卸载了当前文件：决定这次结束对 media3 状态意味着什么。
+     *
+     * libmpv-android 1.1.0 起事件里带着 mpv 自己给出的 reason（以及 ERROR 时的错误码），
+     * 所以「有没有走到 FILE_LOADED」「是不是主动 stop」这两条反推逻辑退居兜底：mpv 的判定
+     * 比我们从播放位置反推更准，尤其是它终于能把「文件打不开」和「播放中途失败」分开。
+     */
+    private fun handleEndFile(event: MpvEvent.EndFile) {
+        // eof-reached 来自观察者缓存，绝不在这里同步读取（主线程，见 readDurationMs）。
+        val eofReached = MpvCore.eofReached
+        Timber.d(
+            "mpv end-file: reason=%s error=%d eofReached=%b fileLoaded=%b stopRequested=%b",
+            event.reason,
+            event.error,
+            eofReached,
+            fileLoadedForCurrentItem,
+            stopRequested,
+        )
+        when {
+            // 主动 stop（切集 / 退出播放页）与实例退出都属正常收尾，不产生错误。
+            stopRequested ||
+                event.reason == MpvEvent.EndFileReason.STOP ||
+                event.reason == MpvEvent.EndFileReason.QUIT -> playbackState = STATE_IDLE
+
+            // mpv 明确报错。出过画面说明是播放中途失败（读取/连接断），否则就是根本打不开；
+            // 两者都交给上层回退，但错误码不同：前者按网络中断，上层会立刻提示用户。
+            event.reason == MpvEvent.EndFileReason.ERROR -> {
+                pendingError = PlaybackException(
+                    "mpv ended playback with error ${event.error}",
+                    null,
+                    if (fileLoadedForCurrentItem) {
+                        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
+                    } else {
+                        PlaybackException.ERROR_CODE_IO_UNSPECIFIED
+                    },
+                )
+                playbackState = STATE_IDLE
+            }
+
+            // 兜底：mpv 没给错误码又没走到 FILE_LOADED，仍按「打不开」处理 —— 直连源被放宽的
+            // codec profile 放进来、mpv 自己却解不了时走的就是这条路，必须报错让上层回退，
+            // 否则播放页会一直停在 STATE_IDLE。
+            !fileLoadedForCurrentItem -> {
+                pendingError = PlaybackException(
+                    "mpv failed to open the media stream",
+                    null,
+                    PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
+                )
+                playbackState = STATE_IDLE
+            }
+
+            // 已播放过：判断「正常播完」还是「中途断流」。不能只看 eof-reached —— 流被截断时
+            // mpv 同样报 EOF（日志 `http: Stream ends prematurely` → `end-file`），只看它会把
+            // 断网当成播完，播放页静默关闭退回详情页。播放位置距结尾还差一大截，一定是被打断。
+            isEndOfFileNearEnd() -> playbackState = if (eofReached) STATE_ENDED else STATE_IDLE
+
+            else -> {
+                pendingError = PlaybackException(
+                    "mpv playback ended before the end of the file (stream interrupted)",
+                    null,
+                    PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+                )
+                playbackState = STATE_IDLE
+            }
+        }
+    }
 
     /**
      * 结束播放时的位置是否已经接近片尾。

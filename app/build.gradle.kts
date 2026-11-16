@@ -209,9 +209,8 @@ dependencies {
     proprietaryImplementation(libs.bundles.playservices)
     implementation(libs.libass.media)
 
-    // libmpv-android：自建 mpv 0.42.0（上游 Maven 最新 1.0.0 仍是 0.41.0）
-    // 产物由 .cnb.yml 的 build-libmpv 流水线编译，版本来源见 libs/*.info.txt
-    implementation(files(rootProject.file("libs/libmpv-0.42.0-custom.aar")))
+    //#libmpv-android
+    implementation(libs.libmpv.android)
 
     // Room
     implementation(libs.bundles.androidx.room)

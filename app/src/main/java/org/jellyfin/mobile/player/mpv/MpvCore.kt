@@ -11,6 +11,7 @@ import dev.jdtech.mpv.MPVLib
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import org.jellyfin.mobile.BuildConfig
 import org.jellyfin.mobile.app.AppPreferences
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
@@ -27,7 +28,42 @@ import java.util.concurrent.Executors
 sealed interface MpvEvent {
     data object StartFile : MpvEvent
     data object FileLoaded : MpvEvent
-    data object EndFile : MpvEvent
+
+    /**
+     * mpv unloaded the current file.
+     *
+     * Since libmpv-android 1.1.0 this arrives through [MPVLib.EventObserver.eventEndFile];
+     * `MPV_EVENT_END_FILE` is no longer delivered to [MPVLib.EventObserver.event]. The event now
+     * also carries mpv's own verdict on why the file ended, instead of leaving the player to
+     * infer it from the playback position.
+     *
+     * @param reason why mpv ended the file, see [EndFileReason]
+     * @param error the `MPV_ERROR_*` code mpv failed with; only meaningful for
+     * [EndFileReason.ERROR] and 0 otherwise
+     */
+    data class EndFile(val reason: EndFileReason, val error: Int) : MpvEvent
+
+    /** Why mpv ended the file; mirrors mpv's `MPV_END_FILE_REASON_*` constants. */
+    enum class EndFileReason {
+        /** The file played to the end (an interrupted stream reports EOF as well). */
+        EOF,
+
+        /** Playback was stopped by the app via the `stop` command. */
+        STOP,
+
+        /** The mpv instance is being destroyed. */
+        QUIT,
+
+        /** Playback failed; [EndFile.error] holds the mpv error code. */
+        ERROR,
+
+        /** A playlist entry redirected to another one. */
+        REDIRECT,
+
+        /** A reason this wrapper version does not know. */
+        UNKNOWN,
+    }
+
     data object PlaybackRestart : MpvEvent
     data object Seek : MpvEvent
 
@@ -214,13 +250,8 @@ class MpvCore private constructor(context: Application) : KoinComponent {
     }
 
     private val mpvLibEventObserver = object : MPVLib.EventObserver {
-        override fun eventProperty(property: String) {
-            // Nothing to cache without a value; every property observed with a format below
-            // arrives through the typed overloads instead.
-        }
-
-        override fun eventProperty(property: String, value: Long) {}
-
+        // 1.1.0 给 EventObserver 的每个方法都加了空默认实现，所以只实现真正用到的重载：
+        // 下面 observeProperties 里的属性都带格式观察，值直接随变更事件送达。
         override fun eventProperty(property: String, value: Double) {
             when (property) {
                 "duration" -> {
@@ -286,18 +317,40 @@ class MpvCore private constructor(context: Application) : KoinComponent {
             val event = when (eventId) {
                 MPVLib.MpvEvent.MPV_EVENT_START_FILE -> MpvEvent.StartFile
                 MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> MpvEvent.FileLoaded
-                MPVLib.MpvEvent.MPV_EVENT_END_FILE -> MpvEvent.EndFile
                 MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> MpvEvent.PlaybackRestart
                 MPVLib.MpvEvent.MPV_EVENT_SEEK -> MpvEvent.Seek
                 else -> return
             }
             postEvent(event)
         }
+
+        /**
+         * mpv ended the current file.
+         *
+         * `MPV_EVENT_END_FILE` deliberately does not reach [event] since libmpv-android 1.1.0:
+         * the wrapper intercepts it in native code and hands over the reason and error code here,
+         * which the generic event callback cannot carry.
+         */
+        override fun eventEndFile(reason: Int, error: Int) {
+            postEvent(MpvEvent.EndFile(reason = endFileReason(reason), error = error))
+        }
+    }
+
+    private fun endFileReason(reason: Int): MpvEvent.EndFileReason = when (reason) {
+        MPVLib.MpvEndFileReason.MPV_END_FILE_REASON_EOF -> MpvEvent.EndFileReason.EOF
+        MPVLib.MpvEndFileReason.MPV_END_FILE_REASON_STOP -> MpvEvent.EndFileReason.STOP
+        MPVLib.MpvEndFileReason.MPV_END_FILE_REASON_QUIT -> MpvEvent.EndFileReason.QUIT
+        MPVLib.MpvEndFileReason.MPV_END_FILE_REASON_ERROR -> MpvEvent.EndFileReason.ERROR
+        MPVLib.MpvEndFileReason.MPV_END_FILE_REASON_REDIRECT -> MpvEvent.EndFileReason.REDIRECT
+        else -> MpvEvent.EndFileReason.UNKNOWN
     }
 
     companion object {
         private val json = Json { ignoreUnknownKeys = true }
         private val eventListeners: CopyOnWriteArrayList<(MpvEvent) -> Unit> = CopyOnWriteArrayList()
+
+        /** mpv log level floor for release builds: hides the verbose lines carrying the URL. */
+        private const val RELEASE_LOG_LEVEL = "info"
 
         /**
          * Serial executor for every libmpv client call: the native initialization,
@@ -433,12 +486,11 @@ class MpvCore private constructor(context: Application) : KoinComponent {
                 "demuxer-max-back-bytes" to cacheBytes,
                 // AV1 film grain synthesis. mpv's default: only gpu-next (libplacebo) can
                 // synthesise grain on the GPU, every other VO falls back to CPU (dav1d).
-                // The bundled libmpv ships without libplacebo, so `gpu_next` is unavailable
-                // and this resolves to CPU - i.e. identical to the old hard-coded "cpu".
-                // Measured on the 1080p24 grain clip: synthesis costs ~22% extra CPU time
-                // (11.8s vs 9.7s user time per 45s of video), so it is real work, just not
-                // work this build can hand to the GPU. Kept as "auto" so a future libmpv
-                // built with libplacebo picks up GPU synthesis without another change.
+                // libmpv-android 的包（1.0.0 与 1.1.0）都静态链接了 libplacebo，所以上面的
+                // `vo=gpu_next,gpu` 有可能真的选中 gpu_next：那种情况下这段走 GPU，否则 mpv
+                // 回落到 gpu，退化成 CPU 合成（与旧版硬编码 "cpu" 等效）。两条路都是 mpv 的
+                // 默认行为，保持 "auto" 即可。实测 CPU 合成在 1080p24 颗粒片源上多花约 22%
+                // CPU 时间（45s 视频 11.8s vs 9.7s）。
                 "vd-lavc-film-grain" to "auto",
                 "ytdl" to "no",
                 "cache-pause-initial" to "yes",
@@ -601,6 +653,11 @@ class MpvCore private constructor(context: Application) : KoinComponent {
         this.mpv = mpv
         baseOptions(context).forEach { (name, value) -> mpv.setOptionString(name, value) }
         mpv.init()
+        // libmpv-android 1.1.0 起可以限制 mpv 打进 logcat 的日志级别。默认是 "v"：连 verbose
+        // 都会输出，而 verbose 里带着完整的播放 URL —— Jellyfin 的 api_key 就在 URL 上，
+        // 任何能读 logcat 的应用都能捡到。release 只保留 info 及以上（http 错误、VO/解码器
+        // 初始化等仍在），debug 保持默认，排查播放问题时日志一条不少。
+        if (!BuildConfig.DEBUG) mpv.requestLogMessages(RELEASE_LOG_LEVEL)
         // mpv lets pre-init options (its equivalent of command-line options) win over mpv.conf, and
         // `profile=fast` above is one of them - it would pin scale/dscale/dither to their cheapest
         // values no matter what the user wrote. Re-applying the config on the live instance is what

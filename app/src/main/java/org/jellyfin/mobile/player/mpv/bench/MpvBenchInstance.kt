@@ -63,17 +63,20 @@ internal class MpvBenchInstance(
     private var candidateOptionKeys: List<String> = emptyList()
 
     private val observer = object : MPVLib.EventObserver {
-        override fun event(eventId: Int) {
-            // Never block here: this runs on mpv's own event thread.
-            if (events.size >= MAX_QUEUED_EVENTS) events.poll()
-            events.offer(eventId)
-        }
+        override fun event(eventId: Int) = queueEvent(eventId)
 
-        override fun eventProperty(property: String) = Unit
-        override fun eventProperty(property: String, value: Long) = Unit
-        override fun eventProperty(property: String, value: Double) = Unit
-        override fun eventProperty(property: String, value: Boolean) = Unit
-        override fun eventProperty(property: String, value: String) = Unit
+        /**
+         * libmpv-android 1.1.0 起 `MPV_EVENT_END_FILE` 不再经过 [event]，改由这个回调送达。
+         * [awaitEvent] 仍按事件 id 判断「出画前播放就结束了」，所以这里把它补回队列。
+         */
+        override fun eventEndFile(reason: Int, error: Int) =
+            queueEvent(MPVLib.MpvEvent.MPV_EVENT_END_FILE)
+    }
+
+    /** Never blocks: this runs on mpv's own event thread. */
+    private fun queueEvent(eventId: Int) {
+        if (events.size >= MAX_QUEUED_EVENTS) events.poll()
+        events.offer(eventId)
     }
 
     /**
