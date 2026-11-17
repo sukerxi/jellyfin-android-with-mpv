@@ -927,6 +927,11 @@ fun PlayerScreen(
         onPressSpeedUp = { pressing ->
             viewModel.setPressSpeedUp(pressing, Constants.HOLD_SPEEDUP_MULTIPLIER)
         },
+        // 长按左半屏快退：播放器不支持负倍速，只能先暂停再按速率往回 seek，松手恢复。
+        // 走 ViewModel 而不是直接 player.pause()/play()：后者会绕过 closedByUser 闩锁，
+        // 让「应用退到后台自动暂停」的恢复逻辑误判（见 PlayerViewModel.play 的注释）。
+        onHoldRewindPause = { viewModel.pause() },
+        onHoldRewindResume = { viewModel.play() },
         onZoomChanged = { enabled ->
             playerViewHolder[0]?.resizeMode = if (enabled) {
                 AspectRatioFrameLayout.RESIZE_MODE_ZOOM

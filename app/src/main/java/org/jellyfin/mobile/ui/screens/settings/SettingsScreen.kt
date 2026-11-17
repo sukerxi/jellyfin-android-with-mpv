@@ -94,8 +94,8 @@ fun SettingsScreen(
         .collectAsState(initial = appPreferences.exoPlayerAllowSwipeGestures)
     val rememberBrightness by appPreferences.exoPlayerRememberBrightnessFlow
         .collectAsState(initial = appPreferences.exoPlayerRememberBrightness)
-    val allowPressSpeedUp by appPreferences.exoPlayerAllowPressSpeedUpFlow
-        .collectAsState(initial = appPreferences.exoPlayerAllowPressSpeedUp)
+    val allowHoldSeek by appPreferences.exoPlayerAllowHoldSeekFlow
+        .collectAsState(initial = appPreferences.exoPlayerAllowHoldSeek)
     val allowBackgroundAudio by appPreferences.exoPlayerAllowBackgroundAudioFlow
         .collectAsState(initial = appPreferences.exoPlayerAllowBackgroundAudio)
     val allowHorizontalGesture by appPreferences.exoPlayerAllowHorizontalGestureFlow
@@ -281,8 +281,8 @@ fun SettingsScreen(
                         SwitchPreferenceRow(
                             title = stringResource(R.string.pref_exoplayer_allow_press_speed_up),
                             summary = stringResource(R.string.pref_exoplayer_allow_press_speed_up_summary),
-                            checked = allowPressSpeedUp,
-                            onCheckedChange = { appPreferences.exoPlayerAllowPressSpeedUp = it },
+                            checked = allowHoldSeek,
+                            onCheckedChange = { appPreferences.exoPlayerAllowHoldSeek = it },
                         )
                         SwitchPreferenceRow(
                             title = stringResource(R.string.pref_exoplayer_allow_background_audio),

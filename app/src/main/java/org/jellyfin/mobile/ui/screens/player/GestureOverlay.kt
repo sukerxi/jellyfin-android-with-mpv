@@ -34,6 +34,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -102,6 +103,12 @@ fun GestureOverlay(
     onSurfaceSizeChanged: (IntSize) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // 离开播放页/播放器重建时把手势造成的临时播放状态还原（长按快退会先暂停播放）。
+    // 协程随组合一起被取消，这一步是唯一能保证「暂停」不泄漏的地方。
+    DisposableEffect(handler) {
+        onDispose { handler.onHostDisposed() }
+    }
+
     // 只负责接收指针输入、上报手势区域大小；指示器由 [GestureIndicatorsOverlay] 画在控件层之上。
     Box(
         modifier = modifier
@@ -207,9 +214,9 @@ fun Modifier.playerGestureInput(handler: PlayerGestureHandler): Modifier = this
             }
 
             if (endedBeforeTimeout == null) {
-                // 长按已生效：继续等抬手/拖拽，但不再产生轻点。
+                // 长按已生效：继续等抬手/拖拽，但不再产生轻点。方向由按下点决定（左右半屏）。
                 longPressTriggered = true
-                handler.onLongPressStarted()
+                handler.onLongPressStarted(down.position)
                 while (up == null && !canceled) {
                     val event = awaitPointerEvent()
                     if (event.changes.count { it.pressed } > 1) {

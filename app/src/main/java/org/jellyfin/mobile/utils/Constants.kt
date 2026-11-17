@@ -52,6 +52,13 @@ object Constants {
     const val PREF_VIDEO_PLAYER_TYPE = "pref_video_player_type"
     const val PREF_EXOPLAYER_START_LANDSCAPE_VIDEO_IN_LANDSCAPE = "pref_exoplayer_start_landscape_video_in_landscape"
     const val PREF_EXOPLAYER_ALLOW_SWIPE_GESTURES = "pref_exoplayer_allow_swipe_gestures"
+
+    /**
+     * 长按快进/快退开关。
+     *
+     * 键名里的 "press_speed_up" 是历史命名（当时只有右半屏的倍速快进），现在同时控制
+     * 左半屏的连续快退。键名不能改：DataStore 里已经落盘的取值要靠它找回来。
+     */
     const val PREF_EXOPLAYER_ALLOW_PRESS_SPEED_UP = "pref_exoplayer_allow_press_speed_up"
     const val PREF_EXOPLAYER_REMEMBER_BRIGHTNESS = "pref_exoplayer_remember_brightness"
     const val PREF_EXOPLAYER_BRIGHTNESS = "pref_exoplayer_brightness"
@@ -245,7 +252,33 @@ object Constants {
     const val FULL_SWIPE_RANGE_SCREEN_RATIO = 0.66f
     const val SCREEN_BRIGHTNESS_MAX = 255
     const val SCREEN_BRIGHTNESS_DEFAULT = 128f
+    /** 长按右半屏时的播放倍率：平滑倍速，保留音轨，音调不变。 */
     const val HOLD_SPEEDUP_MULTIPLIER = 3f
+
+    /**
+     * 长按快退的速率：每按住 1 秒，媒体时间回退的秒数。
+     *
+     * 与 [HOLD_SPEEDUP_MULTIPLIER] 取同一个数值不是巧合。按住同样长的时间，向左退多远、
+     * 向右进多远必须一样，用户才能建立「按住 1 秒 ≈ 3 秒内容」的一致预期；两个方向取
+     * 不同的速率，会让同一个手势在左右两侧的「手感」完全不同。
+     */
+    const val HOLD_REWIND_RATE = HOLD_SPEEDUP_MULTIPLIER
+
+    /**
+     * 长按快退期间真正下发 seek 的间隔。
+     *
+     * 每次 seek 都要从关键帧重新解码；网络源（Jellyfin 转码 HLS 或 mpv）一次 seek 甚至
+     * 要几百毫秒。间隔太短只会让 seek 在播放器里排队，画面反而更卡。500ms 约等于每秒
+     * 两帧的「倒带预览」：足以看清画面在往回走，又不会压垮解码器。
+     *
+     * HUD 的刷新频率不跟着它走（见 [HOLD_REWIND_HUD_INTERVAL_MS]）：时间和进度条要连续，
+     * 落点预览和实际 seek 是两件事。
+     */
+    const val HOLD_REWIND_SEEK_INTERVAL_MS = 500L
+
+    /** 长按快退 HUD 的刷新间隔。 */
+    const val HOLD_REWIND_HUD_INTERVAL_MS = 50L
+
     const val ZOOM_SCALE_BASE = 1f
     const val ZOOM_SCALE_THRESHOLD = 0.01f
     val ASPECT_RATIO_16_9 = Rational(16, 9)
