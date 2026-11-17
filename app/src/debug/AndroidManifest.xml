@@ -17,6 +17,13 @@
             android:exported="true"
             android:label="SettingsHarness"
             android:theme="@style/AppTheme" />
+
+        <activity
+            android:name="org.jellyfin.mobile.perf.PlayerGestureHarnessActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
+            android:label="GestureHarness"
+            android:theme="@style/AppTheme" />
     </application>
 
 </manifest>
