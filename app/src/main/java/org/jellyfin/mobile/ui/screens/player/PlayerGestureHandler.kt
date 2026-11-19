@@ -1,7 +1,6 @@
 package org.jellyfin.mobile.ui.screens.player
 
 import android.media.AudioManager
-import android.os.SystemClock
 import android.provider.Settings
 import android.view.Window
 import android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_FULL
@@ -19,8 +18,8 @@ import androidx.compose.ui.unit.IntSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.utils.Constants
@@ -29,15 +28,14 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * 阶段 5：手势逻辑（亮度/音量/横向 seek/双击/长按快进快退/缩放）。
+ * 阶段 5：手势逻辑（亮度/音量/横向 seek/双击/长按倍速/缩放）。
  *
  * 由原 [org.jellyfin.mobile.player.ui.PlayerGestureHelper] 平移而来：
  * 所有 View 操作改为写入快照状态（[indicator]/[seekIndicator]/[doubleTapToggle]/[ripple]），
  * 由 GestureOverlay 渲染；与播放器的交互通过构造回调转发。
  *
- * 长按按屏幕中线分成两个方向，与双击保持一致的分区：
- * - 右半屏：倍速快进。走播放器自己的 playback speed，画面与声音连续，不需要反复 seek。
- * - 左半屏：连续快退。播放器不支持负倍速，只能「暂停 + 按速率往回 seek」，见 [startHoldRewind]。
+ * 长按只有一个动作：临时倍速。走播放器自己的 playback speed，画面与声音连续，不需要
+ * 反复 seek，也不必先暂停。方向交给双击与进度条：双击左右半屏各跳一步，长按不分区。
  */
 
 /** 亮度/音量指示器状态。 */
@@ -96,6 +94,14 @@ class PlayerGestureHandler(
     private val isLandscape: () -> Boolean,
     private val isLocked: () -> Boolean,
     private val getPlayer: () -> Player?,
+    /**
+     * 宿主是否仍在等播放器出画面（起播 / 缓冲）。
+     *
+     * seek 只是一次「下达」：卡片收起时画面往往还没回来，屏幕正中会紧接着冒出加载圈。
+     * 这个状态让卡片多留一会儿，把转圈收进卡片里（见 [hideIndicatorsAfterTimeout]）。
+     * 它由 UI 侧给出而不是直接读播放器：这里要的正是界面认定的「等待」区间，含滞回。
+     */
+    private val isWaitingForPlayback: () -> Boolean,
     private val onToggleControls: () -> Unit,
     private val onPeekUnlockButton: () -> Unit,
     private val onTogglePlayPause: () -> Unit,
@@ -103,10 +109,6 @@ class PlayerGestureHandler(
     private val onFastForward: () -> Unit,
     private val onRewind: () -> Unit,
     private val onPressSpeedUp: (Boolean) -> Unit,
-    /** 长按快退开始：先暂停播放，避免「播放向前、倒带向后」在两次 seek 之间互相拉扯。 */
-    private val onHoldRewindPause: () -> Unit,
-    /** 长按快退结束：恢复按下前的播放状态（按下前就是暂停的，松手后保持暂停）。 */
-    private val onHoldRewindResume: () -> Unit,
     private val onZoomChanged: (Boolean) -> Unit,
     private val onHideControls: () -> Unit,
     /** 双击的第二击已经按下（双击动作还在等抬手）：宿主据此作废第一击挂起的「稍后显示控件」。 */
@@ -127,17 +129,8 @@ class PlayerGestureHandler(
     var speedBoostActive: Boolean by mutableStateOf(false)
         private set
 
-    /** 长按快退的位置模型；非 null 表示快退手势正在进行。 */
-    private var holdRewind: HoldRewindTracker? = null
-    private var holdRewindJob: Job? = null
-    private var holdRewindStartedAtMs = 0L
-    private var holdRewindLastSeekAtMs = 0L
-
-    /** 最近一次已下发的快退目标；相同目标不再重复 seek（退到片头后就该彻底停下来）。 */
-    private var holdRewindLastSeekTargetMs = -1L
-
-    /** 快退开始前是否在播放：只有本来在播，松手才恢复播放。 */
-    private var holdRewindResumeOnRelease = false
+    /** 当前这次「延迟收起 HUD」的协程；新手势收尾时替换掉旧的。 */
+    private var hideIndicatorsJob: Job? = null
 
     private var currentGesture = GestureDirection.NONE
     private var dragStartPosition: Offset? = null
@@ -258,26 +251,14 @@ class PlayerGestureHandler(
     /**
      * 长按开始（由手势探测器的长按回调触发，超过系统长按阈值且未发生拖拽时）。
      *
-     * [position] 是按下点，用来决定方向：右半屏倍速快进、左半屏连续快退。分区与双击
-     * 完全一致（见 [onDoubleTap]），用户不必为「长按」再记一套左右规则。
+     * 不分左右：长按就是「临时倍速」，与 YouTube / 各大播放器一致。曾经左半屏是「连续
+     * 快退」，但它要暂停播放、每 500ms 下发一次 seek（每次都要关键帧重解码），预览只有
+     * 两帧每秒；而它唯一的信息量——「我要往回找几秒」——双击和进度条已经能给，且不会
+     * 顺手把正在播的内容停住。同一个手势在左右两侧语义相反，误触的代价也不对等。
      */
-    fun onLongPressStarted(position: Offset) {
-        if (isLocked() || !appPreferences.exoPlayerAllowHoldSeek) return
+    fun onLongPressStarted() {
+        if (isLocked() || !appPreferences.exoPlayerAllowPressSpeedUp) return
 
-        val width = sizeProvider().width
-        if (width <= 0) return
-
-        if (position.x >= width / 2f) {
-            startHoldSpeedUp()
-        } else {
-            startHoldRewind()
-        }
-    }
-
-    /** 右半屏：倍速快进。交给播放器的 playback speed，画面与声音连续，且不需要反复 seek。 */
-    private fun startHoldSpeedUp() {
-        // 防御性收尾：两个方向的长按不会同时成立，但手势被系统打断的边界上宁可先还原。
-        stopHoldRewind()
         if (isOnPressingSpeedUp) return
         isOnPressingSpeedUp = true
         speedBoostActive = true
@@ -285,115 +266,18 @@ class PlayerGestureHandler(
     }
 
     /**
-     * 左半屏：连续快退。
-     *
-     * 播放器没有负倍速，唯一可行的实现是「暂停 + 按固定速率往回 seek」：
-     * 1. 先记住按下瞬间的位置作为基准点（而不是每次 tick 读当前位置——那样会随着 seek
-     *    的异步落地越退越慢，HUD 也会跟着抖）；
-     * 2. 播放中的话先暂停：否则两次 seek 之间画面仍向前走，用户看到的是「退一点、进一点」；
-     * 3. 用协程按真实时钟推进目标位置；HUD 每 [Constants.HOLD_REWIND_HUD_INTERVAL_MS] 刷新，
-     *    实际 seek 按 [Constants.HOLD_REWIND_SEEK_INTERVAL_MS] 节流；
-     * 4. 抬手时再补一次精确的 seek，并把播放状态还原。
-     */
-    private fun startHoldRewind() {
-        // 防御性收尾：两个方向的长按不会同时成立，但手势被系统打断的边界上宁可先还原。
-        releaseSpeedUp()
-
-        val player = getPlayer() ?: return
-        val duration = player.duration
-        // 直播或时长未知（C.TIME_UNSET）时没有可退的目标，也不能拿这个值做算术。
-        if (duration <= 0L) return
-        val anchor = player.currentPosition
-        // 已经在片头：没有可退的距离，不该弹一个永远停在 00:00 的 HUD。
-        if (anchor <= 0L) return
-
-        holdRewind = HoldRewindTracker(anchorPositionMs = anchor, durationMs = duration)
-        holdRewindStartedAtMs = SystemClock.elapsedRealtime()
-        holdRewindLastSeekAtMs = holdRewindStartedAtMs
-        holdRewindLastSeekTargetMs = anchor
-        holdRewindResumeOnRelease = player.isPlaying
-        if (holdRewindResumeOnRelease) onHoldRewindPause()
-
-        publishHoldRewindHud(heldMs = 0L)
-
-        holdRewindJob?.cancel()
-        holdRewindJob = scope.launch {
-            while (isActive) {
-                delay(Constants.HOLD_REWIND_HUD_INTERVAL_MS)
-                tickHoldRewind()
-            }
-        }
-    }
-
-    /**
-     * 推进一次快退。
-     *
-     * 时间一律用 [SystemClock.elapsedRealtime] 算，而不是累加 tick 间隔：`delay` 会被
-     * 主线程上的重组/渲染推迟，累加会把每次延迟都变成落点的漂移；按真实时钟换算，
-     * 无论中间丢了多少帧，松手时的位置都等于「按住了多久 × 速率」。
-     */
-    private fun tickHoldRewind() {
-        val tracker = holdRewind ?: return
-        val heldMs = SystemClock.elapsedRealtime() - holdRewindStartedAtMs
-
-        publishHoldRewindHud(heldMs)
-
-        val target = tracker.targetPositionMs(heldMs)
-        // 已经退到片头：目标不再变化，继续 seek 只会反复重解码同一帧。
-        if (target == holdRewindLastSeekTargetMs) return
-        val now = SystemClock.elapsedRealtime()
-        if (now - holdRewindLastSeekAtMs < Constants.HOLD_REWIND_SEEK_INTERVAL_MS) return
-        holdRewindLastSeekAtMs = now
-        holdRewindLastSeekTargetMs = target
-        onSeekTo(target)
-    }
-
-    /** 快退 HUD 复用横向拖拽的那张卡片：倒带图标、`-mm:ss`、落点/片长、进度条。 */
-    private fun publishHoldRewindHud(heldMs: Long) {
-        val tracker = holdRewind ?: return
-        seekIndicator = SeekIndicator(
-            forward = false,
-            seekText = "-${formatSeekOverlayTime(tracker.offsetMs(heldMs))}",
-            positionText = "${formatTime(tracker.targetPositionMs(heldMs))} / ${formatTime(tracker.durationMs)}",
-            progress = tracker.progress(heldMs),
-        )
-    }
-
-    /**
-     * 结束长按快退。
-     *
-     * @param resumePlayback 松手、拖拽接管时为 true（恢复到按下前的状态）；宿主销毁时为
-     * false —— 播放页正在退场，不该在关闭路上把声音重新放出来。
-     */
-    private fun stopHoldRewind(resumePlayback: Boolean = true) {
-        val tracker = holdRewind ?: return
-        holdRewind = null
-        holdRewindJob?.cancel()
-        holdRewindJob = null
-
-        // 中途的 seek 只是预览，抬手这一刻才是用户选定的落点。若刚好已经 seek 到同一位置，
-        // 再下发一次没有意义。
-        val heldMs = SystemClock.elapsedRealtime() - holdRewindStartedAtMs
-        val target = tracker.targetPositionMs(heldMs)
-        if (target != holdRewindLastSeekTargetMs) {
-            holdRewindLastSeekTargetMs = target
-            onSeekTo(target)
-        }
-
-        if (resumePlayback && holdRewindResumeOnRelease) onHoldRewindResume()
-        holdRewindResumeOnRelease = false
-        hideIndicatorsAfterTimeout()
-    }
-
-    /**
      * 宿主销毁（离开播放页、播放器重建）时的兜底。
      *
-     * 长按快退会先把播放暂停；承载 tick 的协程随组合一起被取消，没人恢复的话播放器会
-     * 停在莫名其妙的暂停态。倍速同理——这里把两类临时状态都还原。
+     * 临时倍速写在播放器上，不是写在本类里：播放页退场时没人还原的话，下一个页面
+     * 会以 3× 继续放。这里把它清掉。
      */
     fun onHostDisposed() {
         releaseSpeedUp()
-        stopHoldRewind(resumePlayback = false)
+        // 页面正在退场：卡片不必再等首帧（那段时间也没有下一次组合去画它），
+        // 直接清空，免得同一个 handler 被重新挂载时先闪一帧旧 HUD。
+        hideIndicatorsJob?.cancel()
+        indicator = null
+        seekIndicator = null
     }
 
     /** 隐藏双击播放/暂停浮层（退场动画结束后由覆盖层调用）。 */
@@ -411,7 +295,6 @@ class PlayerGestureHandler(
      */
     fun onPressReleased() {
         releaseSpeedUp()
-        stopHoldRewind()
     }
 
     // endregion
@@ -420,9 +303,8 @@ class PlayerGestureHandler(
 
     fun onDragStart(position: Offset) {
         // A drag supersedes the long-press gesture started by the tap detector: 长按中的
-        // 快进/快退必须先还原（尤其是快退会暂停播放），后面横向 seek 才会从正确的状态出发。
+        // 临时倍速要先还原，后面横向 seek 才会从正确的速度出发。
         releaseSpeedUp()
-        stopHoldRewind()
 
         // 上一次手势若因系统抢占而没走到 finishGesture，亮度改动在这里补一次落盘。
         persistBrightnessIfChanged()
@@ -684,9 +566,8 @@ class PlayerGestureHandler(
     private fun finishGesture() {
         persistBrightnessIfChanged()
 
-        // 长按快进/快退若没能走 onPressReleased（系统抢断、多指介入），在这里兜底还原。
+        // 长按倍速若没能走 onPressReleased（系统抢断、多指介入），在这里兜底还原。
         releaseSpeedUp()
-        stopHoldRewind()
 
         hideIndicatorsAfterTimeout()
 
@@ -700,17 +581,31 @@ class PlayerGestureHandler(
     }
 
     /**
-     * 延迟收起居中 HUD（亮度音量 / 横向 seek / 长按快退共用同一张卡片）。
+     * 延迟收起居中 HUD（亮度音量 / 横向 seek 共用同一张卡片）。
      *
      * 收尾必须认「这一次」的值：延迟期间若开始了新手势并写入新的指示器，这里不能把
      * 新手势的 HUD 一起抹掉。原先两个人共用一个 `seekIndicator = null`，跨手势时会闪。
+     *
+     * seek 卡片还要多等一步：松手时画面通常还没回来（播放器正在重新缓冲），卡片一收，
+     * 居中的加载圈就顶替它的位置——用户看到的是「时间框消失，圈圈才出现」。这里让卡片
+     * 留任到首帧（最多 [Constants.SEEK_HUD_LOADING_HOLD_MAX_MS]），转圈由 UI 画进卡片
+     * 底部（见 GestureIndicators），两张浮层因此不会争同一个位置。超过上限仍未出画面，
+     * 说明这已经不是 seek 的尾声，照常收起、把界面交还给带说明与重试的居中加载态。
      */
     private fun hideIndicatorsAfterTimeout() {
         val shownIndicator = indicator
         val shownSeek = seekIndicator
         if (shownIndicator == null && shownSeek == null) return
-        scope.launch {
+        hideIndicatorsJob?.cancel()
+        hideIndicatorsJob = scope.launch {
             delay(Constants.DEFAULT_CENTER_OVERLAY_TIMEOUT_MS.toLong())
+            if (shownSeek != null) {
+                withTimeoutOrNull(Constants.SEEK_HUD_LOADING_HOLD_MAX_MS) {
+                    while (isWaitingForPlayback()) {
+                        delay(Constants.SEEK_HUD_LOADING_POLL_MS)
+                    }
+                }
+            }
             if (indicator === shownIndicator) indicator = null
             if (seekIndicator === shownSeek) seekIndicator = null
         }
@@ -760,6 +655,7 @@ fun rememberPlayerGestureHandler(
     isLandscape: () -> Boolean,
     isLocked: () -> Boolean,
     getPlayer: () -> Player?,
+    isWaitingForPlayback: () -> Boolean,
     onToggleControls: () -> Unit,
     onPeekUnlockButton: () -> Unit,
     onTogglePlayPause: () -> Unit,
@@ -767,8 +663,6 @@ fun rememberPlayerGestureHandler(
     onFastForward: () -> Unit,
     onRewind: () -> Unit,
     onPressSpeedUp: (Boolean) -> Unit,
-    onHoldRewindPause: () -> Unit,
-    onHoldRewindResume: () -> Unit,
     onZoomChanged: (Boolean) -> Unit,
     onHideControls: () -> Unit,
     onSecondTapStarted: () -> Unit,
@@ -800,6 +694,7 @@ fun rememberPlayerGestureHandler(
             isLandscape = isLandscape,
             isLocked = isLocked,
             getPlayer = getPlayer,
+            isWaitingForPlayback = isWaitingForPlayback,
             onToggleControls = onToggleControls,
             onPeekUnlockButton = onPeekUnlockButton,
             onTogglePlayPause = onTogglePlayPause,
@@ -807,8 +702,6 @@ fun rememberPlayerGestureHandler(
             onFastForward = onFastForward,
             onRewind = onRewind,
             onPressSpeedUp = onPressSpeedUp,
-            onHoldRewindPause = onHoldRewindPause,
-            onHoldRewindResume = onHoldRewindResume,
             onZoomChanged = onZoomChanged,
             onHideControls = onHideControls,
             notifySecondTapStarted = onSecondTapStarted,

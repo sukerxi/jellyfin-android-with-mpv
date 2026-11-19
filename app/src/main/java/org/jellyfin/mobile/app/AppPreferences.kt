@@ -163,17 +163,16 @@ class AppPreferences(context: Context) {
         preferenceFlow(KEY_EXOPLAYER_ALLOW_SWIPE_GESTURES, true)
 
     /**
-     * 长按快进/快退手势：右半屏倍速快进，左半屏连续快退。
+     * 长按画面时的临时倍速（3×，抬手还原）。
      *
      * 持久化键沿用 `pref_exoplayer_allow_press_speed_up`（见
      * [Constants.PREF_EXOPLAYER_ALLOW_PRESS_SPEED_UP]）：改键名等于让所有老用户的选择
-     * 在升级后凭空消失，而这个开关的语义只是从「长按任意位置快进」扩展成了
-     * 「长按左右两侧快进/快退」，取值与默认值都没有变。
+     * 在升级后凭空消失。取值与默认值都没有变。
      */
-    var exoPlayerAllowHoldSeek: Boolean
+    var exoPlayerAllowPressSpeedUp: Boolean
         get() = snapshot[KEY_EXOPLAYER_ALLOW_PRESS_SPEED_UP] ?: true
         set(value) = persistValue(KEY_EXOPLAYER_ALLOW_PRESS_SPEED_UP, value)
-    val exoPlayerAllowHoldSeekFlow: Flow<Boolean> =
+    val exoPlayerAllowPressSpeedUpFlow: Flow<Boolean> =
         preferenceFlow(KEY_EXOPLAYER_ALLOW_PRESS_SPEED_UP, true)
 
     var exoPlayerRememberBrightness: Boolean

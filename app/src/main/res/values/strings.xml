@@ -218,8 +218,8 @@
     <string name="pref_exoplayer_remember_brightness">Remember display brightness</string>
     <string name="gesture_overlay_brightness">Brightness %1$d%%</string>
     <string name="gesture_overlay_volume">Volume %1$d%%</string>
-    <string name="pref_exoplayer_allow_press_speed_up">Hold to fast-forward / rewind</string>
-    <string name="pref_exoplayer_allow_press_speed_up_summary">Hold the right half of the screen to speed up, the left half to rewind</string>
+    <string name="pref_exoplayer_allow_press_speed_up">Hold to speed up</string>
+    <string name="pref_exoplayer_allow_press_speed_up_summary">Press and hold anywhere on the video to speed up playback; release to return to normal speed</string>
     <string name="pref_exoplayer_allow_background_audio">Background audio</string>
     <string name="pref_exoplayer_allow_background_audio_summary">Allow playing videos in the background with audio-only</string>
     <string name="pref_exoplayer_allow_horizontal_gesture">Horizontal gestures</string>

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -136,6 +137,20 @@ private fun GestureHarnessContent(player: ExoPlayer, window: Window) {
     // 播放器与手势层共用同一个尺寸：手势的左右分区、边缘排除带都按它算。
     var surfaceSize by remember { mutableStateOf(IntSize.Zero) }
 
+    // 缓冲态：seek 之后卡片要不要留任、转圈画在卡片里，都取决于它（与真实播放页同一条语义）。
+    // 这里直接跟播放器状态，不做滞回——实验页要看到的就是状态本身。
+    var buffering by remember { mutableStateOf(false) }
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                buffering = playbackState == Player.STATE_BUFFERING
+            }
+        }
+        player.addListener(listener)
+        buffering = player.playbackState == Player.STATE_BUFFERING
+        onDispose { player.removeListener(listener) }
+    }
+
     val exclusionSizeVerticalPx = with(density) {
         Constants.SWIPE_GESTURE_EXCLUSION_SIZE_VERTICAL.dp.roundToPx()
     }
@@ -153,6 +168,9 @@ private fun GestureHarnessContent(player: ExoPlayer, window: Window) {
         isLandscape = { configuration.orientation == Configuration.ORIENTATION_LANDSCAPE },
         isLocked = { false },
         getPlayer = { player },
+        // 与真实播放页同一条语义：seek 之后卡片要留到「首帧回来了」为止，
+        // 转圈就画在卡片里。本地文件几乎瞬间就绪，但留任逻辑本身能被走到。
+        isWaitingForPlayback = { buffering },
         onToggleControls = {},
         onPeekUnlockButton = {},
         onTogglePlayPause = {
@@ -169,14 +187,6 @@ private fun GestureHarnessContent(player: ExoPlayer, window: Window) {
             player.playbackParameters = PlaybackParameters(
                 if (pressing) Constants.HOLD_SPEEDUP_MULTIPLIER else 1f,
             )
-        },
-        onHoldRewindPause = {
-            Log.i(TAG, "holdRewind pause @${player.currentPosition}")
-            player.pause()
-        },
-        onHoldRewindResume = {
-            Log.i(TAG, "holdRewind resume @${player.currentPosition}")
-            player.play()
         },
         onZoomChanged = {},
         onHideControls = {},
@@ -209,6 +219,7 @@ private fun GestureHarnessContent(player: ExoPlayer, window: Window) {
 
         GestureIndicatorsOverlay(
             handler = handler,
+            waitingForPlayback = buffering,
             modifier = Modifier.matchParentSize(),
         )
 

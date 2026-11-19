@@ -7,10 +7,12 @@ import android.view.View
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -31,6 +33,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,6 +51,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
@@ -87,6 +91,7 @@ private val HudWidth = 176.dp
 private val HudCornerRadius = 20.dp
 private val HudIconSize = 30.dp
 private val HudProgressHeight = 5.dp
+private val HudWaitingSpinnerSize = 20.dp
 private val DoubleTapToggleSize = 88.dp
 
 /** HUD 卡片进出场时长（毫秒）：入场略快，退场稍慢，松手时卡片是"淡走"而不是"凭空消失"。 */
@@ -103,8 +108,9 @@ fun GestureOverlay(
     onSurfaceSizeChanged: (IntSize) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // 离开播放页/播放器重建时把手势造成的临时播放状态还原（长按快退会先暂停播放）。
-    // 协程随组合一起被取消，这一步是唯一能保证「暂停」不泄漏的地方。
+    // 离开播放页/播放器重建时把手势造成的临时播放状态还原（长按倍速还生效的话，
+    // 播放器会以 3× 进入下一个页面）。协程随组合一起被取消，这一步是唯一能保证
+    // 「临时状态」不泄漏的地方。
     DisposableEffect(handler) {
         onDispose { handler.onHostDisposed() }
     }
@@ -122,17 +128,26 @@ fun GestureOverlay(
  *
  * 画在控件层之上：控件可见时也能滑动 seek / 调亮度音量，指示器若还在控件层下面，会被
  * 上下渐变压暗，并和中央那排按钮叠在一起。这一层没有任何指针输入，不会挡住下面的控件。
+ *
+ * @param waitingForPlayback 播放器仍在等画面（缓冲）。seek 之后卡片会为此延长停留
+ *   （见 `PlayerGestureHandler.hideIndicatorsAfterTimeout`），转圈就画在卡片底部：
+ *   卡片与转圈同处、同一条时间线收场，不会出现「时间框消失、屏幕正中又冒出一个圈」。
  */
 @Composable
 fun GestureIndicatorsOverlay(
     handler: PlayerGestureHandler,
+    waitingForPlayback: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var surfaceSize by remember { mutableStateOf(IntSize.Zero) }
     Box(
         modifier = modifier.onSizeChanged { surfaceSize = it },
     ) {
-        GestureIndicators(handler = handler, surfaceSize = surfaceSize)
+        GestureIndicators(
+            handler = handler,
+            surfaceSize = surfaceSize,
+            waitingForPlayback = waitingForPlayback,
+        )
     }
 }
 
@@ -214,9 +229,9 @@ fun Modifier.playerGestureInput(handler: PlayerGestureHandler): Modifier = this
             }
 
             if (endedBeforeTimeout == null) {
-                // 长按已生效：继续等抬手/拖拽，但不再产生轻点。方向由按下点决定（左右半屏）。
+                // 长按已生效：继续等抬手/拖拽，但不再产生轻点。不分左右，一律临时倍速。
                 longPressTriggered = true
-                handler.onLongPressStarted(down.position)
+                handler.onLongPressStarted()
                 while (up == null && !canceled) {
                     val event = awaitPointerEvent()
                     if (event.changes.count { it.pressed } > 1) {
@@ -341,6 +356,7 @@ fun Modifier.playerGestureInput(handler: PlayerGestureHandler): Modifier = this
 private fun BoxScope.GestureIndicators(
     handler: PlayerGestureHandler,
     surfaceSize: IntSize,
+    waitingForPlayback: Boolean,
 ) {
     // 长按临时倍速：音画已经变快了，但屏幕上原本没有任何反馈，用户不确定是否生效，
     // 于是一直按着等。给一次触感 + 顶部角标，松手前都能看到「正在 N× 快进」。
@@ -428,6 +444,14 @@ private fun BoxScope.GestureIndicators(
             )
             Spacer(modifier = Modifier.height(12.dp))
             HudProgressBar(progress = seek.progress)
+            // 转圈长在卡片里，而不是等卡片收起后从屏幕正中另起一个：seek 松手到首帧之间
+            // 画面是静止的，用户需要看到的正是「还在等」这件事，而它属于这次 seek。
+            //
+            // 再加一道 seekIndicator != null：卡片退场动画有 170ms，期间 HudSlot 仍在画
+            // 保留下来的旧内容，而 seekIndicator 已经清空。若缓冲恰好在这 170ms 里翻成
+            // true，光看 waitingForPlayback 会让转圈在「正在消失的卡片」里展开——所以
+            // 转圈只属于卡片真正在场的那段时间。
+            HudWaitingSpinner(visible = waitingForPlayback && handler.seekIndicator != null)
         }
     }
 
@@ -590,6 +614,41 @@ private fun HudProgressBar(
             radius = size.height * 0.34f,
             center = Offset(barWidth - size.height / 2f, size.height / 2f),
         )
+    }
+}
+
+/**
+ * 卡片底部的等待转圈：seek 松手到首帧之间的「还在等」。
+ *
+ * 用 `expandVertically` / `shrinkVertically` 而不是直接换内容：卡片是按内容高度自适应的，
+ * 突然多出一行会让它在画面中央「跳」一下；高度跟着淡入一起展开，看起来才是卡片本身长出了
+ * 一行，而不是另贴了一个圈上去。
+ *
+ * 可见性来自宿主（与居中加载圈同一个状态，含 250ms 滞回），因此卡片收起与转圈消失是
+ * 同一个时刻，不会出现「圈还在、框没了」的中间帧。
+ */
+@Composable
+private fun HudWaitingSpinner(visible: Boolean) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(HUD_ENTER_MS)) + expandVertically(tween(HUD_ENTER_MS)),
+        exit = fadeOut(tween(HUD_EXIT_MS)) + shrinkVertically(tween(HUD_EXIT_MS)),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 12.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(HudWaitingSpinnerSize),
+                // 与卡片进度条同一支品牌色：这块小卡片里只该有一个强调色。
+                color = JellyfinPrimary,
+                strokeWidth = 2.dp,
+                trackColor = PlayerGlassTrackColor,
+                strokeCap = StrokeCap.Round,
+            )
+        }
     }
 }
 

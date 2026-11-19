@@ -159,7 +159,7 @@
     <string name="mobile_data_and_roaming_summary">媒体将通过 WiFi、移动和漫游网络下载。</string>
     <string name="downloads">下载</string>
     <string name="failed_information">无法检索媒体信息</string>
-    <string name="pref_exoplayer_allow_press_speed_up_summary">长按屏幕右半边倍速快进，长按左半边连续快退</string>
+    <string name="pref_exoplayer_allow_press_speed_up_summary">长按画面任意位置临时倍速播放，松手恢复正常速度</string>
     <string name="external_player_mpvkt_description">基于 mpv-android 的媒体播放器旨在提供比原版更好的用户界面。</string>
     <string name="failed_thumbnail">下载缩略图失败</string>
     <string name="yes">是</string>
@@ -174,7 +174,7 @@
     <string name="downloading_desc">正在下载 %1$d 个标题</string>
     <string name="downloaded">已下载 %1$s</string>
     <string name="external_player_mpvkt">mpvKt 播放器</string>
-    <string name="pref_exoplayer_allow_press_speed_up">长按快进 / 快退</string>
+    <string name="pref_exoplayer_allow_press_speed_up">长按倍速</string>
     <string name="skip_media_segment">跳过</string>
     <string name="skip_media_segment_intro">跳过片头</string>
     <string name="skip_media_segment_outro">跳过片尾</string>

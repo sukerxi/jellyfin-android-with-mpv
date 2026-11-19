@@ -54,10 +54,10 @@ object Constants {
     const val PREF_EXOPLAYER_ALLOW_SWIPE_GESTURES = "pref_exoplayer_allow_swipe_gestures"
 
     /**
-     * 长按快进/快退开关。
+     * 长按倍速开关。
      *
-     * 键名里的 "press_speed_up" 是历史命名（当时只有右半屏的倍速快进），现在同时控制
-     * 左半屏的连续快退。键名不能改：DataStore 里已经落盘的取值要靠它找回来。
+     * 键名里的 "press_speed_up" 是历史命名，语义与它字面一致：只控制「长按画面临时倍速」。
+     * 键名不能改：DataStore 里已经落盘的取值要靠它找回来。
      */
     const val PREF_EXOPLAYER_ALLOW_PRESS_SPEED_UP = "pref_exoplayer_allow_press_speed_up"
     const val PREF_EXOPLAYER_REMEMBER_BRIGHTNESS = "pref_exoplayer_remember_brightness"
@@ -207,6 +207,24 @@ object Constants {
      * 再交给卡片自己的淡出动画收尾。
      */
     const val DEFAULT_CENTER_OVERLAY_TIMEOUT_MS = 600
+
+    /**
+     * seek 之后手势卡片为「等首帧」延长的停留上限（毫秒）。
+     *
+     * 松手只是下达了一次 seek，画面要等播放器重新缓冲才回来。这段时间若按常规
+     * [DEFAULT_CENTER_OVERLAY_TIMEOUT_MS] 收起卡片，屏幕正中会紧接着冒出一个加载圈——
+     * 看上去就是「时间框消失，圈圈才出现」。让卡片留任到首帧、转圈画在卡片里，两件事
+     * 就合成一件。
+     *
+     * 上限取 2.4s（加上 600ms 常规停留正好 3s）：再久就不是 seek 的尾声而是播放卡住了。
+     * 3s 同时是居中加载态升级出「正在缓冲」说明文案的时刻（PlayerScreen 的
+     * `LOADING_HINT_DELAY_MS`），于是交接那一下新浮层是**带着解释**出现的，读起来是
+     * 「这次 seek 升级成播放等待」，而不是一个孤零零的大圈凭空冒出来。
+     */
+    const val SEEK_HUD_LOADING_HOLD_MAX_MS = 2_400L
+
+    /** 卡片留任期间轮询「播放器是否还在等画面」的间隔；只读一次状态，不需要更密。 */
+    const val SEEK_HUD_LOADING_POLL_MS = 50L
     const val SWIPE_GESTURE_EXCLUSION_SIZE_HORIZONTAL = 48
     const val HORIZONTAL_SWIPE_DISTANCE_PER_SECOND = 20 // base pixels needed to swipe for 1 second seek
     const val SEEK_ACCELERATION_FACTOR = 2.5f // acceleration factor for non-linear seek
@@ -252,32 +270,13 @@ object Constants {
     const val FULL_SWIPE_RANGE_SCREEN_RATIO = 0.66f
     const val SCREEN_BRIGHTNESS_MAX = 255
     const val SCREEN_BRIGHTNESS_DEFAULT = 128f
-    /** 长按右半屏时的播放倍率：平滑倍速，保留音轨，音调不变。 */
+    /**
+     * 长按画面时的临时播放倍率：平滑倍速，保留音轨，音调不变。
+     *
+     * 不分左右半屏——长按只有这一个动作。取 3× 而不是 2×：这是「快进看一眼」的手势，
+     * 抬手就回到原速，倍率低一点就只是在浪费按压时长；3× 也足够让音轨仍然听得出内容。
+     */
     const val HOLD_SPEEDUP_MULTIPLIER = 3f
-
-    /**
-     * 长按快退的速率：每按住 1 秒，媒体时间回退的秒数。
-     *
-     * 与 [HOLD_SPEEDUP_MULTIPLIER] 取同一个数值不是巧合。按住同样长的时间，向左退多远、
-     * 向右进多远必须一样，用户才能建立「按住 1 秒 ≈ 3 秒内容」的一致预期；两个方向取
-     * 不同的速率，会让同一个手势在左右两侧的「手感」完全不同。
-     */
-    const val HOLD_REWIND_RATE = HOLD_SPEEDUP_MULTIPLIER
-
-    /**
-     * 长按快退期间真正下发 seek 的间隔。
-     *
-     * 每次 seek 都要从关键帧重新解码；网络源（Jellyfin 转码 HLS 或 mpv）一次 seek 甚至
-     * 要几百毫秒。间隔太短只会让 seek 在播放器里排队，画面反而更卡。500ms 约等于每秒
-     * 两帧的「倒带预览」：足以看清画面在往回走，又不会压垮解码器。
-     *
-     * HUD 的刷新频率不跟着它走（见 [HOLD_REWIND_HUD_INTERVAL_MS]）：时间和进度条要连续，
-     * 落点预览和实际 seek 是两件事。
-     */
-    const val HOLD_REWIND_SEEK_INTERVAL_MS = 500L
-
-    /** 长按快退 HUD 的刷新间隔。 */
-    const val HOLD_REWIND_HUD_INTERVAL_MS = 50L
 
     const val ZOOM_SCALE_BASE = 1f
     const val ZOOM_SCALE_THRESHOLD = 0.01f

@@ -18,6 +18,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -170,6 +171,19 @@ private const val LOADING_INDICATOR_HIDE_DELAY_MS = 250L
 /** 加载指示器淡入 / 淡出时长（毫秒）：入场要快，出场略慢，避免首帧上「啪」地消失。 */
 private const val LOADING_INDICATOR_FADE_IN_MS = 150
 private const val LOADING_INDICATOR_FADE_OUT_MS = 180
+
+/**
+ * 居中加载圈入场前的静默期（毫秒）。
+ *
+ * 它解决的是「交接」那一下：手势 HUD 卡片退场要 170ms，如果大圈在卡片刚开始淡出的
+ * 同一帧就淡入，两个直径差 3 倍、位置差半个卡片的圈会在屏幕上共存几十毫秒，看起来
+ * 像卡片里又长出一个圈。延后 120ms 让卡片先走到接近透明，交接就读成「卡片收 → 加载
+ * 接管」的先后关系。
+ *
+ * 顺带把「瞬间抖一下缓冲」「本地文件 seek 秒回」这类极短等待也挡在门外：不足 120ms 的
+ * 等待本来就不该闪一个圈。
+ */
+private const val LOADING_INDICATOR_ENTER_DELAY_MS = 120
 
 /** 控件层淡入 / 淡出时长（毫秒）：自动收起、点按收起、起播完成后的收起共用同一条过渡。 */
 private const val CONTROLS_FADE_IN_MS = 120
@@ -918,6 +932,9 @@ fun PlayerScreen(
         isLandscape = { isLandscapeOrientation() },
         isLocked = { locked },
         getPlayer = { viewModel.playerOrNull },
+        // 与加载圈共用同一个「还在等画面」的状态（含 250ms 滞回）：seek 之后卡片据此
+        // 留任到首帧，转圈画进卡片里。读的是状态委托，事件发生时取到的始终是最新值。
+        isWaitingForPlayback = { showLoadingIndicator },
         onToggleControls = { toggleControls() },
         onPeekUnlockButton = { peekUnlockButton() },
         onTogglePlayPause = { viewModel.togglePlayPause() },
@@ -927,11 +944,6 @@ fun PlayerScreen(
         onPressSpeedUp = { pressing ->
             viewModel.setPressSpeedUp(pressing, Constants.HOLD_SPEEDUP_MULTIPLIER)
         },
-        // 长按左半屏快退：播放器不支持负倍速，只能先暂停再按速率往回 seek，松手恢复。
-        // 走 ViewModel 而不是直接 player.pause()/play()：后者会绕过 closedByUser 闩锁，
-        // 让「应用退到后台自动暂停」的恢复逻辑误判（见 PlayerViewModel.play 的注释）。
-        onHoldRewindPause = { viewModel.pause() },
-        onHoldRewindResume = { viewModel.play() },
         onZoomChanged = { enabled ->
             playerViewHolder[0]?.resizeMode = if (enabled) {
                 AspectRatioFrameLayout.RESIZE_MODE_ZOOM
@@ -1275,6 +1287,9 @@ fun PlayerScreen(
         // 指示器若留在控件层下面，会被上下渐变压暗、被中央按钮盖住。
         GestureIndicatorsOverlay(
             handler = gestureHandler,
+            // seek 之后卡片留任期间，转圈画在卡片底部（同一个状态、同一条时间线）；
+            // 在这里读 showLoadingIndicator 只随「开始/结束等待」变化，不会跟着手势帧率重组。
+            waitingForPlayback = showLoadingIndicator,
             modifier = Modifier
                 .matchParentSize()
                 .padding(playerViewPadding),
@@ -1316,106 +1331,20 @@ fun PlayerScreen(
         // 旧版这里用 systemBarsPadding —— 横屏系统栏隐藏是异步的（见上方 insets 注释），
         // 头几帧侧边导航栏 insets 左右不对称会把转圈一起推偏；竖屏时 top/bottom 不对称
         // 同样会让它与已改为整屏居中的播放键错开。文案与按钮都在屏幕中部，够不到系统栏。
-        Box(modifier = Modifier.matchParentSize()) {
-            AnimatedVisibility(
-                visible = showLoadingIndicator,
-                enter = fadeIn(tween(LOADING_INDICATOR_FADE_IN_MS)),
-                exit = fadeOut(tween(LOADING_INDICATOR_FADE_OUT_MS)),
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                val indicatorColor = MaterialTheme.colorScheme.primary
-                // 转圈锚定在画面正中，说明文案与按钮在它下方展开。
-                // 如果把它们放进同一个居中的 Column，每多一行整列就被顶高一截（3s 的
-                // 文案一次、12s 的按钮再一次），画面中心的转圈反而在"加载"过程中不断上移，
-                // 与上一轮"起播不跳变"的目标相悖。
-                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                    CircularProgressIndicator(
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .size(64.dp),
-                        color = indicatorColor,
-                        strokeWidth = 6.dp,
-                        trackColor = indicatorColor.copy(alpha = 0.24f),
-                        strokeCap = StrokeCap.Round,
-                    )
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .offset(y = maxHeight / 2 + 44.dp)
-                            .widthIn(max = 320.dp)
-                            .padding(horizontal = 12.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        AnimatedVisibility(
-                            visible = loadingStage != PlayerLoadingStage.ACTIVE,
-                            enter = fadeIn(tween(LOADING_INDICATOR_FADE_IN_MS)),
-                            exit = fadeOut(tween(LOADING_INDICATOR_FADE_OUT_MS)),
-                        ) {
-                            // 与手势 HUD / 跳过按钮同一套玻璃语言：加载期间首帧可能已经
-                            // 上屏，纯半透明底衬在亮画面上会糊成一片。
-                            val hintShape = RoundedCornerShape(10.dp)
-                            Text(
-                                text = stringResource(
-                                    when {
-                                        loadingStage == PlayerLoadingStage.STUCK ->
-                                            R.string.player_loading_check_network
-                                        preparingPlayback -> R.string.player_loading_preparing
-                                        else -> R.string.player_loading_buffering
-                                    },
-                                ),
-                                color = PlayerGlassTextPrimary,
-                                fontSize = 14.sp,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier
-                                    // 读屏用户看不到转圈：阶段文案变化要让 TalkBack 播报出来，
-                                    // 否则整个加载过程在他们的耳朵里是静默的。
-                                    .semantics { liveRegion = LiveRegionMode.Polite }
-                                    .playerGlass(hintShape, shadowElevation = 0.dp)
-                                    .padding(horizontal = 12.dp, vertical = 5.dp),
-                            )
-                        }
-                        AnimatedVisibility(
-                            visible = loadingStage == PlayerLoadingStage.STUCK,
-                            enter = fadeIn(tween(LOADING_INDICATOR_FADE_IN_MS)),
-                            exit = fadeOut(tween(LOADING_INDICATOR_FADE_OUT_MS)),
-                        ) {
-                            val actionShape = RoundedCornerShape(12.dp)
-                            Row(
-                                modifier = Modifier
-                                    .padding(top = 8.dp)
-                                    .playerGlass(actionShape)
-                                    // 两个按钮的 ripple 都在卡片边缘，不裁剪会露出圆角外的方角水波。
-                                    .clip(actionShape)
-                                    .padding(horizontal = 4.dp),
-                            ) {
-                                // 起播阶段（还没有播放器/媒体源）没有可"续播"的位置，
-                                // 重试只会重复同一条网络请求，不如直接退出回网页重新点播；
-                                // 缓冲阶段走 viewModel 的重试链路，从当前位置重载媒体源。
-                                if (!preparingPlayback) {
-                                    TextButton(
-                                        onClick = {
-                                            loadingAttempt++
-                                            viewModel.retryPlayback()
-                                        },
-                                    ) {
-                                        Text(
-                                            text = stringResource(R.string.retry),
-                                            color = PlayerGlassTextPrimary,
-                                        )
-                                    }
-                                }
-                                TextButton(onClick = { closePlayer() }) {
-                                    Text(
-                                        text = stringResource(R.string.player_loading_exit),
-                                        color = PlayerGlassTextPrimary,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        PlayerLoadingOverlay(
+            visible = showLoadingIndicator,
+            // 传函数而不是 Boolean：手势拖动期间 seekIndicator 每个触摸事件都会变，在
+            // PlayerScreen 顶层读它会把整屏（控件栏、面板、AndroidView 的 update lambda）
+            // 按手势帧率一起重组；读取点留在浮层自己的作用域里（同 PlayerProgressSlot）。
+            seekHudVisible = { gestureHandler.seekIndicator != null },
+            loadingStage = loadingStage,
+            preparingPlayback = preparingPlayback,
+            onRetry = {
+                loadingAttempt++
+                viewModel.retryPlayback()
+            },
+            onExit = { closePlayer() },
+        )
 
         // 播放失败卡片：盖住控件栏（此时也点不动它们），只留「重试 / 返回」两条出路。
         playbackFailure?.let { failure ->
@@ -1575,6 +1504,131 @@ fun PlayerScreen(
                                 .padding(top = 4.dp),
                         ) {
                             Text(stringResource(R.string.mobile_data_playback_cancel))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 加载浮层：转圈 + 阶段说明 + 兜底操作。
+ *
+ * 单独成一个 Composable 不是为了拆文件，而是为了隔离 [PlayerGestureHandler.seekIndicator]
+ * 这条高频状态：手势拖动期间它每个触摸事件都会变一次，若在 [PlayerScreen] 顶层读它，
+ * 整屏（控件栏、各面板、视频 AndroidView 的 update lambda）都会按手势帧率跟着重组。
+ * [seekHudVisible] 因此以函数形式传入，读取发生在这一层自己的作用域里；不可见时根本
+ * 不调用它，也就不会订阅这条状态。同类处理见 [PlayerProgressSlot]。
+ *
+ * @param seekHudVisible 手势 seek 的 HUD 卡片是否还开着。开着时它已经在自己底部画了
+ *   转圈（见 GestureIndicators），这里让位：否则 64dp 的圈会正好压在时间框上，卡片
+ *   一收又像「重新冒出来」一样留在原地。交接由入场静默期错开，两个圈不同屏。
+ */
+@Composable
+private fun BoxScope.PlayerLoadingOverlay(
+    visible: Boolean,
+    seekHudVisible: () -> Boolean,
+    loadingStage: PlayerLoadingStage,
+    preparingPlayback: Boolean,
+    onRetry: () -> Unit,
+    onExit: () -> Unit,
+) {
+    // 画在控件层之上：超时后的「重试 / 退出」必须始终可点 —— 控件可见时，控件层的
+    // 空白点击层会覆盖整屏，这一块若在下面就点不到，画面也会被底部按钮压住。
+    Box(modifier = Modifier.matchParentSize()) {
+        AnimatedVisibility(
+            visible = visible && !seekHudVisible(),
+            // 入场自带一段静默期：既挡掉极短等待的闪烁，也让「从手势卡片接管」这一下
+            // 有先后关系，不与卡片的 170ms 退场叠在一起（见 LOADING_INDICATOR_ENTER_DELAY_MS）。
+            enter = fadeIn(
+                tween(LOADING_INDICATOR_FADE_IN_MS, delayMillis = LOADING_INDICATOR_ENTER_DELAY_MS),
+            ),
+            exit = fadeOut(tween(LOADING_INDICATOR_FADE_OUT_MS)),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            val indicatorColor = MaterialTheme.colorScheme.primary
+            // 转圈锚定在画面正中，说明文案与按钮在它下方展开。
+            // 如果把它们放进同一个居中的 Column，每多一行整列就被顶高一截（3s 的
+            // 文案一次、12s 的按钮再一次），画面中心的转圈反而在"加载"过程中不断上移，
+            // 与上一轮"起播不跳变"的目标相悖。
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .size(64.dp),
+                    color = indicatorColor,
+                    strokeWidth = 6.dp,
+                    trackColor = indicatorColor.copy(alpha = 0.24f),
+                    strokeCap = StrokeCap.Round,
+                )
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .offset(y = maxHeight / 2 + 44.dp)
+                        .widthIn(max = 320.dp)
+                        .padding(horizontal = 12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    AnimatedVisibility(
+                        visible = loadingStage != PlayerLoadingStage.ACTIVE,
+                        enter = fadeIn(tween(LOADING_INDICATOR_FADE_IN_MS)),
+                        exit = fadeOut(tween(LOADING_INDICATOR_FADE_OUT_MS)),
+                    ) {
+                        // 与手势 HUD / 跳过按钮同一套玻璃语言：加载期间首帧可能已经
+                        // 上屏，纯半透明底衬在亮画面上会糊成一片。
+                        val hintShape = RoundedCornerShape(10.dp)
+                        Text(
+                            text = stringResource(
+                                when {
+                                    loadingStage == PlayerLoadingStage.STUCK ->
+                                        R.string.player_loading_check_network
+                                    preparingPlayback -> R.string.player_loading_preparing
+                                    else -> R.string.player_loading_buffering
+                                },
+                            ),
+                            color = PlayerGlassTextPrimary,
+                            fontSize = 14.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                // 读屏用户看不到转圈：阶段文案变化要让 TalkBack 播报出来，
+                                // 否则整个加载过程在他们的耳朵里是静默的。
+                                .semantics { liveRegion = LiveRegionMode.Polite }
+                                .playerGlass(hintShape, shadowElevation = 0.dp)
+                                .padding(horizontal = 12.dp, vertical = 5.dp),
+                        )
+                    }
+                    AnimatedVisibility(
+                        visible = loadingStage == PlayerLoadingStage.STUCK,
+                        enter = fadeIn(tween(LOADING_INDICATOR_FADE_IN_MS)),
+                        exit = fadeOut(tween(LOADING_INDICATOR_FADE_OUT_MS)),
+                    ) {
+                        val actionShape = RoundedCornerShape(12.dp)
+                        Row(
+                            modifier = Modifier
+                                .padding(top = 8.dp)
+                                .playerGlass(actionShape)
+                                // 两个按钮的 ripple 都在卡片边缘，不裁剪会露出圆角外的方角水波。
+                                .clip(actionShape)
+                                .padding(horizontal = 4.dp),
+                        ) {
+                            // 起播阶段（还没有播放器/媒体源）没有可"续播"的位置，
+                            // 重试只会重复同一条网络请求，不如直接退出回网页重新点播；
+                            // 缓冲阶段走 viewModel 的重试链路，从当前位置重载媒体源。
+                            if (!preparingPlayback) {
+                                TextButton(onClick = onRetry) {
+                                    Text(
+                                        text = stringResource(R.string.retry),
+                                        color = PlayerGlassTextPrimary,
+                                    )
+                                }
+                            }
+                            TextButton(onClick = onExit) {
+                                Text(
+                                    text = stringResource(R.string.player_loading_exit),
+                                    color = PlayerGlassTextPrimary,
+                                )
+                            }
                         }
                     }
                 }
