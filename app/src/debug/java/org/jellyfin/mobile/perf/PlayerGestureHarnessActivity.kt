@@ -20,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -40,6 +41,8 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.ui.screens.player.GestureIndicatorsOverlay
@@ -140,10 +143,21 @@ private fun GestureHarnessContent(player: ExoPlayer, window: Window) {
     // 缓冲态：seek 之后卡片要不要留任、转圈画在卡片里，都取决于它（与真实播放页同一条语义）。
     // 这里直接跟播放器状态，不做滞回——实验页要看到的就是状态本身。
     var buffering by remember { mutableStateOf(false) }
+    // 画面重新开始的序号：与真实播放页同一条语义（见 PlayerViewModel.playbackResumeTick），
+    // 卡片据此在 seek 出首帧的那一帧让开。flow 与播放器实例无关，重建播放器不影响等待方。
+    val resumeTick = remember { MutableStateFlow(0L) }
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 buffering = playbackState == Player.STATE_BUFFERING
+            }
+
+            // 与真实播放页同一条语义：首帧渲染才算「画面回来了」（见 PlayerViewModel）。
+            // 打时间戳是为了把「seek 下达 → 首帧上屏 → 卡片让开」三段对齐——位置跳变在
+            // seekTo() 里同步派发，它不是画面回来的时刻。
+            override fun onRenderedFirstFrame() {
+                Log.i(TAG, "renderedFirstFrame")
+                resumeTick.value++
             }
         }
         player.addListener(listener)
@@ -171,6 +185,8 @@ private fun GestureHarnessContent(player: ExoPlayer, window: Window) {
         // 与真实播放页同一条语义：seek 之后卡片要留到「首帧回来了」为止，
         // 转圈就画在卡片里。本地文件几乎瞬间就绪，但留任逻辑本身能被走到。
         isWaitingForPlayback = { buffering },
+        playbackResumeTick = resumeTick,
+        onSeekHudSettled = { buffering = false },
         onToggleControls = {},
         onPeekUnlockButton = {},
         onTogglePlayPause = {
@@ -243,6 +259,14 @@ private fun GestureHarnessContent(player: ExoPlayer, window: Window) {
             )
             delay(500)
         }
+    }
+    // HUD 可见性的**边沿**，而不是周期采样：seek 卡片的收尾只有几十毫秒，500ms 的采样
+    // 看不出它是「画面回来后当帧让开」还是「按 600ms 停留才走」。这条日志由快照写入触发，
+    // 与重组同帧，能直接和上面 onSeekTo 的时间戳对上。
+    LaunchedEffect(handler) {
+        snapshotFlow { handler.seekIndicator != null || handler.indicator != null }
+            .distinctUntilChanged()
+            .collect { visible -> Log.i(TAG, "hudVisible=$visible") }
     }
 }
 

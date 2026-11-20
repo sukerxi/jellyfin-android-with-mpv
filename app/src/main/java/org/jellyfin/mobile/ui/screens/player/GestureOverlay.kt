@@ -5,6 +5,7 @@ import android.content.res.ColorStateList
 import android.graphics.drawable.RippleDrawable
 import android.view.View
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -392,7 +393,7 @@ private fun BoxScope.GestureIndicators(
     }
 
     // Brightness / volume indicator
-    HudSlot(value = handler.indicator) { indicator ->
+    HudSlot(value = handler.indicator, exit = hudExit()) { indicator ->
         HudCard {
             Icon(
                 painter = painterResource(indicator.iconRes),
@@ -415,7 +416,13 @@ private fun BoxScope.GestureIndicators(
     }
 
     // Horizontal seek indicator
-    HudSlot(value = handler.seekIndicator) { seek ->
+    //
+    // 退场单独处理：画面一回来，这张卡片必须当帧让开（[ExitTransition.None]）。常规的
+    // 170ms 淡出会把 seek 后恢复的头几帧一起压暗，正是会被眼睛抓到的那点「遮住」。
+    HudSlot(
+        value = handler.seekIndicator,
+        exit = if (handler.seekHudInstantExit) ExitTransition.None else hudExit(),
+    ) { seek ->
         HudCard {
             Icon(
                 painter = painterResource(
@@ -447,9 +454,9 @@ private fun BoxScope.GestureIndicators(
             // 转圈长在卡片里，而不是等卡片收起后从屏幕正中另起一个：seek 松手到首帧之间
             // 画面是静止的，用户需要看到的正是「还在等」这件事，而它属于这次 seek。
             //
-            // 再加一道 seekIndicator != null：卡片退场动画有 170ms，期间 HudSlot 仍在画
-            // 保留下来的旧内容，而 seekIndicator 已经清空。若缓冲恰好在这 170ms 里翻成
-            // true，光看 waitingForPlayback 会让转圈在「正在消失的卡片」里展开——所以
+            // 再加一道 seekIndicator != null：等超时的收尾仍走 170ms 淡出，这期间 HudSlot
+            // 还在画保留下来的旧内容，而 seekIndicator 已经清空。若缓冲恰好在这 170ms 里
+            // 翻成 true，光看 waitingForPlayback 会让转圈在「正在消失的卡片」里展开——所以
             // 转圈只属于卡片真正在场的那段时间。
             HudWaitingSpinner(visible = waitingForPlayback && handler.seekIndicator != null)
         }
@@ -542,10 +549,14 @@ private fun BoxScope.GestureIndicators(
  *
  * 松手后指示器只停留很短的时间，若到点直接移除，卡片会在注视下瞬间消失；保留内容
  * 再退场，收尾和入场（淡入 + 轻微放大）对称。保留值放在普通数组里，写入不触发重组。
+ *
+ * @param exit 退场过渡。seek 卡片在「画面回来」这条路径上传 [ExitTransition.None]：
+ *   那时候硬切才是对的，淡出会把恢复后的头几帧一起压住。
  */
 @Composable
 private fun <T : Any> BoxScope.HudSlot(
     value: T?,
+    exit: ExitTransition,
     content: @Composable (T) -> Unit,
 ) {
     val retained = remember { arrayOfNulls<Any>(1) }
@@ -559,12 +570,17 @@ private fun <T : Any> BoxScope.HudSlot(
     AnimatedVisibility(
         visibleState = visibility,
         enter = fadeIn(tween(HUD_ENTER_MS)) + scaleIn(tween(HUD_ENTER_MS), initialScale = 0.94f),
-        exit = fadeOut(tween(HUD_EXIT_MS)) + scaleOut(tween(HUD_EXIT_MS), targetScale = 0.96f),
+        exit = exit,
         modifier = Modifier.align(Alignment.Center),
     ) {
         if (shown != null) content(shown)
     }
 }
+
+/** 手势 HUD 的常规退场：淡出 + 轻微缩小，与入场对称。 */
+@Composable
+private fun hudExit(): ExitTransition =
+    fadeOut(tween(HUD_EXIT_MS)) + scaleOut(tween(HUD_EXIT_MS), targetScale = 0.96f)
 
 /** 手势 HUD 的统一卡片容器：玻璃底 + 细描边 + 圆角，内容垂直居中。 */
 @Composable

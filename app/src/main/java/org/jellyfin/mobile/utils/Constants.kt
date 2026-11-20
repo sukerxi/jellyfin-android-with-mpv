@@ -201,30 +201,32 @@ object Constants {
     const val SWIPE_GESTURE_EXCLUSION_SIZE_VERTICAL = 64
 
     /**
-     * 手势结束后，亮度/音量/seek 指示器在画面上的停留时长（毫秒）。
+     * 手势结束后，亮度/音量指示器在画面上的停留时长（毫秒）。
      *
      * 松手前最后一眼往往只是瞥到，250ms 来不及读完「亮度 45%」这类数值；停久一点，
      * 再交给卡片自己的淡出动画收尾。
+     *
+     * seek 卡片不走这条：它在拖动期间一直开着，松手时目标时间早读完了，只等画面回来
+     * （见 [SEEK_HUD_LOADING_HOLD_MAX_MS]）。
      */
     const val DEFAULT_CENTER_OVERLAY_TIMEOUT_MS = 600
 
     /**
-     * seek 之后手势卡片为「等首帧」延长的停留上限（毫秒）。
+     * seek 之后手势卡片「等画面回来」的上限（毫秒）。
      *
-     * 松手只是下达了一次 seek，画面要等播放器重新缓冲才回来。这段时间若按常规
-     * [DEFAULT_CENTER_OVERLAY_TIMEOUT_MS] 收起卡片，屏幕正中会紧接着冒出一个加载圈——
-     * 看上去就是「时间框消失，圈圈才出现」。让卡片留任到首帧、转圈画在卡片里，两件事
-     * 就合成一件。
+     * 松手只是下达了一次 seek，画面要等播放器重新缓冲才回来。这段时间若把卡片收起，
+     * 屏幕正中会紧接着冒出一个加载圈——看上去就是「时间框消失，圈圈才出现」。让卡片
+     * 留任到首帧、转圈画在卡片里，两件事就合成一件。
      *
-     * 上限取 2.4s（加上 600ms 常规停留正好 3s）：再久就不是 seek 的尾声而是播放卡住了。
-     * 3s 同时是居中加载态升级出「正在缓冲」说明文案的时刻（PlayerScreen 的
-     * `LOADING_HINT_DELAY_MS`），于是交接那一下新浮层是**带着解释**出现的，读起来是
-     * 「这次 seek 升级成播放等待」，而不是一个孤零零的大圈凭空冒出来。
+     * 取 3s：与居中加载态升级出「正在缓冲」说明文案的时刻对齐（PlayerScreen 的
+     * `LOADING_HINT_DELAY_MS`，从等待开始计时）。于是交接那一下新浮层是**带着解释**
+     * 出现的，读起来是「这次 seek 升级成播放等待」，而不是一个孤零零的大圈凭空冒出来。
      */
-    const val SEEK_HUD_LOADING_HOLD_MAX_MS = 2_400L
+    const val SEEK_HUD_LOADING_HOLD_MAX_MS = 3_000L
 
     /** 卡片留任期间轮询「播放器是否还在等画面」的间隔；只读一次状态，不需要更密。 */
     const val SEEK_HUD_LOADING_POLL_MS = 50L
+
     const val SWIPE_GESTURE_EXCLUSION_SIZE_HORIZONTAL = 48
     const val HORIZONTAL_SWIPE_DISTANCE_PER_SECOND = 20 // base pixels needed to swipe for 1 second seek
     const val SEEK_ACCELERATION_FACTOR = 2.5f // acceleration factor for non-linear seek

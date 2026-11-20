@@ -81,6 +81,18 @@ class MpvPlayer(
     private var pendingFirstFrame = false
 
     /**
+     * 「画面重新开始」的回调：每次收到 [MpvEvent.PlaybackRestart] 调用一次。
+     *
+     * mpv 在 seek 后的第一帧上屏时才发这个事件，所以它是「这一次 seek 真的出画面了」
+     * 唯一精确的信号。它不能退化成对 `playbackState` 的监听：一次短 seek 可能全程留在
+     * STATE_READY，状态没有变化也就不会有状态回调。
+     *
+     * 由 PlayerViewModel 注入，把 mpv 的事件直接转成 UI 侧的序号——等的一方挂起在序号
+     * 变化上，事件到达即唤醒，不需要轮询。只从主线程调用（事件由 MpvCore 投递到主线程）。
+     */
+    var onPlaybackRestart: (() -> Unit)? = null
+
+    /**
      * Target position of the latest explicit seek, kept until mpv's [time-pos] actually caught
      * up with it. While a seek is in flight mpv keeps reporting the pre-seek time-pos (network
      * seeks can take well over a second), whereas ExoPlayer exposes the seek target
@@ -176,6 +188,9 @@ class MpvPlayer(
             is MpvEvent.EndFile -> if (!loadingNewFile) handleEndFile(event)
             MpvEvent.PlaybackRestart -> {
                 playbackState = STATE_READY
+                // 画面重新开始（seek 出首帧 / 起播 / 恢复播放）。见 [onPlaybackRestart]。
+                Timber.d("PlaybackRestart: pos=%dms pause=%s", currentPositionMs(), MpvCore.pause)
+                onPlaybackRestart?.invoke()
                 // Note: the pending seek target is intentionally NOT cleared here. mpv emits
                 // PLAYBACK_RESTART before time-pos reflects the new position, so clearing it
                 // here made the position briefly fall back to the pre-seek value (the seek bar

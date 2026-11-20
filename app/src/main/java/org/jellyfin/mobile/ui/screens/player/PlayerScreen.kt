@@ -935,6 +935,13 @@ fun PlayerScreen(
         // 与加载圈共用同一个「还在等画面」的状态（含 250ms 滞回）：seek 之后卡片据此
         // 留任到首帧，转圈画进卡片里。读的是状态委托，事件发生时取到的始终是最新值。
         isWaitingForPlayback = { showLoadingIndicator },
+        // 卡片真正用来收尾的是播放器自己的「画面重新开始」序号（mpv 的 PLAYBACK_RESTART /
+        // ExoPlayer 的首帧渲染，都是 seek 后第一帧上屏）。上面那个状态带滞回，等它翻假时
+        // 头几帧已经被压住了。传 flow 而不是读值函数：播放器报出首帧时会直接唤醒等着的协程。
+        playbackResumeTick = viewModel.playbackResumeTick,
+        // 画面回来了：卡片当帧摘掉，加载态也在同一刻结束。否则 showLoadingIndicator 的
+        // 250ms 滞回会让 64dp 的大圈紧接着在恢复的画面上闪一下。
+        onSeekHudSettled = { showLoadingIndicator = false },
         onToggleControls = { toggleControls() },
         onPeekUnlockButton = { peekUnlockButton() },
         onTogglePlayPause = { viewModel.togglePlayPause() },

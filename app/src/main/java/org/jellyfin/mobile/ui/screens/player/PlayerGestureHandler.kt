@@ -1,6 +1,7 @@
 package org.jellyfin.mobile.ui.screens.player
 
 import android.media.AudioManager
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.Window
 import android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_FULL
@@ -18,12 +19,15 @@ import androidx.compose.ui.unit.IntSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.app.AppPreferences
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.brightness
+import timber.log.Timber
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -102,6 +106,22 @@ class PlayerGestureHandler(
      * 它由 UI 侧给出而不是直接读播放器：这里要的正是界面认定的「等待」区间，含滞回。
      */
     private val isWaitingForPlayback: () -> Boolean,
+    /**
+     * 播放器「画面重新开始」的序号（见 PlayerViewModel.playbackResumeTick）。
+     *
+     * seek 卡片等的是这个，而不是 [isWaitingForPlayback]：后者是界面合成的等待态，
+     * 带着防抖滞回，等它翻假时恢复后的头几帧早已经被卡片压住了。
+     *
+     * 用 flow 而不是读值函数：等的一方要能被播放器的通知直接唤醒，见 [awaitSeekPicture]。
+     */
+    private val playbackResumeTick: StateFlow<Long>,
+    /**
+     * seek 卡片因为「画面回来」而收尾时通知宿主。
+     *
+     * 宿主据此立刻结束加载态：加载圈那 250ms 滞回只服务于它自己的防抖，不该在卡片让开
+     * 之后又在恢复的画面上闪一个大圈。
+     */
+    private val onSeekHudSettled: () -> Unit,
     private val onToggleControls: () -> Unit,
     private val onPeekUnlockButton: () -> Unit,
     private val onTogglePlayPause: () -> Unit,
@@ -129,8 +149,26 @@ class PlayerGestureHandler(
     var speedBoostActive: Boolean by mutableStateOf(false)
         private set
 
+    /**
+     * 这一次 seek 卡片是否要「直接摘掉」而不是淡出。
+     *
+     * 卡片是因为画面回来才收的时候，170ms 的淡出会正好压在恢复后的头几帧上——那正是
+     * 要避免的东西。画面已经在动了，硬切读起来就是「卡片的活干完了」，不会显得突兀；
+     * 等超时（seek 卡死）收尾时仍走原来的淡出，交给居中加载态接管。
+     */
+    var seekHudInstantExit: Boolean by mutableStateOf(false)
+        private set
+
     /** 当前这次「延迟收起 HUD」的协程；新手势收尾时替换掉旧的。 */
     private var hideIndicatorsJob: Job? = null
+
+    /**
+     * 松手下达 seek 之前记下的「画面重新开始」序号；非空表示这一次手势要等画面回来才收卡片。
+     *
+     * 先记序号、再下达 seek：序号是判断「这一次 seek 之后画面回来」的基准，晚一步读就有
+     * 可能把这次 seek 自己的收尾算成「画面已经在场」。
+     */
+    private var seekHudPendingTick: Long? = null
 
     private var currentGesture = GestureDirection.NONE
     private var dragStartPosition: Offset? = null
@@ -276,6 +314,8 @@ class PlayerGestureHandler(
         // 页面正在退场：卡片不必再等首帧（那段时间也没有下一次组合去画它），
         // 直接清空，免得同一个 handler 被重新挂载时先闪一帧旧 HUD。
         hideIndicatorsJob?.cancel()
+        seekHudPendingTick = null
+        seekHudInstantExit = false
         indicator = null
         seekIndicator = null
     }
@@ -308,6 +348,9 @@ class PlayerGestureHandler(
 
         // 上一次手势若因系统抢占而没走到 finishGesture，亮度改动在这里补一次落盘。
         persistBrightnessIfChanged()
+
+        // 新手势开始：上一次 seek 没走到收尾的等待标记直接作废。
+        seekHudPendingTick = null
 
         dragStartPosition = position
         currentGesture = GestureDirection.NONE
@@ -526,6 +569,8 @@ class PlayerGestureHandler(
         // Update position text (current position / duration)
         val targetPosition = (seekStartPosition + seekTimeAccumulator).coerceIn(0, safeDurationMs)
 
+        // 新手势重新画卡片：上一次 seek 的「直接摘掉」不能留到这一张上。
+        seekHudInstantExit = false
         seekIndicator = SeekIndicator(
             forward = seekTimeAccumulator >= 0,
             seekText = seekText,
@@ -540,6 +585,9 @@ class PlayerGestureHandler(
             // Seek to the absolute position shown in the overlay. A relative seek from the
             // release-time position would overshoot by however far playback advanced during
             // the swipe, since playback keeps running while the gesture is active.
+            //
+            // 卡片收尾要认这一次 seek：先记下序号再下达，画面回来时才能一眼认出是这一次。
+            seekHudPendingTick = playbackResumeTick.value
             onSeekTo(seekStartPosition + seekTimeAccumulator)
         }
         finishGesture()
@@ -586,29 +634,70 @@ class PlayerGestureHandler(
      * 收尾必须认「这一次」的值：延迟期间若开始了新手势并写入新的指示器，这里不能把
      * 新手势的 HUD 一起抹掉。原先两个人共用一个 `seekIndicator = null`，跨手势时会闪。
      *
-     * seek 卡片还要多等一步：松手时画面通常还没回来（播放器正在重新缓冲），卡片一收，
-     * 居中的加载圈就顶替它的位置——用户看到的是「时间框消失，圈圈才出现」。这里让卡片
-     * 留任到首帧（最多 [Constants.SEEK_HUD_LOADING_HOLD_MAX_MS]），转圈由 UI 画进卡片
-     * 底部（见 GestureIndicators），两张浮层因此不会争同一个位置。超过上限仍未出画面，
-     * 说明这已经不是 seek 的尾声，照常收起、把界面交还给带说明与重试的居中加载态。
+     * 两条时间线：
+     * - 亮度 / 音量，以及没有真正下达 seek 的横滑：按
+     *   [Constants.DEFAULT_CENTER_OVERLAY_TIMEOUT_MS] 停留，让最后一眼来得及读完数值，
+     *   再由卡片自己的淡出收尾；
+     * - 真正下达了 seek 的横滑：卡片从拖动开始就在屏幕上，目标时间早读完了，松手后不再
+     *   额外停留。它只负责顶住「画面还没回来」的那一段（转圈画在卡片底部），播放器一报
+     *   画面重新开始就立刻让开——多停一帧都是压在新画面上。
      */
     private fun hideIndicatorsAfterTimeout() {
         val shownIndicator = indicator
         val shownSeek = seekIndicator
         if (shownIndicator == null && shownSeek == null) return
+        // 读一次就清掉：这个标记只属于刚刚结束的那一次手势。
+        val tickAtRelease = seekHudPendingTick
+        seekHudPendingTick = null
         hideIndicatorsJob?.cancel()
         hideIndicatorsJob = scope.launch {
-            delay(Constants.DEFAULT_CENTER_OVERLAY_TIMEOUT_MS.toLong())
-            if (shownSeek != null) {
-                withTimeoutOrNull(Constants.SEEK_HUD_LOADING_HOLD_MAX_MS) {
-                    while (isWaitingForPlayback()) {
-                        delay(Constants.SEEK_HUD_LOADING_POLL_MS)
+            val startedAt = SystemClock.elapsedRealtime()
+            val releasedAtPicture = if (shownSeek != null && tickAtRelease != null) {
+                awaitSeekPicture(tickAtRelease)
+            } else {
+                delay(Constants.DEFAULT_CENTER_OVERLAY_TIMEOUT_MS.toLong())
+                if (shownSeek != null) {
+                    withTimeoutOrNull(Constants.SEEK_HUD_LOADING_HOLD_MAX_MS) {
+                        while (isWaitingForPlayback()) {
+                            delay(Constants.SEEK_HUD_LOADING_POLL_MS)
+                        }
                     }
                 }
+                false
             }
+            if (shownSeek != null) seekHudInstantExit = releasedAtPicture
             if (indicator === shownIndicator) indicator = null
             if (seekIndicator === shownSeek) seekIndicator = null
+            Timber.d(
+                "Seek HUD closed: waited=%dms resumedAtPicture=%s",
+                SystemClock.elapsedRealtime() - startedAt,
+                releasedAtPicture,
+            )
+            // 画面已经回来了：加载态同一刻结束。否则加载圈那 250ms 滞回会让 64dp 的大圈
+            // 紧接着在恢复的画面上闪一下——刚赶走一张卡片，又冒出来一个圈。
+            if (releasedAtPicture) onSeekHudSettled()
         }
+    }
+
+    /**
+     * 等「这一次 seek」真的出画面，返回是否等到了。
+     *
+     * 松手时 seek 刚下达，播放器的 SEEK 事件还没回来，此刻任何「是否在等画面」的判断都
+     * 还是 false，靠它会把卡片在 seek 落地前就收掉。所以这里不看那些合成状态，直接等
+     * 播放器的画面重新开始序号变化（mpv 的 PLAYBACK_RESTART / ExoPlayer 的首帧渲染）。
+     *
+     * 是**挂起等**而不是定时来问：序号一变，播放器那边就直接唤醒这个协程，卡片在同一个
+     * 主线程循环里让开，不额外多一帧。StateFlow 的 [first] 会先取当前值再挂起，所以
+     * 即使事件在松手与订阅之间就到达了，也会立刻返回，不会漏掉。
+     *
+     * 等到上限仍未变，说明这次 seek 已经不是「等首帧」而是播放卡住了：照常收尾，
+     * 把界面交给带说明与重试的居中加载态。
+     */
+    private suspend fun awaitSeekPicture(tickAtRelease: Long): Boolean {
+        val resumedTick = withTimeoutOrNull(Constants.SEEK_HUD_LOADING_HOLD_MAX_MS) {
+            playbackResumeTick.first { it != tickAtRelease }
+        }
+        return resumedTick != null
     }
 
     private fun releaseSpeedUp() {
@@ -656,6 +745,8 @@ fun rememberPlayerGestureHandler(
     isLocked: () -> Boolean,
     getPlayer: () -> Player?,
     isWaitingForPlayback: () -> Boolean,
+    playbackResumeTick: StateFlow<Long>,
+    onSeekHudSettled: () -> Unit,
     onToggleControls: () -> Unit,
     onPeekUnlockButton: () -> Unit,
     onTogglePlayPause: () -> Unit,
@@ -695,6 +786,8 @@ fun rememberPlayerGestureHandler(
             isLocked = isLocked,
             getPlayer = getPlayer,
             isWaitingForPlayback = isWaitingForPlayback,
+            playbackResumeTick = playbackResumeTick,
+            onSeekHudSettled = onSeekHudSettled,
             onToggleControls = onToggleControls,
             onPeekUnlockButton = onPeekUnlockButton,
             onTogglePlayPause = onTogglePlayPause,

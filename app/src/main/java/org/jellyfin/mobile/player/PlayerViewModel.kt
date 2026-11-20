@@ -157,6 +157,25 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     val decoderType: LiveData<DecoderType> get() = _decoderType
     val detectedDecoderType: LiveData<DecoderType> get() = _detectedDecoderType
 
+    private val _playbackResumeTick = MutableStateFlow(0L)
+
+    /**
+     * 「画面重新开始」的序号：seek 后的第一帧上屏时自增。
+     *
+     * 手势 seek 的卡片挂在它上面收尾。松手时记下当前值，然后挂起等它变化
+     * （`first { it != tickAtRelease }`）：事件到达的那一刻协程就被唤醒，卡片当帧让开。
+     * 这里刻意不是「定时去问一次」——轮询既有间隔带来的延迟（一帧的位置正好压在恢复后
+     * 的画面上），又要在协程启动前后处理「是不是已经发生过」的窗口。
+     *
+     * 两个播放器的信号都汇进这一个 flow，所以它与播放器实例无关：解码器切换会重建
+     * 播放器，但手势处理器拿到的仍是同一个 flow，不会挂在已经释放的实例上。
+     *
+     * mpv 用 [MpvPlayer.onPlaybackRestart]（PLAYBACK_RESTART，seek 首帧上屏），
+     * ExoPlayer 用 [onRenderedFirstFrame]（首帧渲染）。两者都是「画面回来了」这件事本身，
+     * 而不是靠固定延迟去猜。
+     */
+    val playbackResumeTick: StateFlow<Long> = _playbackResumeTick.asStateFlow()
+
     // Player Menus
     // 阶段 5：播放器控制层 Compose 化。章节标记与"跳过"按钮不再直接操作 View，
     // 改为以状态流暴露，由 Compose 层（PlayerScreen）渲染。
@@ -534,6 +553,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         // The listener is registered before the player is published, so an observer of
         // [player] - or a callback fired during `addListener` - already finds it subscribed.
         player.addListener(this@PlayerViewModel)
+        // mpv 的「画面重新开始」是事件而不是状态（见 [MpvPlayer.onPlaybackRestart]）：
+        // 在这里接上，UI 侧就只需要认一个与播放器实例无关的序号。
+        (player as? MpvPlayer)?.onPlaybackRestart = { _playbackResumeTick.value++ }
         _player.value = player
 
         // Observe the process lifecycle only while a player session is alive. Registered here
@@ -564,6 +586,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     private fun releasePlayerForRebuild() {
         playerOrNull?.run {
             removeListener(this@PlayerViewModel)
+            // 摘掉回调：重建期间旧实例若还收到 PLAYBACK_RESTART，不该再推进序号。
+            (this as? MpvPlayer)?.onPlaybackRestart = null
             release()
         }
         _player.value = null
@@ -584,6 +608,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         _player.value = null
         releasedPlayer?.run {
             removeListener(this@PlayerViewModel)
+            // 摘掉回调，见 [releasePlayerForRebuild]。
+            (this as? MpvPlayer)?.onPlaybackRestart = null
             release()
         }
 
@@ -1372,8 +1398,27 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
 
     override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
         super.onPositionDiscontinuity(oldPosition, newPosition, reason)
+        // 这里**不**推进 [playbackResumeTick]。ExoPlayer 的 seekTo() 会在调用线程同步派发
+        // 这次跳变，此刻画面还没回来：按它推进，手势卡片会在松手后十几毫秒就消失，seek
+        // 之后那段静止的空窗反倒露在外面。真正的「画面回来」见 [onRenderedFirstFrame]。
         playerOrNull?.setWatchedChapterMarkings()
         playerOrNull?.updateSkipMediaSegmentButton()
+    }
+
+    /**
+     * ExoPlayer 的首帧渲染 = 画面回来了。
+     *
+     * 与 mpv 的 PLAYBACK_RESTART（[MpvPlayer.onPlaybackRestart]）语义一致：seek 之后，
+     * 渲染器被重置，新位置的第一帧上屏时才回调。这才是手势卡片该让开的时刻。
+     *
+     * 纯音频没有画面可遮，这里不会回调，卡片会在
+     * [Constants.SEEK_HUD_LOADING_HOLD_MAX_MS] 到点后按常规淡出——不影响观看。
+     */
+    override fun onRenderedFirstFrame() {
+        super.onRenderedFirstFrame()
+        if (playerOrNull !is MpvPlayer) {
+            _playbackResumeTick.value++
+        }
     }
 
     override fun onIsPlayingChanged(isPlaying: Boolean) {
