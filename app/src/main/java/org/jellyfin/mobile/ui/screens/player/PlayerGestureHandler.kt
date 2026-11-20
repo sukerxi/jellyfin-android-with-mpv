@@ -296,6 +296,10 @@ class PlayerGestureHandler(
      */
     fun onLongPressStarted() {
         if (isLocked() || !appPreferences.exoPlayerAllowPressSpeedUp) return
+        // 暂停（以及播完、还没出画面）时不进入倍速：倍速只是改 playbackParameters.speed，
+        // 时间不往前走的话什么都不会发生，屏幕上却会亮起「3.0× · 快进中」——用户只会以为
+        // 快进失灵。跟 isPlaying 走：只有时间真的在走，才有「快进中」可报。
+        if (getPlayer()?.isPlaying != true) return
 
         if (isOnPressingSpeedUp) return
         isOnPressingSpeedUp = true
